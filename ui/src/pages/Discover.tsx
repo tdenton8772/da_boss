@@ -29,8 +29,10 @@ export function Discover() {
     projectPath: string;
     sessionId: string;
     firstPrompt: string | null;
+    sizeBytes: number;
   } | null>(null);
   const [importName, setImportName] = useState("");
+  const [compactFirst, setCompactFirst] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -66,9 +68,10 @@ export function Discover() {
     }
   };
 
-  const openImportForm = (projectKey: string, projectPath: string, sessionId: string, firstPrompt: string | null) => {
-    setImportingSession({ projectKey, projectPath, sessionId, firstPrompt });
+  const openImportForm = (projectKey: string, projectPath: string, sessionId: string, firstPrompt: string | null, sizeBytes: number) => {
+    setImportingSession({ projectKey, projectPath, sessionId, firstPrompt, sizeBytes });
     setImportName("");
+    setCompactFirst(sizeBytes > 1_000_000); // auto-check for sessions > 1MB
     setImportError(null);
   };
 
@@ -82,6 +85,17 @@ export function Discover() {
         sessionId: importingSession.sessionId,
         name: importName.trim(),
       });
+
+      if (compactFirst) {
+        // Trigger compaction on the imported agent before navigating
+        setImportError(null);
+        try {
+          await fetch(`/api/agents/${result.id}/compact`, { method: "POST" });
+        } catch {
+          // Non-fatal — agent is imported, compaction runs in background
+        }
+      }
+
       setImportingSession(null);
       navigate(`/agent/${result.id}`);
     } catch (e: unknown) {
@@ -251,7 +265,8 @@ export function Discover() {
                               project.projectKey,
                               project.realPath,
                               session.sessionId,
-                              session.firstPrompt
+                              session.firstPrompt,
+                              session.sizeBytes
                             )
                           }
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded shrink-0 transition-colors"
@@ -304,8 +319,25 @@ export function Discover() {
               }}
               placeholder="e.g. refactor-auth-module"
               autoFocus
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-100 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 mb-4"
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-100 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 mb-3"
             />
+
+            {importingSession.sizeBytes > 500_000 && (
+              <label className="flex items-start gap-2 text-sm mb-4 p-2 rounded bg-amber-950/30 border border-amber-800/50">
+                <input
+                  type="checkbox"
+                  checked={compactFirst}
+                  onChange={(e) => setCompactFirst(e.target.checked)}
+                  className="mt-0.5 rounded bg-gray-800 border-gray-700"
+                />
+                <div>
+                  <span className="text-amber-300">Compact session before resume</span>
+                  <p className="text-amber-400/60 text-xs mt-0.5">
+                    Session is {formatSize(importingSession.sizeBytes)}. Large sessions may fail to resume without compaction. Compaction takes 1-2 min and costs ~$0.50-2.00.
+                  </p>
+                </div>
+              </label>
+            )}
             {importError && (
               <p className="text-red-400 text-sm mb-3">{importError}</p>
             )}
@@ -326,7 +358,7 @@ export function Discover() {
                 ) : (
                   <Import size={14} />
                 )}
-                {importBusy ? "Importing..." : "Import"}
+                {importBusy ? "Importing..." : compactFirst ? "Compact & Import" : "Import"}
               </button>
             </div>
           </div>

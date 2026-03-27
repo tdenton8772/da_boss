@@ -87,10 +87,10 @@ export function ControlBar({
         {onDelete && (
           <ActionButton
             icon={<Trash2 size={16} />}
-            label="Delete"
+            label="Remove"
             onClick={() => {
-              if (confirm("Delete this agent permanently? This cannot be undone.")) {
-                api.deleteAgent(agentId).then(() => onDelete()).catch(() => alert("Delete failed"));
+              if (confirm("Remove this agent from da_boss? The original Claude session on disk is NOT deleted — you can reimport it later.")) {
+                api.deleteAgent(agentId).then(() => onDelete()).catch(() => alert("Remove failed"));
               }
             }}
             color="bg-gray-700 hover:bg-red-700"
