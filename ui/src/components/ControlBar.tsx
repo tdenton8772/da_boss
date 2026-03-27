@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { useToastHelpers } from "./Toast";
 import { Play, Pause, Square, RotateCcw, Send, Trash2 } from "lucide-react";
 
 export function ControlBar({
@@ -15,13 +16,14 @@ export function ControlBar({
 }) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const toast = useToastHelpers();
 
   const exec = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
       onAction();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Action failed");
+      toast.error("Action failed", err instanceof Error ? err.message : "Unknown error");
     }
   };
 
@@ -32,18 +34,19 @@ export function ControlBar({
       await api.sendInput(agentId, input);
       setInput("");
       onAction();
+      toast.success("Input sent");
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to send input");
+      toast.error("Failed to send input", err instanceof Error ? err.message : "Unknown error");
     } finally {
       setSending(false);
     }
   };
 
-  const showStart = state === "pending" || state === "failed";
-  const showResume = state === "paused" || state === "completed";
-  const showPause = state === "running";
+  const showStart = state === "pending";
+  const showResume = ["paused", "completed", "failed"].includes(state);
+  const showPause = state === "running" || state === "waiting_input";
   const showKill = ["running", "paused", "waiting_permission", "waiting_input"].includes(state);
-  const showInput = ["running", "waiting_input", "completed"].includes(state);
+  const showInput = ["running", "waiting_input", "completed", "paused", "failed"].includes(state);
 
   return (
     <div className="space-y-3">
@@ -90,7 +93,10 @@ export function ControlBar({
             label="Remove"
             onClick={() => {
               if (confirm("Remove this agent from da_boss? The original Claude session on disk is NOT deleted — you can reimport it later.")) {
-                api.deleteAgent(agentId).then(() => onDelete()).catch(() => alert("Remove failed"));
+                api.deleteAgent(agentId).then(() => {
+                  toast.success("Agent removed");
+                  onDelete();
+                }).catch(() => toast.error("Remove failed"));
               }
             }}
             color="bg-gray-700 hover:bg-red-700"

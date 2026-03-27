@@ -542,7 +542,7 @@ export function createDiscoveryRouter(): Router {
         model: "claude-sonnet-4-20250514",
         max_turns: null,
         max_budget_usd: null,
-        error_message: "Imported from existing session - resume when ready",
+        error_message: null,
         supervisor_instructions: "",
         permission_policy: "auto",
       });

@@ -6,6 +6,8 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Discover } from "./pages/Discover";
+import { Settings } from "./pages/Settings";
+import { ToastProvider } from "./components/Toast";
 
 export function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -29,12 +31,15 @@ export function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/agent/:id" element={<AgentDetail />} />
-          <Route path="/discover" element={<Discover />} />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
+        <ToastProvider>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/agent/:id" element={<AgentDetail />} />
+            <Route path="/discover" element={<Discover />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </ToastProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );

@@ -8,6 +8,7 @@ import type {
 import { AgentRunner } from "./runner.js";
 import { resolvePermissionRequest } from "./permissions.js";
 import { TokenBudgetManager } from "../tokens/budget.js";
+import { TaskMonitor } from "./task-monitor.js";
 import * as queries from "../db/queries.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
@@ -15,9 +16,35 @@ import { logger } from "../utils/logger.js";
 export class AgentManager {
   private runners = new Map<string, AgentRunner>();
   public budgetManager: TokenBudgetManager;
+  public taskMonitor: TaskMonitor;
 
   constructor(public eventBus: EventEmitter) {
     this.budgetManager = new TokenBudgetManager(eventBus);
+    this.taskMonitor = new TaskMonitor(eventBus);
+
+    // Listen for background task completions from runners
+    eventBus.on("agent:task-completed", ({ agentId, notification }: { agentId: string; notification: string }) => {
+      logger.info({ agentId }, "Background task completed — auto-resuming agent");
+
+      // Show a clean system message in the UI (not the raw XML)
+      const outputFile = notification.match(/<output-file>(.*?)<\/output-file>/)?.[1] || "unknown";
+      eventBus.emit("server-event", {
+        type: "agent:message",
+        agentId,
+        role: "system",
+        content: `Background task completed: ${outputFile}`,
+        timestamp: new Date().toISOString(),
+      });
+      queries.insertAgentEvent(agentId, "message", {
+        role: "system",
+        content: `Background task completed: ${outputFile}`,
+      });
+
+      // Resume the agent with the full notification (agent needs the details)
+      this.resumeWithNotification(agentId, notification).catch((err) => {
+        logger.error({ agentId, error: err.message }, "Failed to auto-resume after task completion");
+      });
+    });
   }
 
   async createAgent(req: CreateAgentRequest): Promise<AgentRecord> {
@@ -63,7 +90,8 @@ export class AgentManager {
     const runner = new AgentRunner(
       agentId,
       this.eventBus,
-      this.budgetManager
+      this.budgetManager,
+      this.taskMonitor
     );
     this.runners.set(agentId, runner);
 
@@ -100,8 +128,20 @@ export class AgentManager {
       throw new Error("Cannot resume agent without a session ID");
     }
 
-    // Re-start will use the stored sdk_session_id via the resume option
-    await this.startAgent(agentId);
+    // Just mark as waiting_input — no process starts until user sends a message.
+    // This matches terminal behavior: resume loads the session, shows the prompt.
+    queries.updateAgentState(agentId, "waiting_input");
+    this.eventBus.emit("server-event", {
+      type: "agent:state_changed",
+      agentId,
+      state: "waiting_input",
+      previousState: agent.state,
+    });
+    queries.insertAgentEvent(agentId, "state_change", {
+      from: agent.state,
+      to: "waiting_input",
+    });
+    logger.info({ agentId }, "Agent resumed — waiting for input");
   }
 
   async killAgent(agentId: string): Promise<void> {
@@ -118,26 +158,55 @@ export class AgentManager {
   }
 
   async sendInput(agentId: string, message: string): Promise<void> {
-    const runner = this.runners.get(agentId);
-    if (runner) {
-      await runner.sendInput(message);
-      return;
-    }
-
-    // No active runner — if agent is completed/paused, resume with the new message as prompt
     const agent = queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
 
-    if (["completed", "paused", "failed"].includes(agent.state) && agent.sdk_session_id) {
-      // Update the prompt to the new message and resume
-      queries.updateAgentState(agentId, agent.state as any, {});
-      const db = (await import("../db/index.js")).getDb();
-      db.prepare("UPDATE agents SET prompt = ?, updated_at = datetime('now') WHERE id = ?").run(message, agentId);
-      await this.startAgent(agentId);
+    if (!agent.sdk_session_id) {
+      throw new Error("Cannot send input to agent without a session");
+    }
+
+    // Create a runner and start a new turn with the user's message
+    const activeCount = this.getActiveCount();
+    if (activeCount >= config.maxConcurrentAgents) {
+      throw new Error(`Max concurrent agents (${config.maxConcurrentAgents}) reached`);
+    }
+
+    const runner = new AgentRunner(agentId, this.eventBus, this.budgetManager, this.taskMonitor);
+    this.runners.set(agentId, runner);
+
+    runner.resumeWithInput(message).catch((err) => {
+      logger.error({ agentId, error: err.message }, "Resume with input failed");
+    }).finally(() => {
+      if (this.runners.get(agentId) === runner) {
+        this.runners.delete(agentId);
+      }
+    });
+  }
+
+  /** Resume an agent with a system notification (no user message emitted to UI). */
+  private async resumeWithNotification(agentId: string, notification: string): Promise<void> {
+    const agent = queries.getAgent(agentId);
+    if (!agent) return;
+    if (!agent.sdk_session_id) return;
+    if (agent.state !== "waiting_input") return;
+
+    const activeCount = this.getActiveCount();
+    if (activeCount >= config.maxConcurrentAgents) {
+      logger.warn({ agentId }, "Cannot auto-resume: max concurrent agents reached");
       return;
     }
 
-    throw new Error(`No active runner for agent ${agentId}`);
+    const runner = new AgentRunner(agentId, this.eventBus, this.budgetManager, this.taskMonitor);
+    this.runners.set(agentId, runner);
+
+    // Use runTurn directly — sends the notification as the prompt without emitting it as a user message
+    runner.runTurn(notification, true).catch((err) => {
+      logger.error({ agentId, error: err.message }, "Auto-resume after task completion failed");
+    }).finally(() => {
+      if (this.runners.get(agentId) === runner) {
+        this.runners.delete(agentId);
+      }
+    });
   }
 
   resolvePermission(

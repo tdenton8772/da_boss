@@ -1,8 +1,11 @@
 import { Router } from "express";
+import { existsSync, statSync } from "node:fs";
 import type { AgentManager } from "../agent/manager.js";
 import type { CreateAgentRequest } from "../types/agent.js";
 import * as queries from "../db/queries.js";
 import { authMiddleware, handleLogin, handleLogout, handleMe } from "./auth.js";
+import { config } from "../config.js";
+import { AGENT_TEMPLATES } from "../agent/templates.js";
 
 export function createRouter(manager: AgentManager): Router {
   const router = Router();
@@ -63,7 +66,28 @@ export function createRouter(manager: AgentManager): Router {
         res.status(400).json({ error: "name, prompt, and cwd are required" });
         return;
       }
+      // Input validation
+      if (body.name.length > 100) {
+        res.status(400).json({ error: "Agent name must be 100 characters or less" });
+        return;
+      }
+      if (body.prompt.length > 50_000) {
+        res.status(400).json({ error: "Prompt must be 50,000 characters or less" });
+        return;
+      }
+      if (!existsSync(body.cwd) || !statSync(body.cwd).isDirectory()) {
+        res.status(400).json({ error: "Working directory does not exist or is not a directory" });
+        return;
+      }
+      const validModels = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"];
+      if (body.model && !validModels.includes(body.model)) {
+        res.status(400).json({ error: `Invalid model. Must be one of: ${validModels.join(", ")}` });
+        return;
+      }
+
+      const ip = req.ip || req.socket.remoteAddress || null;
       manager.createAgent(body).then((agent) => {
+        queries.insertAuditLog(ip, "agent.create", "agent", agent.id, agent.name);
         res.status(201).json(agent);
       });
     } catch (err: unknown) {
@@ -85,6 +109,8 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/agents/:id/start", async (req, res) => {
     try {
       await manager.startAgent(req.params.id);
+      const ip = req.ip || req.socket.remoteAddress || null;
+      queries.insertAuditLog(ip, "agent.start", "agent", req.params.id);
       res.json({ ok: true });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -104,6 +130,8 @@ export function createRouter(manager: AgentManager): Router {
         await manager.killAgent(req.params.id);
       }
       queries.deleteAgent(req.params.id);
+      const ip = req.ip || req.socket.remoteAddress || null;
+      queries.insertAuditLog(ip, "agent.delete", "agent", req.params.id, agent.name);
       res.json({ ok: true });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -176,7 +204,7 @@ export function createRouter(manager: AgentManager): Router {
       const { spawn } = await import("node:child_process");
       const { logger } = await import("../utils/logger.js");
 
-      const claudePath = process.env.CLAUDE_PATH || "/Users/tylerdenton/.local/bin/claude";
+      const claudePath = config.claudePath;
       const agentId = agent.id;
       const agentState = agent.state;
 
@@ -201,7 +229,7 @@ export function createRouter(manager: AgentManager): Router {
       child.on("close", (code) => {
         if (code === 0) {
           queries.updateAgentState(agentId, "paused" as any, {
-            error_message: "Session compacted — ready to resume",
+            error_message: null,
           });
           queries.insertAgentEvent(agentId, "state_change", {
             from: agentState,
@@ -270,7 +298,7 @@ export function createRouter(manager: AgentManager): Router {
       const result = await trimSession(sessionPath, keepLast);
 
       queries.updateAgentState(agent.id, "paused" as any, {
-        error_message: `Session trimmed: ${result.originalLines} → ${result.trimmedLines} lines. Original backed up. Ready to resume.`,
+        error_message: null,
       });
 
       res.json({
@@ -287,6 +315,8 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/agents/:id/kill", async (req, res) => {
     try {
       await manager.killAgent(req.params.id);
+      const ip = req.ip || req.socket.remoteAddress || null;
+      queries.insertAuditLog(ip, "agent.kill", "agent", req.params.id);
       res.json({ ok: true });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -380,6 +410,77 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/supervisor/run", async (_req, res) => {
     // Manual trigger — will be implemented with supervisor module
     res.json({ ok: true, message: "Supervisor run triggered" });
+  });
+
+  // ── Templates ──────────────────────────────────────────
+  router.get("/api/templates", (_req, res) => {
+    res.json(AGENT_TEMPLATES);
+  });
+
+  // ── Settings ───────────────────────────────────────────
+  router.get("/api/settings", (_req, res) => {
+    const activeCount = manager.getActiveCount();
+    const totalAgents = manager.getAllAgents().length;
+    const nodes = queries.getAllFleetNodes();
+
+    res.json({
+      node_id: config.nodeId,
+      node_role: config.nodeRole,
+      max_concurrent_agents: config.maxConcurrentAgents,
+      active_agents: activeCount,
+      total_agents: totalAgents,
+      supervisor_interval_minutes: config.supervisorIntervalMinutes,
+      permission_timeout_minutes: config.permissionTimeoutMinutes,
+      stuck_threshold_minutes: config.stuckThresholdMinutes,
+      ntfy_topic: config.ntfyTopic || null,
+      fleet_nodes: nodes.length,
+      uptime_seconds: Math.floor(process.uptime()),
+    });
+  });
+
+  // ── Audit Log ──────────────────────────────────────────
+  router.get("/api/audit", (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const entries = queries.getAuditLog(limit, offset);
+    const total = queries.getAuditLogCount();
+    res.json({ entries, total, limit, offset });
+  });
+
+  // ── Fleet ──────────────────────────────────────────────
+  router.get("/api/fleet/nodes", (_req, res) => {
+    // Mark stale nodes before returning
+    queries.markStaleNodes(10); // 10 min threshold
+    res.json(queries.getAllFleetNodes());
+  });
+
+  router.post("/api/fleet/nodes", (req, res) => {
+    const { id, hostname, url, role, agent_capacity } = req.body as {
+      id?: string;
+      hostname?: string;
+      url?: string;
+      role?: string;
+      agent_capacity?: number;
+    };
+    if (!id || !hostname || !url) {
+      res.status(400).json({ error: "id, hostname, and url are required" });
+      return;
+    }
+    const node = queries.upsertFleetNode({ id, hostname, url, role, agent_capacity });
+    const ip = req.ip || req.socket.remoteAddress || null;
+    queries.insertAuditLog(ip, "fleet.register", "node", id, hostname);
+    res.json(node);
+  });
+
+  router.post("/api/fleet/nodes/:id/heartbeat", (req, res) => {
+    const { agent_count } = req.body as { agent_count?: number };
+    const node = queries.getFleetNode(req.params.id);
+    if (!node) {
+      res.status(404).json({ error: "Node not found" });
+      return;
+    }
+    queries.updateFleetNodeHeartbeat(req.params.id, agent_count || 0);
+    res.json({ ok: true });
   });
 
   return router;

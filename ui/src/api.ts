@@ -63,7 +63,7 @@ export const api = {
   // Budget
   getBudget: () => request<BudgetStatus>("/budget"),
   updateBudget: (daily: number, monthly: number) =>
-    request("/budget", {
+    request<BudgetStatus>("/budget", {
       method: "PUT",
       body: JSON.stringify({
         daily_budget_usd: daily,
@@ -99,6 +99,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  // Templates
+  getTemplates: () => request<AgentTemplate[]>("/templates"),
+
+  // Settings
+  getSettings: () => request<ServerSettings>("/settings"),
+
+  // Audit log
+  getAuditLog: (limit?: number, offset?: number) =>
+    request<AuditResponse>(`/audit?limit=${limit || 50}&offset=${offset || 0}`),
+
 };
 
 // Types shared with UI
@@ -188,4 +199,47 @@ export interface SessionMessage {
   role: string;
   content: string;
   timestamp: string;
+}
+
+export interface ServerSettings {
+  node_id: string;
+  node_role: string;
+  max_concurrent_agents: number;
+  active_agents: number;
+  total_agents: number;
+  supervisor_interval_minutes: number;
+  permission_timeout_minutes: number;
+  stuck_threshold_minutes: number;
+  ntfy_topic: string | null;
+  fleet_nodes: number;
+  uptime_seconds: number;
+}
+
+export interface AuditEntry {
+  id: number;
+  user_ip: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export interface AuditResponse {
+  entries: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  model: string;
+  max_turns: number | null;
+  permission_policy: "auto" | "ask" | "strict";
+  supervisor_instructions: string;
+  priority: "high" | "medium" | "low";
 }

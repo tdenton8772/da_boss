@@ -5,7 +5,20 @@ import type { ServerEvent } from "../types/events.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 
-const ALWAYS_SAFE_TOOLS = ["Read", "Grep", "Glob", "Explore", "LSP", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"];
+const ALWAYS_SAFE_TOOLS = [
+  // Read-only tools
+  "Read", "Grep", "Glob", "Explore", "LSP",
+  // Agent/task management
+  "Agent", "Task", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList",
+  // User interaction (harmless — just asks questions or signals plan mode)
+  "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+  // Todo management
+  "TodoRead", "TodoWrite",
+  // Web (read-only fetches)
+  "WebFetch", "WebSearch",
+  // Skills
+  "Skill",
+];
 
 // Bash commands that are safe to auto-approve
 const SAFE_BASH_PREFIXES = [
@@ -35,30 +48,16 @@ const DANGEROUS_BASH_PATTERNS = [
   /DROP\s+TABLE/i, /DELETE\s+FROM/i,    // destructive SQL
   /git\s+push\s+.*--force/,             // force push
   /git\s+reset\s+--hard/,              // destructive git
+  /launchctl\s+(unload|load|remove)/,  // don't let agents touch launchd services
+  /kill\s+.*3847/, /lsof.*3847.*kill/, // don't let agents kill the da_boss server
+  /pkill.*(node|da.?boss)/,            // don't kill node processes
 ];
 
-function isBashSafe(command: string, agentCwd: string): boolean {
+function isBashDangerous(command: string): boolean {
   const trimmed = command.trim();
-
-  // Block dangerous patterns regardless
   for (const pattern of DANGEROUS_BASH_PATTERNS) {
-    if (pattern.test(trimmed)) return false;
+    if (pattern.test(trimmed)) return true;
   }
-
-  // Allow safe prefixes
-  for (const prefix of SAFE_BASH_PREFIXES) {
-    if (trimmed.startsWith(prefix)) return true;
-  }
-
-  // Allow cd within agent's working directory
-  if (trimmed.startsWith("cd ") && trimmed.includes(agentCwd)) return true;
-
-  // Allow piped commands where the base command is safe
-  const baseCmd = trimmed.split(/\s*[|&;]\s*/)[0].trim();
-  for (const prefix of SAFE_BASH_PREFIXES) {
-    if (baseCmd.startsWith(prefix)) return true;
-  }
-
   return false;
 }
 
@@ -119,9 +118,9 @@ export function createPermissionHandler(
         }
       }
 
-      // Auto-approve safe Bash commands
+      // Auto-approve Bash unless it matches a dangerous pattern
       if (toolName === "Bash" && typeof toolInput.command === "string") {
-        if (isBashSafe(toolInput.command, agentCwd)) {
+        if (!isBashDangerous(toolInput.command)) {
           logger.info({ agentId, command: toolInput.command.substring(0, 80) }, "Auto-approved bash");
           return { behavior: "allow", updatedInput: toolInput };
         }

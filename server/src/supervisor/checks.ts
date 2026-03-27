@@ -131,7 +131,7 @@ export async function runChecks(
     const elapsed = now - new Date(lastEvent + "Z").getTime();
     const minutes = elapsed / 60_000;
 
-    // If agent has supervisor instructions, try to help it
+    // If agent has supervisor instructions and has been idle > 2 min, evaluate
     if (agent.supervisor_instructions && minutes > 2) {
       try {
         const decision = await evaluateAgent(agent.id, agent.name, agent.prompt, agent.supervisor_instructions);
@@ -142,13 +142,37 @@ export async function runChecks(
             type: "supervisor_input",
             detail: `Supervisor provided input: ${decision.message.substring(0, 100)}`,
           });
-          continue;
+          continue; // Skip idle warning
+        } else if (decision.action === "done") {
+          // Mark agent as completed
+          queries.updateAgentState(agent.id, "completed", {
+            completed_at: new Date().toISOString(),
+          });
+          actions.push({
+            agentId: agent.id,
+            type: "supervisor_complete",
+            detail: `Supervisor marked done: ${decision.message.substring(0, 100)}`,
+          });
+          continue; // Skip idle warning
+        } else if (decision.action === "notify") {
+          findings.push({
+            agentId: agent.id,
+            type: "needs_attention",
+            message: decision.message,
+          });
+          await sendNotification(
+            `Agent "${agent.name}" needs attention`,
+            decision.message,
+            "default"
+          );
+          continue; // Skip generic idle warning
         }
       } catch (err) {
         logger.error({ agentId: agent.id, err }, "Supervisor input evaluation failed");
       }
     }
 
+    // No supervisor instructions or evaluation didn't handle it — warn if idle too long
     if (minutes > 60) {
       findings.push({
         agentId: agent.id,
@@ -217,7 +241,7 @@ Respond with ONLY the ACTION and MESSAGE lines, nothing else.`;
       options: {
         maxTurns: 1,
         maxBudgetUsd: 0.05,
-        permissionMode: "plan", // no tool use, just thinking
+        model: "claude-haiku-4-5-20251001", // fast + cheap for supervisor decisions
       },
     })) {
       if ("type" in msg && msg.type === "result" && "result" in msg) {

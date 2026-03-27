@@ -94,6 +94,41 @@ const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN permission_policy TEXT DEFAULT 'auto';
     `,
   },
+  {
+    version: 3,
+    name: "add_audit_log_and_fleet",
+    up: `
+      -- Audit log for tracking all admin actions
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_ip     TEXT,
+        action      TEXT NOT NULL,
+        target_type TEXT,
+        target_id   TEXT,
+        details     TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_log_time ON audit_log(created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, created_at);
+
+      -- Fleet node registry
+      CREATE TABLE IF NOT EXISTS fleet_nodes (
+        id               TEXT PRIMARY KEY,
+        hostname         TEXT NOT NULL,
+        url              TEXT NOT NULL,
+        role             TEXT NOT NULL DEFAULT 'worker',
+        status           TEXT NOT NULL DEFAULT 'offline',
+        last_heartbeat   TEXT,
+        agent_capacity   INTEGER NOT NULL DEFAULT 3,
+        agent_count      INTEGER NOT NULL DEFAULT 0,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- Add node_id to agents (nullable, NULL = local)
+      ALTER TABLE agents ADD COLUMN node_id TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -6,13 +6,17 @@ import { AgentCard } from "../components/AgentCard";
 import { TokenBudgetBar } from "../components/TokenBudgetBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { CreateAgentForm } from "../components/CreateAgentForm";
-import { Plus, Wifi, WifiOff } from "lucide-react";
+import { Plus, Wifi, WifiOff, Settings, Search, Filter } from "lucide-react";
+import { UsageWidget } from "../components/UsageWidget";
 
 export function Dashboard() {
   const [agents, setAgents] = useState<AgentWithTokens[]>([]);
   const [budget, setBudget] = useState<BudgetStatus | null>(null);
   const [permissions, setPermissions] = useState<PermissionReq[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState<"name" | "date" | "cost" | "status">("date");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
 
   const refresh = useCallback(() => {
     api.getAgents().then(setAgents).catch(() => {});
@@ -46,10 +50,34 @@ export function Dashboard() {
 
   const { connected } = useWebSocket(handleEvent);
 
-  const active = agents.filter((a) =>
+  // Filter and sort logic
+  let filteredAgents = agents.filter((agent) => {
+    const matchesSearch = agent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         agent.prompt.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filterStatus === "all" || agent.state === filterStatus;
+    return matchesSearch && matchesFilter;
+  });
+
+  // Sort agents
+  filteredAgents.sort((a, b) => {
+    switch (sortBy) {
+      case "name":
+        return a.name.localeCompare(b.name);
+      case "cost":
+        return b.tokens.total_cost_usd - a.tokens.total_cost_usd;
+      case "status":
+        return a.state.localeCompare(b.state);
+      case "date":
+      default:
+        return new Date(b.updated_at || b.created_at).getTime() -
+               new Date(a.updated_at || a.created_at).getTime();
+    }
+  });
+
+  const active = filteredAgents.filter((a) =>
     ["running", "waiting_permission", "waiting_input"].includes(a.state)
   );
-  const other = agents.filter(
+  const other = filteredAgents.filter(
     (a) => !["running", "waiting_permission", "waiting_input"].includes(a.state)
   );
 
@@ -68,6 +96,13 @@ export function Dashboard() {
         </div>
         <div className="flex gap-2">
           <Link
+            to="/settings"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
+            title="Settings"
+          >
+            <Settings size={16} />
+          </Link>
+          <Link
             to="/discover"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
           >
@@ -83,10 +118,60 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Budget + Permissions */}
+      {/* Usage + Permissions */}
       <div className="grid gap-4 md:grid-cols-2 mb-6">
-        <TokenBudgetBar budget={budget} />
-        <PermissionDialog permissions={permissions} onResolved={refresh} />
+        <UsageWidget />
+        <PermissionDialog
+          permissions={permissions}
+          onResolved={refresh}
+          agentNames={Object.fromEntries(agents.map(a => [a.id, a.name]))}
+        />
+      </div>
+
+      {/* Search and Filters */}
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
+        <div className="flex flex-col sm:flex-row gap-4">
+          {/* Search */}
+          <div className="flex-1 relative">
+            <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              placeholder="Search agents..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          {/* Sort */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-200 focus:outline-none focus:border-blue-500"
+          >
+            <option value="date">Sort by Date</option>
+            <option value="name">Sort by Name</option>
+            <option value="cost">Sort by Cost</option>
+            <option value="status">Sort by Status</option>
+          </select>
+          {/* Filter */}
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-200 focus:outline-none focus:border-blue-500"
+          >
+            <option value="all">All Status</option>
+            <option value="pending">Pending</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="paused">Paused</option>
+          </select>
+        </div>
+        {(searchTerm || filterStatus !== "all") && (
+          <div className="mt-3 text-sm text-gray-400">
+            Showing {filteredAgents.length} of {agents.length} agents
+          </div>
+        )}
       </div>
 
       {/* Active Agents */}

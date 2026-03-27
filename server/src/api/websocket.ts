@@ -49,12 +49,18 @@ export function setupWebSocket(
     const agentId = "agentId" in event ? event.agentId : null;
     const payload = JSON.stringify(event);
 
+    // Debug logging
+    if (event.type === "agent:message") {
+      logger.info({ event, clientCount: clients.size }, "Broadcasting agent:message event");
+    }
+
     for (const client of clients) {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
 
-      // Stream events only go to subscribers of that agent
-      if (event.type === "agent:stream" && agentId) {
+      // Agent-specific events only go to subscribers of that agent
+      if ((event.type === "agent:stream" || event.type === "agent:message") && agentId) {
         if (client.subscriptions.has(agentId)) {
+          logger.info({ agentId, eventType: event.type }, "Sending event to subscribed client");
           client.ws.send(payload);
         }
         continue;

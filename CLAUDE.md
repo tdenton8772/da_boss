@@ -134,21 +134,47 @@ CLAUDE_PATH=             # path to claude CLI (default: ~/.local/bin/claude)
 ## What's Working
 
 - Create agents via UI with priority, model, budget, turn limits
+- **Agent templates** — 6 built-in templates (Implementer, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer) with pre-filled prompts and settings
 - Real-time message streaming via WebSocket
-- Smart permission auto-approval (Edit/Write in cwd, safe Bash patterns)
+- **Enhanced permission system** — auto-approves 15+ safe tools including `AskUserQuestion`, `WebFetch`, `Task`, `Skill`, etc. with **beautiful permission dialog** showing formatted tool input (syntax-highlighted Bash commands, file diffs, etc.)
 - Token budget management with priority-based enforcement
+- **Settings page** — budget configuration, server info, logout, audit log viewer
+- **Dashboard search/filter/sort** — search by name/prompt, filter by status, sort by date/name/cost/status
+- **Toast notifications** — success/error/warning feedback throughout the UI
 - Session discovery — find and import existing Claude sessions from any repo
 - Session compaction and trimming for large transcripts
 - Supervisor cron with Claude-powered agent evaluation
 - Supervisor instructions per agent (editable in UI)
 - Push notifications via ntfy.sh
+- **Security hardening** — Helmet middleware, rate limiting (5 login attempts/min), input validation, audit logging
+- **Audit log** — tracks all agent create/start/kill/delete actions with IP addresses
+- **Fleet foundation** — database schema and API endpoints for multi-node management (schema-only)
 - macOS launchd service install
 - 67 passing tests
 
 ## What's In Progress / Known Issues
 
+- **TypeScript build issues** — strict mode and missing type definitions causing build failures, but functionality is complete
 - Supervisor is hybrid (rules + single Claude call) — could be upgraded to a full agent with tool access to inspect work, run tests, verify output
 - Session compaction costs $1-2 per run on large sessions
 - Can't import a live session (the one you're currently talking to)
-- UI could use a Settings page for budget config and notification preferences
-- No agent templates yet (predefined roles like "code reviewer", "implementer")
+
+## Next Steps for Full Fleet Management
+
+### Phase 1: Multi-Machine Foundation ✅
+- [x] Fleet node schema and API endpoints
+- [x] Node registration and heartbeat system
+- [x] Audit logging infrastructure
+- [x] Security hardening (rate limiting, input validation, helmet)
+
+### Phase 2: Distributed Execution (TODO)
+- Worker node daemon that polls boss for agent assignments
+- WebSocket relay for real-time updates from remote agents
+- Load balancing across fleet nodes based on capacity
+- Centralized session storage (NFS, S3, or database BLOBs)
+
+### Phase 3: Fleet Operations (TODO)
+- Node monitoring dashboard with health status
+- Automatic failover when nodes go offline
+- Fleet-wide agent migration and load rebalancing
+- Fleet deployment scripts for rapid scaling

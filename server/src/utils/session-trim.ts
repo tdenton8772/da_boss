@@ -11,14 +11,14 @@ export async function trimSession(
   keepLastMessages = 10
 ): Promise<{ originalLines: number; trimmedLines: number }> {
   const raw = await readFile(sessionPath, "utf-8");
-  const lines = raw.split("\n").filter((l) => l.trim());
+  const lines = raw.split("\n").filter((l: string) => l.trim());
 
   if (lines.length <= keepLastMessages + 5) {
     // Already small enough
     return { originalLines: lines.length, trimmedLines: lines.length };
   }
 
-  const parsed = lines.map((l) => {
+  const parsed = lines.map((l: string) => {
     try {
       return JSON.parse(l);
     } catch {
@@ -28,7 +28,7 @@ export async function trimSession(
 
   // Find compaction boundary messages (they mark where compaction summaries are)
   const compactIndices: number[] = [];
-  parsed.forEach((msg, i) => {
+  parsed.forEach((msg: any, i: number) => {
     if (msg?.type === "compact_boundary" || msg?.type === "summary") {
       compactIndices.push(i);
     }

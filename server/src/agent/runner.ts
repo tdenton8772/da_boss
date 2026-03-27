@@ -5,6 +5,7 @@ import type { ServerEvent } from "../types/events.js";
 import { createPermissionHandler } from "./permissions.js";
 import { assertTransition } from "../utils/state-machine.js";
 import { TokenBudgetManager } from "../tokens/budget.js";
+import type { TaskMonitor } from "./task-monitor.js";
 import * as queries from "../db/queries.js";
 import { logger } from "../utils/logger.js";
 
@@ -14,18 +15,25 @@ export class AgentRunner {
   private currentQuery: SDKQuery | null = null;
   private abortController: AbortController | null = null;
   private _running = false;
+  private _sessionId: string | null = null;
 
   constructor(
     private agentId: string,
     private eventBus: EventEmitter,
-    private budgetManager: TokenBudgetManager
+    private budgetManager: TokenBudgetManager,
+    private taskMonitor: TaskMonitor
   ) {}
 
   get running(): boolean {
     return this._running;
   }
 
-  async start(): Promise<void> {
+  /**
+   * Run a single turn: send a prompt (or resume), iterate messages,
+   * then transition to waiting_input when the turn completes.
+   * The process exits after each turn — this matches terminal behavior.
+   */
+  async runTurn(prompt: string, isResume: boolean): Promise<void> {
     const agent = queries.getAgent(this.agentId);
     if (!agent) throw new Error(`Agent ${this.agentId} not found`);
 
@@ -56,13 +64,26 @@ export class AgentRunner {
         includePartialMessages: true,
         model: agent.model,
         canUseTool: permissionHandler,
+        systemPrompt: {
+          type: "preset" as const,
+          preset: "claude_code" as const,
+          append: [
+            "IMPORTANT: You are running as a managed agent via da_boss.",
+            "For long-running or background commands, do NOT use run_in_background (it does not persist between turns).",
+            "Instead, use shell backgrounding with output redirection to a file, e.g.:",
+            "  `my-command > /tmp/my-output.log 2>&1 &`",
+            "da_boss automatically detects backgrounded commands and monitors their output files.",
+            "When the command completes, da_boss will automatically notify you with the results.",
+            "Do NOT restart the da_boss server, kill port 3847, or run launchctl commands.",
+          ].join("\n"),
+        },
         ...(agent.max_turns && { maxTurns: agent.max_turns }),
         ...(agent.max_budget_usd && { maxBudgetUsd: agent.max_budget_usd }),
         ...(agent.sdk_session_id && { resume: agent.sdk_session_id }),
       };
 
       this.currentQuery = sdkQuery({
-        prompt: agent.prompt,
+        prompt,
         options,
       });
 
@@ -70,6 +91,14 @@ export class AgentRunner {
 
       for await (const msg of this.currentQuery) {
         if (!this._running) break;
+
+        // Scan all messages for background task output file references
+        try {
+          const raw = JSON.stringify(msg);
+          if ((raw.includes(">") && raw.includes("&")) || raw.includes("tasks/")) {
+            this.taskMonitor.detectFromContent(this.agentId, raw);
+          }
+        } catch { /* ignore stringify errors */ }
 
         // Extract session ID from init message
         if (
@@ -79,23 +108,44 @@ export class AgentRunner {
           msg.session_id
         ) {
           sessionId = msg.session_id as string;
+          this._sessionId = sessionId;
           queries.updateAgentState(this.agentId, "running", {
             sdk_session_id: sessionId,
           });
         }
 
-        // Handle assistant messages (complete)
+        // Handle assistant messages
         if ("type" in msg && msg.type === "assistant") {
           const content = this.extractTextContent(msg);
           if (content) {
             this.emitMessage("assistant", content);
+            this.taskMonitor.detectFromContent(this.agentId, content);
             queries.insertAgentEvent(this.agentId, "message", {
               role: "assistant",
               content: content.substring(0, 2000),
             });
           }
 
-          // Track token usage from assistant messages
+          // Emit tool_use blocks as separate "tool" messages
+          const toolUses = this.extractToolUses(msg);
+          for (const tu of toolUses) {
+            this.emitMessage("tool", tu);
+            this.taskMonitor.detectFromContent(this.agentId, tu);
+            queries.insertAgentEvent(this.agentId, "message", {
+              role: "tool",
+              content: tu.substring(0, 4000),
+            });
+          }
+
+          // Detect backgrounded Bash commands from raw tool_use input
+          const m2 = msg as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } };
+          for (const block of m2?.message?.content || []) {
+            if (block.type === "tool_use" && block.name === "Bash" && typeof block.input?.command === "string") {
+              this.taskMonitor.detectFromCommand(this.agentId, block.input.command);
+            }
+          }
+
+          // Track token usage
           if ("message" in msg && msg.message && "usage" in msg.message) {
             const usage = msg.message.usage as {
               input_tokens?: number;
@@ -104,7 +154,6 @@ export class AgentRunner {
               cache_creation_input_tokens?: number;
             };
             if (usage.input_tokens || usage.output_tokens) {
-              // Estimate cost (will be corrected by result message)
               const estimatedCost =
                 ((usage.input_tokens || 0) * 0.000003 +
                   (usage.output_tokens || 0) * 0.000015);
@@ -140,7 +189,7 @@ export class AgentRunner {
           }
         }
 
-        // Handle result
+        // Handle result — turn completed
         if ("type" in msg && msg.type === "result") {
           const result = msg as {
             result?: string;
@@ -152,6 +201,7 @@ export class AgentRunner {
 
           if (result.session_id) {
             sessionId = result.session_id;
+            this._sessionId = sessionId;
           }
 
           if (result.is_error) {
@@ -168,14 +218,15 @@ export class AgentRunner {
             if (result.result) {
               this.emitMessage("assistant", result.result);
             }
-            queries.updateAgentState(this.agentId, "completed", {
+            // Turn completed successfully. Save session, go to waiting_input.
+            // Process will exit — next user message starts a new turn via resume.
+            queries.updateAgentState(this.agentId, "waiting_input", {
               sdk_session_id: sessionId,
-              completed_at: new Date().toISOString(),
             });
-            this.emitStateChange("running", "completed");
+            this.emitStateChange("running", "waiting_input");
             queries.insertAgentEvent(this.agentId, "state_change", {
               from: "running",
-              to: "completed",
+              to: "waiting_input",
             });
           }
         }
@@ -185,19 +236,51 @@ export class AgentRunner {
       if (message.includes("aborted") || message.includes("abort")) {
         logger.info({ agentId: this.agentId }, "Agent aborted");
       } else if (message.includes("too long") || message.includes("too large") || message.includes("context")) {
-        // Session too large to resume — mark as failed with actionable message
         this.handleError(
           "Session too large to resume. Use 'fresh start' to begin a new session with a summary of the previous work.",
           agent.sdk_session_id
         );
       } else {
-        this.handleError(message, null);
+        // Don't treat process exit as error if we already transitioned to waiting_input
+        const currentAgent = queries.getAgent(this.agentId);
+        if (currentAgent?.state === "waiting_input") {
+          logger.info({ agentId: this.agentId, error: message }, "Process exited after turn (expected)");
+        } else {
+          this.handleError(message, this._sessionId || null);
+        }
       }
     } finally {
       this._running = false;
       this.currentQuery = null;
       this.abortController = null;
+      // Don't stop polling here — background tasks may still be running
+      // Polling stops when all tasks complete or on kill/pause
     }
+  }
+
+  /** Start a new agent (first turn). */
+  async start(): Promise<void> {
+    const agent = queries.getAgent(this.agentId);
+    if (!agent) throw new Error(`Agent ${this.agentId} not found`);
+    await this.runTurn(agent.prompt, false);
+  }
+
+  /** Resume with a user message (subsequent turns). */
+  async resumeWithInput(userMessage: string): Promise<void> {
+    // Emit the user message to UI
+    queries.insertAgentEvent(this.agentId, "message", {
+      role: "user",
+      content: userMessage,
+    });
+    this.eventBus.emit("server-event", {
+      type: "agent:message",
+      agentId: this.agentId,
+      role: "user",
+      content: userMessage,
+      timestamp: new Date().toISOString(),
+    });
+
+    await this.runTurn(userMessage, true);
   }
 
   async pause(): Promise<void> {
@@ -228,10 +311,20 @@ export class AgentRunner {
     if (!agent) return;
 
     this._running = false;
+    this.taskMonitor.removeAgent(this.agentId);
 
     if (this.abortController) {
-      this.abortController.abort();
+      try {
+        this.abortController.abort();
+      } catch {
+        // Ignore abort errors — expected
+      }
     }
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    this.currentQuery = null;
+    this.abortController = null;
 
     queries.updateAgentState(this.agentId, "aborted");
     this.emitStateChange(agent.state, "aborted");
@@ -242,30 +335,9 @@ export class AgentRunner {
   }
 
   async sendInput(userMessage: string): Promise<void> {
-    if (!this.currentQuery) {
-      throw new Error("No active query to send input to");
-    }
-
-    const sdkMessage = {
-      type: "user" as const,
-      message: {
-        role: "user" as const,
-        content: userMessage,
-      },
-      parent_tool_use_id: null,
-      session_id: "",
-    };
-
-    async function* inputStream() {
-      yield sdkMessage;
-    }
-    await this.currentQuery.streamInput(inputStream() as AsyncIterable<import("@anthropic-ai/claude-agent-sdk").SDKUserMessage>);
-
-    const agent = queries.getAgent(this.agentId);
-    if (agent?.state === "waiting_input") {
-      queries.updateAgentState(this.agentId, "running");
-      this.emitStateChange("waiting_input", "running");
-    }
+    // This is called when the runner is active and agent is waiting.
+    // Start a new turn with the user's message.
+    await this.resumeWithInput(userMessage);
   }
 
   private handleError(message: string, sessionId: string | null): void {
@@ -325,6 +397,43 @@ export class AgentRunner {
     return textParts.length > 0 ? textParts.join("\n") : null;
   }
 
+  private extractToolUses(msg: unknown): string[] {
+    const m = msg as {
+      message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> };
+    };
+    if (!m?.message?.content) return [];
+
+    return m.message.content
+      .filter((b) => b.type === "tool_use" && b.name)
+      .map((b) => {
+        const name = b.name!;
+        const input = b.input || {};
+        // Format based on tool type
+        if (name === "Bash" && input.command) {
+          return `**Bash**: \`${input.command}\``;
+        }
+        if (name === "Edit" && input.file_path) {
+          const lines = [
+            `**Edit**: \`${input.file_path}\``,
+            ...(input.old_string ? ["```diff", `- ${String(input.old_string).substring(0, 500)}`, `+ ${String(input.new_string || "").substring(0, 500)}`, "```"] : []),
+          ];
+          return lines.join("\n");
+        }
+        if (name === "Write" && input.file_path) {
+          const content = String(input.content || "");
+          return `**Write**: \`${input.file_path}\`\n\`\`\`\n${content.substring(0, 1000)}${content.length > 1000 ? "\n..." : ""}\n\`\`\``;
+        }
+        if (name === "Read" && input.file_path) {
+          return `**Read**: \`${input.file_path}\``;
+        }
+        if ((name === "Grep" || name === "Glob") && input.pattern) {
+          return `**${name}**: \`${input.pattern}\`${input.path ? ` in \`${input.path}\`` : ""}`;
+        }
+        // Generic fallback
+        return `**${name}**: ${JSON.stringify(input).substring(0, 500)}`;
+      });
+  }
+
   private transitionState(
     agent: AgentRecord,
     newState: AgentRecord["state"]
@@ -333,4 +442,5 @@ export class AgentRunner {
       assertTransition(agent.state, newState);
     }
   }
+
 }

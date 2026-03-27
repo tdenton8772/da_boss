@@ -292,3 +292,115 @@ export function completeSupervisorRun(
     UPDATE supervisor_runs SET completed_at = datetime('now'), findings = ?, actions = ? WHERE id = ?
   `).run(JSON.stringify(findings), JSON.stringify(actions), id);
 }
+
+// ── Audit Log ──────────────────────────────────────────────
+
+export interface AuditEntry {
+  id: number;
+  user_ip: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export function insertAuditLog(
+  userIp: string | null,
+  action: string,
+  targetType?: string,
+  targetId?: string,
+  details?: string
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO audit_log (user_ip, action, target_type, target_id, details)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(userIp, action, targetType || null, targetId || null, details || null);
+}
+
+export function getAuditLog(limit = 50, offset = 0): AuditEntry[] {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?")
+    .all(limit, offset) as AuditEntry[];
+}
+
+export function getAuditLogCount(): number {
+  const db = getDb();
+  const row = db.prepare("SELECT COUNT(*) as count FROM audit_log").get() as { count: number };
+  return row.count;
+}
+
+// ── Fleet Nodes ────────────────────────────────────────────
+
+export interface FleetNode {
+  id: string;
+  hostname: string;
+  url: string;
+  role: string;
+  status: string;
+  last_heartbeat: string | null;
+  agent_capacity: number;
+  agent_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getAllFleetNodes(): FleetNode[] {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM fleet_nodes ORDER BY created_at ASC")
+    .all() as FleetNode[];
+}
+
+export function getFleetNode(id: string): FleetNode | undefined {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM fleet_nodes WHERE id = ?")
+    .get(id) as FleetNode | undefined;
+}
+
+export function upsertFleetNode(node: {
+  id: string;
+  hostname: string;
+  url: string;
+  role?: string;
+  agent_capacity?: number;
+}): FleetNode {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO fleet_nodes (id, hostname, url, role, agent_capacity, status, last_heartbeat)
+    VALUES (@id, @hostname, @url, @role, @agent_capacity, 'online', datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      hostname = @hostname,
+      url = @url,
+      role = COALESCE(@role, role),
+      agent_capacity = COALESCE(@agent_capacity, agent_capacity),
+      status = 'online',
+      last_heartbeat = datetime('now'),
+      updated_at = datetime('now')
+  `).run({
+    id: node.id,
+    hostname: node.hostname,
+    url: node.url,
+    role: node.role || "worker",
+    agent_capacity: node.agent_capacity || 3,
+  });
+  return getFleetNode(node.id)!;
+}
+
+export function updateFleetNodeHeartbeat(id: string, agentCount: number): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE fleet_nodes SET last_heartbeat = datetime('now'), agent_count = ?, status = 'online', updated_at = datetime('now') WHERE id = ?
+  `).run(agentCount, id);
+}
+
+export function markStaleNodes(thresholdMinutes: number): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE fleet_nodes SET status = 'offline', updated_at = datetime('now')
+    WHERE status = 'online' AND last_heartbeat < datetime('now', '-' || ? || ' minutes')
+  `).run(thresholdMinutes);
+}

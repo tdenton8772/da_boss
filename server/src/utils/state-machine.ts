@@ -11,11 +11,11 @@ const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
     "aborted",
   ],
   waiting_permission: ["running", "aborted"],
-  waiting_input: ["running", "aborted"],
-  completed: ["verified", "running"],
+  waiting_input: ["running", "paused", "completed", "aborted"],
+  completed: ["verified", "running", "waiting_input"],
   verified: [],
-  failed: ["running", "aborted"],
-  paused: ["running", "aborted"],
+  failed: ["running", "waiting_input", "aborted"],
+  paused: ["running", "waiting_input", "aborted"],
   aborted: [],
 };
 

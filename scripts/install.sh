@@ -63,6 +63,9 @@ mkdir -p "$LOG_DIR"
 # Install launchd plist
 echo "Installing launchd service..."
 NODE_PATH=$(which node)
+NODE_BIN_DIR=$(dirname "$NODE_PATH")
+CLAUDE_BIN=$(which claude 2>/dev/null || echo "$HOME/.local/bin/claude")
+CLAUDE_BIN_DIR=$(dirname "$CLAUDE_BIN")
 
 cat > "$PLIST_PATH" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -87,6 +90,8 @@ cat > "$PLIST_PATH" << PLISTEOF
     <string>production</string>
     <key>DB_PATH</key>
     <string>${PROJECT_DIR}/da_boss.db</string>
+    <key>PATH</key>
+    <string>${NODE_BIN_DIR}:${CLAUDE_BIN_DIR}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>RunAtLoad</key>

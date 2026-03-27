@@ -84,14 +84,21 @@ export function AgentDetail() {
       if (!id) return;
 
       if (event.type === "agent:message" && event.agentId === id) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: event.role,
-            content: event.content,
-            timestamp: event.timestamp,
-          },
-        ]);
+        setMessages((prev) => {
+          // Deduplicate: skip if last message has same role and content
+          const last = prev[prev.length - 1];
+          if (last && last.role === event.role && last.content === event.content) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              role: event.role,
+              content: event.content,
+              timestamp: event.timestamp,
+            },
+          ];
+        });
         setStreamBuffer("");
       }
 
@@ -178,12 +185,12 @@ export function AgentDetail() {
         Back
       </Link>
 
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-100">{agent.name}</h1>
-          <p className="text-sm text-gray-500">{agent.cwd}</p>
+      <div className="flex items-start justify-between mb-4 gap-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg md:text-xl font-bold text-gray-100 truncate">{agent.name}</h1>
+          <p className="text-xs text-gray-500 truncate">{agent.cwd}</p>
         </div>
-        <div className="text-right text-sm">
+        <div className="text-right text-sm shrink-0">
           <div className="text-gray-400">{agent.state}</div>
           <div className="text-gray-500 font-mono">${cost.toFixed(4)}</div>
         </div>
@@ -193,9 +200,9 @@ export function AgentDetail() {
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 text-sm text-gray-400 overflow-hidden">
         <div className="mb-1 min-w-0">
           <span className="text-gray-500">Prompt:</span>
-          <pre className="whitespace-pre-wrap break-words mt-0.5 font-sans overflow-x-hidden">{agent.prompt}</pre>
+          <pre className="whitespace-pre-wrap break-words mt-0.5 font-sans overflow-x-hidden text-xs md:text-sm">{agent.prompt}</pre>
         </div>
-        <div className="flex gap-4 text-xs text-gray-500">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
           <span>Priority: {agent.priority}</span>
           <span>Model: {agent.model}</span>
           {agent.max_turns && <span>Max turns: {agent.max_turns}</span>}
@@ -249,7 +256,11 @@ export function AgentDetail() {
       {/* Permissions */}
       {permissions.length > 0 && (
         <div className="mb-4">
-          <PermissionDialog permissions={permissions} onResolved={refresh} />
+          <PermissionDialog
+            permissions={permissions}
+            onResolved={refresh}
+            agentNames={agent ? { [agent.id]: agent.name } : undefined}
+          />
         </div>
       )}
 
@@ -271,8 +282,8 @@ export function AgentDetail() {
       </div>
 
       {/* Error */}
-      {agent.error_message && (
-        <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
+      {agent.error_message && !agent.error_message.toLowerCase().includes("imported from existing session") && !agent.error_message.toLowerCase().includes("claude code process exited") && !agent.error_message.toLowerCase().includes("server restarted") && (
+        <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-2 md:p-3 text-xs md:text-sm text-red-300">
           <p>{agent.error_message}</p>
           {(agent.error_message.toLowerCase().includes("fresh start") || agent.error_message.toLowerCase().includes("too long") || agent.error_message.toLowerCase().includes("too large") || agent.error_message.toLowerCase().includes("compact") || agent.error_message.toLowerCase().includes("trim")) && (
             <div className="flex flex-wrap gap-2 mt-2">
