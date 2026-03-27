@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "workspaces": ["server", "ui"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w ui\"",
+    "build": "npm run build -w server && npm run build -w ui"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}
