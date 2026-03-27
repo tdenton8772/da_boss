@@ -1,4 +1,12 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Load .env from project root (two levels up from server/src/)
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+// Also try project root relative to cwd (for production)
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 
 export const config = {
   port: parseInt(process.env.PORT || "3847", 10),

@@ -3,7 +3,13 @@
   "workspaces": ["server", "ui"],
   "scripts": {
     "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w ui\"",
-    "build": "npm run build -w server && npm run build -w ui"
+    "build": "npm run build -w server && npm run build -w ui",
+    "test": "npm run test -w server",
+    "install-service": "bash scripts/install.sh",
+    "uninstall-service": "bash scripts/uninstall.sh",
+    "service:start": "launchctl load ~/Library/LaunchAgents/com.daboss.agent-manager.plist",
+    "service:stop": "launchctl unload ~/Library/LaunchAgents/com.daboss.agent-manager.plist",
+    "service:logs": "tail -f ~/Library/Logs/da_boss/stderr.log"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
 import { config } from "./config.js";
@@ -55,7 +58,19 @@ async function main() {
   app.use(router);
 
   // Serve UI static files in production
-  // In dev, Vite handles this via proxy
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const uiDistPath = path.resolve(__dirname, "../../ui/dist");
+  if (existsSync(uiDistPath)) {
+    app.use(express.static(uiDistPath));
+    // SPA fallback: serve index.html for non-API routes
+    app.get("/{*splat}", (req, res, next) => {
+      if (req.path.startsWith("/api") || req.path.startsWith("/ws")) {
+        return next();
+      }
+      res.sendFile(path.join(uiDistPath, "index.html"));
+    });
+    logger.info({ path: uiDistPath }, "Serving UI from dist");
+  }
 
   // HTTP server
   const server = createServer(app);

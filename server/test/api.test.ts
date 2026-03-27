@@ -5,6 +5,7 @@ import request from "supertest";
 import { EventEmitter } from "node:events";
 import { AgentManager } from "../src/agent/manager.js";
 import { createRouter } from "../src/api/router.js";
+import { config } from "../src/config.js";
 
 function createTestApp() {
   const eventBus = new EventEmitter();
@@ -29,7 +30,7 @@ async function authAgent(app: express.Express) {
   const agent = request.agent(app);
   await agent
     .post("/api/auth/login")
-    .send({ password: "da-boss-dev" })
+    .send({ password: config.authPassword })
     .expect(200);
   return agent;
 }
@@ -52,7 +53,7 @@ describe("API routes", () => {
     it("logs in with correct password", async () => {
       const res = await request(app)
         .post("/api/auth/login")
-        .send({ password: "da-boss-dev" })
+        .send({ password: config.authPassword })
         .expect(200);
       expect(res.body.ok).toBe(true);
     });
