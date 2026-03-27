@@ -75,6 +75,14 @@ export function updateAgentState(
   );
 }
 
+export function deleteAgent(id: string): void {
+  const db = getDb();
+  db.prepare("DELETE FROM token_usage WHERE agent_id = ?").run(id);
+  db.prepare("DELETE FROM permission_requests WHERE agent_id = ?").run(id);
+  db.prepare("DELETE FROM agent_events WHERE agent_id = ?").run(id);
+  db.prepare("DELETE FROM agents WHERE id = ?").run(id);
+}
+
 export function updateAgentSupervisorInstructions(
   id: string,
   supervisorInstructions: string

@@ -69,6 +69,25 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  router.delete("/api/agents/:id", async (req, res) => {
+    try {
+      const agent = queries.getAgent(req.params.id);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      // Kill if running
+      if (["running", "waiting_permission", "waiting_input"].includes(agent.state)) {
+        await manager.killAgent(req.params.id);
+      }
+      queries.deleteAgent(req.params.id);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: message });
+    }
+  });
+
   router.post("/api/agents/:id/pause", async (req, res) => {
     try {
       await manager.pauseAgent(req.params.id);

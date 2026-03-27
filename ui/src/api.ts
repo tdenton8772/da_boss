@@ -33,6 +33,8 @@ export const api = {
   getAgent: (id: string) => request<AgentDetail>(`/agents/${id}`),
   createAgent: (data: CreateAgentData) =>
     request("/agents", { method: "POST", body: JSON.stringify(data) }),
+  deleteAgent: (id: string) =>
+    request(`/agents/${id}`, { method: "DELETE" }),
   startAgent: (id: string) =>
     request(`/agents/${id}/start`, { method: "POST" }),
   pauseAgent: (id: string) =>

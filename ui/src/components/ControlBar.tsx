@@ -1,15 +1,17 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Play, Pause, Square, RotateCcw, Send } from "lucide-react";
+import { Play, Pause, Square, RotateCcw, Send, Trash2 } from "lucide-react";
 
 export function ControlBar({
   agentId,
   state,
   onAction,
+  onDelete,
 }: {
   agentId: string;
   state: string;
   onAction: () => void;
+  onDelete?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -80,6 +82,18 @@ export function ControlBar({
               }
             }}
             color="bg-red-700 hover:bg-red-600"
+          />
+        )}
+        {onDelete && (
+          <ActionButton
+            icon={<Trash2 size={16} />}
+            label="Delete"
+            onClick={() => {
+              if (confirm("Delete this agent permanently? This cannot be undone.")) {
+                api.deleteAgent(agentId).then(() => onDelete()).catch(() => alert("Delete failed"));
+              }
+            }}
+            color="bg-gray-700 hover:bg-red-700"
           />
         )}
       </div>

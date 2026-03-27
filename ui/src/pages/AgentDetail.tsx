@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, Link } from "react-router";
+import { useParams, Link, useNavigate } from "react-router";
 import { api, type PermissionReq } from "../api";
 import { Save } from "lucide-react";
 import { useWebSocket, type ServerEvent } from "../ws";
@@ -26,6 +26,7 @@ interface AgentData {
 
 export function AgentDetail() {
   const params = useParams();
+  const navigate = useNavigate();
   const id = params.id;
   const [agent, setAgent] = useState<AgentData | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -254,7 +255,7 @@ export function AgentDetail() {
 
       {/* Controls */}
       <div className="mb-4">
-        <ControlBar agentId={agent.id} state={agent.state} onAction={refresh} />
+        <ControlBar agentId={agent.id} state={agent.state} onAction={refresh} onDelete={() => navigate("/")} />
       </div>
 
       {/* Messages */}
