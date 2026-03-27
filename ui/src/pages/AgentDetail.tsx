@@ -1,46 +1,70 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router";
-import { api, type AgentDetail as AgentDetailType, type PermissionReq } from "../api";
+import { api, type PermissionReq } from "../api";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { ArrowLeft } from "lucide-react";
 
+interface AgentData {
+  id: string;
+  name: string;
+  prompt: string;
+  cwd: string;
+  state: string;
+  priority: string;
+  model: string;
+  max_turns: number | null;
+  max_budget_usd: number | null;
+  error_message: string | null;
+  total_cost_usd?: number;
+  tokens?: { total_cost_usd: number };
+}
+
 export function AgentDetail() {
-  const { id } = useParams<{ id: string }>();
-  const [agent, setAgent] = useState<AgentDetailType | null>(null);
+  const params = useParams();
+  const id = params.id;
+  const [agent, setAgent] = useState<AgentData | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [permissions, setPermissions] = useState<PermissionReq[]>([]);
   const [streamBuffer, setStreamBuffer] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const subscribedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (!id) return;
-    api.getAgent(id).then(setAgent).catch(() => {});
-    api.getPendingPermissions().then((all) =>
-      setPermissions(all.filter((p) => p.agent_id === id))
-    ).catch(() => {});
+    api
+      .getAgent(id)
+      .then((a) => setAgent(a as AgentData))
+      .catch((err) => setError(err.message));
+    api
+      .getPendingPermissions()
+      .then((all) => setPermissions(all.filter((p) => p.agent_id === id)))
+      .catch(() => {});
   }, [id]);
 
   // Load events on mount
   useEffect(() => {
     if (!id) return;
     refresh();
-    api.getEvents(id, 200).then((events) => {
-      const msgs: Message[] = events
-        .filter((e) => e.type === "message")
-        .reverse()
-        .map((e) => {
-          const data = JSON.parse(e.data);
-          return {
-            role: data.role || "system",
-            content: data.content || "",
-            timestamp: e.created_at,
-          };
-        });
-      setMessages(msgs);
-    }).catch(() => {});
+    api
+      .getEvents(id, 200)
+      .then((events) => {
+        const msgs: Message[] = events
+          .filter((e) => e.type === "message")
+          .reverse()
+          .map((e) => {
+            const data = JSON.parse(e.data);
+            return {
+              role: data.role || "system",
+              content: data.content || "",
+              timestamp: e.created_at,
+            };
+          });
+        setMessages(msgs);
+      })
+      .catch(() => {});
   }, [id, refresh]);
 
   const handleEvent = useCallback(
@@ -75,9 +99,10 @@ export function AgentDetail() {
         event.type === "permission:requested" ||
         event.type === "permission:resolved"
       ) {
-        api.getPendingPermissions().then((all) =>
-          setPermissions(all.filter((p) => p.agent_id === id))
-        ).catch(() => {});
+        api
+          .getPendingPermissions()
+          .then((all) => setPermissions(all.filter((p) => p.agent_id === id)))
+          .catch(() => {});
       }
 
       if (event.type === "agent:error" && event.agentId === id) {
@@ -107,6 +132,19 @@ export function AgentDetail() {
     };
   }, [id, subscribe, unsubscribe]);
 
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-400 mb-4">{error}</p>
+          <Link to="/" className="text-blue-400 hover:text-blue-300">
+            Back to dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   if (!agent) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center text-gray-400">
@@ -134,12 +172,8 @@ export function AgentDetail() {
           <p className="text-sm text-gray-500">{agent.cwd}</p>
         </div>
         <div className="text-right text-sm">
-          <div className="text-gray-400">
-            {agent.state}
-          </div>
-          <div className="text-gray-500 font-mono">
-            ${cost.toFixed(4)}
-          </div>
+          <div className="text-gray-400">{agent.state}</div>
+          <div className="text-gray-500 font-mono">${cost.toFixed(4)}</div>
         </div>
       </div>
 

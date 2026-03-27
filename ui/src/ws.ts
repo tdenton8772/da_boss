@@ -59,13 +59,30 @@ export function useWebSocket(onEvent: EventHandler) {
     };
   }, []); // stable — never reconnects due to callback changes
 
-  const subscribe = useCallback((agentId: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "subscribe", agentId }));
+  const safeSend = useCallback((data: string) => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    } else if (ws.readyState === WebSocket.CONNECTING) {
+      // Queue until open
+      const onOpen = () => {
+        ws.removeEventListener("open", onOpen);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      };
+      ws.addEventListener("open", onOpen);
+    }
   }, []);
 
+  const subscribe = useCallback((agentId: string) => {
+    safeSend(JSON.stringify({ type: "subscribe", agentId }));
+  }, [safeSend]);
+
   const unsubscribe = useCallback((agentId: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "unsubscribe", agentId }));
-  }, []);
+    safeSend(JSON.stringify({ type: "unsubscribe", agentId }));
+  }, [safeSend]);
 
   return { connected, subscribe, unsubscribe };
 }
