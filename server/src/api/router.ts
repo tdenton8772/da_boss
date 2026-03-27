@@ -15,6 +15,29 @@ export function createRouter(manager: AgentManager): Router {
   // All routes below require auth
   router.use("/api", authMiddleware);
 
+  // ── Filesystem browsing ────────────────────────────────
+  router.get("/api/browse", async (req, res) => {
+    const dir = (req.query.dir as string) || process.env.HOME || "/";
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const dirs = entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => ({
+          name: e.name,
+          path: path.join(dir, e.name),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const parent = path.dirname(dir);
+      res.json({ current: dir, parent: parent !== dir ? parent : null, dirs });
+    } catch {
+      res.status(400).json({ error: "Cannot read directory" });
+    }
+  });
+
   // ── Agents ────────────────────────────────────────────
   router.get("/api/agents", (_req, res) => {
     const agents = manager.getAllAgents();

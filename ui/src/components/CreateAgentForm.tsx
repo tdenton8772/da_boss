@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type CreateAgentData } from "../api";
-import { X } from "lucide-react";
+import { X, FolderOpen } from "lucide-react";
+import { DirPicker } from "./DirPicker";
 
 export function CreateAgentForm({
   onCreated,
@@ -17,6 +18,7 @@ export function CreateAgentForm({
     model: "claude-sonnet-4-6",
   });
   const [autoStart, setAutoStart] = useState(true);
+  const [showDirPicker, setShowDirPicker] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -70,13 +72,36 @@ export function CreateAgentForm({
               required
             />
           </div>
-          <Field
-            label="Working Directory"
-            value={form.cwd}
-            onChange={(v) => setForm((f) => ({ ...f, cwd: v }))}
-            placeholder="/Users/tyler/repos/my-project"
-            required
-          />
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Working Directory</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={form.cwd}
+                onChange={(e) => setForm((f) => ({ ...f, cwd: e.target.value }))}
+                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
+                placeholder="/path/to/repo"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowDirPicker(!showDirPicker)}
+                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+                title="Browse"
+              >
+                <FolderOpen size={16} />
+              </button>
+            </div>
+            {showDirPicker && (
+              <div className="mt-2">
+                <DirPicker
+                  value={form.cwd}
+                  onChange={(path) => setForm((f) => ({ ...f, cwd: path }))}
+                  onClose={() => setShowDirPicker(false)}
+                />
+              </div>
+            )}
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
