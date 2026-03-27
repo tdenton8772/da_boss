@@ -16,6 +16,8 @@ describe("database queries", () => {
       max_turns: 10,
       max_budget_usd: 5.0,
       error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
     };
 
     it("inserts and retrieves an agent", () => {
@@ -91,6 +93,8 @@ describe("database queries", () => {
         max_turns: null,
         max_budget_usd: null,
         error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
       });
 
       queries.insertAgentEvent("ag_ev", "state_change", { from: "pending", to: "running" });
@@ -118,6 +122,8 @@ describe("database queries", () => {
         max_turns: null,
         max_budget_usd: null,
         error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
       });
 
       for (let i = 0; i < 5; i++) {
@@ -146,6 +152,8 @@ describe("database queries", () => {
         max_turns: null,
         max_budget_usd: null,
         error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
       });
 
       expect(queries.getLatestEventTime("ag_lt")).toBeNull();
@@ -169,6 +177,8 @@ describe("database queries", () => {
       max_turns: null,
       max_budget_usd: null,
       error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
     };
 
     it("records and sums token usage", () => {
@@ -231,6 +241,8 @@ describe("database queries", () => {
         max_turns: null,
         max_budget_usd: null,
         error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
       });
 
       const req = queries.insertPermissionRequest(
@@ -263,6 +275,8 @@ describe("database queries", () => {
         max_turns: null,
         max_budget_usd: null,
         error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
       });
 
       const req = queries.insertPermissionRequest(

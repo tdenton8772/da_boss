@@ -114,6 +114,21 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  router.put("/api/agents/:id/instructions", (req, res) => {
+    const { supervisor_instructions } = req.body as { supervisor_instructions?: string };
+    if (typeof supervisor_instructions !== "string") {
+      res.status(400).json({ error: "supervisor_instructions is required" });
+      return;
+    }
+    const agent = queries.getAgent(req.params.id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    queries.updateAgentSupervisorInstructions(req.params.id, supervisor_instructions);
+    res.json({ ok: true });
+  });
+
   router.get("/api/agents/:id/events", (req, res) => {
     const limit = parseInt(req.query.limit as string) || 100;
     const beforeId = req.query.before

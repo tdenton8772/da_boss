@@ -1,3 +1,4 @@
+import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import * as queries from "../db/queries.js";
 import type { AgentManager } from "../agent/manager.js";
 import { sendNotification } from "../notifications/ntfy.js";
@@ -21,11 +22,10 @@ export async function runChecks(
 ): Promise<{ findings: Finding[]; actions: Action[] }> {
   const findings: Finding[] = [];
   const actions: Action[] = [];
-
-  // Check stuck agents (running with no events for N minutes)
-  const running = queries.getAgentsByState("running");
   const now = Date.now();
 
+  // ── Check stuck agents ────────────────────────────────
+  const running = queries.getAgentsByState("running");
   for (const agent of running) {
     const lastEvent = queries.getLatestEventTime(agent.id);
     if (lastEvent) {
@@ -48,7 +48,7 @@ export async function runChecks(
     }
   }
 
-  // Check stale permission requests
+  // ── Check stale permission requests ───────────────────
   const pending = queries.getPendingPermissions();
   for (const perm of pending) {
     const elapsed = now - new Date(perm.created_at + "Z").getTime();
@@ -63,7 +63,7 @@ export async function runChecks(
     }
   }
 
-  // Check budget enforcement
+  // ── Check budget enforcement ──────────────────────────
   const toPause = manager.budgetManager.getAgentsToPause();
   for (const agentId of toPause) {
     const agent = queries.getAgent(agentId);
@@ -87,29 +87,156 @@ export async function runChecks(
     }
   }
 
-  // Check idle waiting_input agents
+  // ── Check completed agents with supervisor instructions ─
+  const completed = queries.getAgentsByState("completed");
+  for (const agent of completed) {
+    if (!agent.supervisor_instructions) continue;
+
+    try {
+      const decision = await evaluateAgent(agent.id, agent.name, agent.prompt, agent.supervisor_instructions);
+
+      if (decision.action === "continue") {
+        // Send input to continue the agent
+        await manager.sendInput(agent.id, decision.message);
+        actions.push({
+          agentId: agent.id,
+          type: "supervisor_continue",
+          detail: `Supervisor continued agent: ${decision.message.substring(0, 100)}`,
+        });
+        logger.info({ agentId: agent.id }, "Supervisor continued agent");
+      } else if (decision.action === "notify") {
+        await sendNotification(
+          `Agent "${agent.name}" needs attention`,
+          decision.message,
+          "default"
+        );
+        findings.push({
+          agentId: agent.id,
+          type: "needs_attention",
+          message: decision.message,
+        });
+      }
+      // "done" = no action needed
+    } catch (err) {
+      logger.error({ agentId: agent.id, err }, "Supervisor evaluation failed");
+    }
+  }
+
+  // ── Check idle waiting_input agents ───────────────────
   const waiting = queries.getAgentsByState("waiting_input");
   for (const agent of waiting) {
     const lastEvent = queries.getLatestEventTime(agent.id);
-    if (lastEvent) {
-      const elapsed = now - new Date(lastEvent + "Z").getTime();
-      const minutes = elapsed / 60_000;
+    if (!lastEvent) continue;
 
-      if (minutes > 60) {
-        findings.push({
-          agentId: agent.id,
-          type: "idle_waiting",
-          message: `Waiting for input for ${Math.round(minutes)} minutes`,
-        });
+    const elapsed = now - new Date(lastEvent + "Z").getTime();
+    const minutes = elapsed / 60_000;
 
-        await sendNotification(
-          `Agent "${agent.name}" needs input`,
-          `Waiting for ${Math.round(minutes)} minutes. Task: ${agent.prompt.substring(0, 100)}`,
-          "default"
-        );
+    // If agent has supervisor instructions, try to help it
+    if (agent.supervisor_instructions && minutes > 2) {
+      try {
+        const decision = await evaluateAgent(agent.id, agent.name, agent.prompt, agent.supervisor_instructions);
+        if (decision.action === "continue") {
+          await manager.sendInput(agent.id, decision.message);
+          actions.push({
+            agentId: agent.id,
+            type: "supervisor_input",
+            detail: `Supervisor provided input: ${decision.message.substring(0, 100)}`,
+          });
+          continue;
+        }
+      } catch (err) {
+        logger.error({ agentId: agent.id, err }, "Supervisor input evaluation failed");
       }
+    }
+
+    if (minutes > 60) {
+      findings.push({
+        agentId: agent.id,
+        type: "idle_waiting",
+        message: `Waiting for input for ${Math.round(minutes)} minutes`,
+      });
+
+      await sendNotification(
+        `Agent "${agent.name}" needs input`,
+        `Waiting for ${Math.round(minutes)} minutes. Task: ${agent.prompt.substring(0, 100)}`,
+        "default"
+      );
     }
   }
 
   return { findings, actions };
+}
+
+interface SupervisorDecision {
+  action: "continue" | "notify" | "done";
+  message: string;
+}
+
+async function evaluateAgent(
+  agentId: string,
+  agentName: string,
+  originalPrompt: string,
+  instructions: string
+): Promise<SupervisorDecision> {
+  // Get recent messages for context
+  const recentEvents = queries.getAgentEvents(agentId, 20);
+  const recentMessages = recentEvents
+    .filter((e) => e.type === "message")
+    .reverse()
+    .map((e) => {
+      const data = JSON.parse(e.data);
+      return `[${data.role}]: ${(data.content || "").substring(0, 300)}`;
+    })
+    .join("\n");
+
+  const prompt = `You are a supervisor managing an AI coding agent. Evaluate whether this agent needs further instructions or is done.
+
+AGENT: "${agentName}"
+ORIGINAL TASK: ${originalPrompt.substring(0, 500)}
+
+SUPERVISOR INSTRUCTIONS:
+${instructions}
+
+RECENT AGENT OUTPUT:
+${recentMessages || "(no messages yet)"}
+
+Based on the supervisor instructions, decide what to do:
+- If the agent should continue with a new task or next step per the instructions, respond with: ACTION: continue
+  Then on the next line: MESSAGE: <the instruction to send to the agent>
+- If the agent needs human attention (ambiguous situation, error, etc), respond with: ACTION: notify
+  Then on the next line: MESSAGE: <what to tell the human>
+- If the agent has completed everything in the instructions, respond with: ACTION: done
+  Then on the next line: MESSAGE: <summary>
+
+Respond with ONLY the ACTION and MESSAGE lines, nothing else.`;
+
+  try {
+    let result = "";
+    for await (const msg of sdkQuery({
+      prompt,
+      options: {
+        maxTurns: 1,
+        maxBudgetUsd: 0.05,
+        permissionMode: "plan", // no tool use, just thinking
+      },
+    })) {
+      if ("type" in msg && msg.type === "result" && "result" in msg) {
+        result = (msg as { result: string }).result || "";
+      }
+    }
+
+    // Parse the response
+    const actionMatch = result.match(/ACTION:\s*(continue|notify|done)/i);
+    const messageMatch = result.match(/MESSAGE:\s*(.+)/is);
+
+    const action = (actionMatch?.[1]?.toLowerCase() || "notify") as SupervisorDecision["action"];
+    const message = messageMatch?.[1]?.trim() || "Supervisor could not determine next action";
+
+    logger.info({ agentId, action, message: message.substring(0, 100) }, "Supervisor evaluation result");
+
+    return { action, message };
+  } catch (err) {
+    logger.error({ agentId, err }, "Supervisor Claude call failed");
+    return { action: "notify", message: "Supervisor evaluation failed - needs human review" };
+  }
 }

@@ -26,7 +26,9 @@ export function Discover() {
   const [sessionsLoading, setSessionsLoading] = useState<string | null>(null);
   const [importingSession, setImportingSession] = useState<{
     projectKey: string;
+    projectPath: string;
     sessionId: string;
+    firstPrompt: string | null;
   } | null>(null);
   const [importName, setImportName] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -64,8 +66,8 @@ export function Discover() {
     }
   };
 
-  const openImportForm = (projectKey: string, sessionId: string) => {
-    setImportingSession({ projectKey, sessionId });
+  const openImportForm = (projectKey: string, projectPath: string, sessionId: string, firstPrompt: string | null) => {
+    setImportingSession({ projectKey, projectPath, sessionId, firstPrompt });
     setImportName("");
     setImportError(null);
   };
@@ -180,7 +182,7 @@ export function Discover() {
               )}
               <div className="flex-1 min-w-0">
                 <p className="text-gray-100 font-medium truncate font-mono text-sm">
-                  {project.path}
+                  {project.realPath}
                 </p>
                 <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
                   <span className="flex items-center gap-1">
@@ -247,7 +249,9 @@ export function Discover() {
                           onClick={() =>
                             openImportForm(
                               project.projectKey,
-                              session.sessionId
+                              project.realPath,
+                              session.sessionId,
+                              session.firstPrompt
                             )
                           }
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded shrink-0 transition-colors"
@@ -272,13 +276,22 @@ export function Discover() {
             <h2 className="text-lg font-semibold text-gray-100 mb-4">
               Import Session
             </h2>
-            <p className="text-gray-400 text-sm mb-4">
-              Session{" "}
-              <span className="font-mono text-gray-300">
-                {truncateId(importingSession.sessionId)}
-              </span>{" "}
-              will be imported as a new agent.
-            </p>
+            <div className="bg-gray-800 rounded p-3 mb-4 text-sm space-y-1">
+              <div className="flex gap-2">
+                <span className="text-gray-500 shrink-0">Folder:</span>
+                <span className="text-gray-200 font-mono truncate">{importingSession.projectPath}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-gray-500 shrink-0">Session:</span>
+                <span className="text-gray-300 font-mono">{truncateId(importingSession.sessionId)}</span>
+              </div>
+              {importingSession.firstPrompt && (
+                <div className="flex gap-2">
+                  <span className="text-gray-500 shrink-0">Prompt:</span>
+                  <span className="text-gray-400 line-clamp-2">{importingSession.firstPrompt}</span>
+                </div>
+              )}
+            </div>
             <label className="block text-sm text-gray-300 mb-1">
               Agent Name
             </label>

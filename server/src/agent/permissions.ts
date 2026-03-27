@@ -5,7 +5,70 @@ import type { ServerEvent } from "../types/events.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config.js";
 
-const ALWAYS_SAFE_TOOLS = ["Read", "Grep", "Glob", "Explore", "LSP"];
+const ALWAYS_SAFE_TOOLS = ["Read", "Grep", "Glob", "Explore", "LSP", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"];
+
+// Bash commands that are safe to auto-approve
+const SAFE_BASH_PREFIXES = [
+  "cat ", "head ", "tail ", "less ", "wc ", "file ",
+  "ls", "pwd", "find ", "which ", "type ", "echo ",
+  "git status", "git log", "git diff", "git branch", "git show", "git rev-parse", "git remote",
+  "npm test", "npm run test", "npm run lint", "npm run build", "npm run check",
+  "npx tsc", "npx vitest", "npx jest", "npx prettier", "npx eslint",
+  "cargo test", "cargo check", "cargo build", "cargo clippy",
+  "python -m pytest", "python -m mypy", "python3 -m pytest",
+  "make test", "make check", "make build",
+  "grep ", "rg ", "ag ", "sed -n", "awk ",
+  "stat ", "du ", "df ",
+  "node -e", "node --eval", "python -c", "python3 -c",
+  "mkdir -p ", "touch ",
+  "curl ", "wget ",
+];
+
+// Bash commands that should NEVER be auto-approved
+const DANGEROUS_BASH_PATTERNS = [
+  /rm\s+(-rf?|--recursive)\s+[\/~]/,  // rm -rf with absolute/home paths
+  />\s*\/etc\//, />\s*\/usr\//,         // writing to system dirs
+  /sudo\s/, /chmod\s.*777/,             // privilege escalation
+  /ssh\s/, /scp\s/,                     // remote access
+  /curl.*\|\s*(bash|sh)/,               // pipe to shell
+  /eval\s/, /exec\s/,                   // code execution
+  /DROP\s+TABLE/i, /DELETE\s+FROM/i,    // destructive SQL
+  /git\s+push\s+.*--force/,             // force push
+  /git\s+reset\s+--hard/,              // destructive git
+];
+
+function isBashSafe(command: string, agentCwd: string): boolean {
+  const trimmed = command.trim();
+
+  // Block dangerous patterns regardless
+  for (const pattern of DANGEROUS_BASH_PATTERNS) {
+    if (pattern.test(trimmed)) return false;
+  }
+
+  // Allow safe prefixes
+  for (const prefix of SAFE_BASH_PREFIXES) {
+    if (trimmed.startsWith(prefix)) return true;
+  }
+
+  // Allow cd within agent's working directory
+  if (trimmed.startsWith("cd ") && trimmed.includes(agentCwd)) return true;
+
+  // Allow piped commands where the base command is safe
+  const baseCmd = trimmed.split(/\s*[|&;]\s*/)[0].trim();
+  for (const prefix of SAFE_BASH_PREFIXES) {
+    if (baseCmd.startsWith(prefix)) return true;
+  }
+
+  return false;
+}
+
+function isPathSafe(filePath: string, agentCwd: string): boolean {
+  // Allow writes within the agent's working directory
+  if (filePath.startsWith(agentCwd)) return true;
+  // Allow /tmp
+  if (filePath.startsWith("/tmp/") || filePath.startsWith("/private/tmp/")) return true;
+  return false;
+}
 
 // Pending permission promises keyed by tool_use_id
 const pendingResolvers = new Map<
@@ -17,6 +80,11 @@ export function createPermissionHandler(
   agentId: string,
   eventBus: EventEmitter
 ) {
+  // Get the agent's cwd and policy for decisions
+  const agent = queries.getAgent(agentId);
+  const agentCwd = agent?.cwd || "";
+  const policy = agent?.permission_policy || "auto";
+
   return async (
     toolName: string,
     toolInput: Record<string, unknown>,
@@ -28,12 +96,46 @@ export function createPermissionHandler(
       toolUseID: string;
     }
   ): Promise<PermissionResult> => {
-    // Auto-approve safe read-only tools
+    // "strict" policy: only auto-approve truly read-only tools, escalate everything else
+    // "ask": same as strict (legacy, ask for everything)
+    // "auto": smart auto-approval based on safety analysis
+
+    // Always auto-approve read-only tools regardless of policy
     if (ALWAYS_SAFE_TOOLS.includes(toolName)) {
       return { behavior: "allow", updatedInput: toolInput };
     }
 
-    // Insert permission request into DB
+    // In strict/ask mode, escalate everything else to UI
+    if (policy === "strict" || policy === "ask") {
+      // fall through to escalation below
+    } else {
+      // "auto" mode: smart approval
+
+      // Auto-approve Edit/Write within the agent's working directory
+      if ((toolName === "Edit" || toolName === "Write") && typeof toolInput.file_path === "string") {
+        if (isPathSafe(toolInput.file_path, agentCwd)) {
+          logger.info({ agentId, toolName, path: toolInput.file_path }, "Auto-approved (within cwd)");
+          return { behavior: "allow", updatedInput: toolInput };
+        }
+      }
+
+      // Auto-approve safe Bash commands
+      if (toolName === "Bash" && typeof toolInput.command === "string") {
+        if (isBashSafe(toolInput.command, agentCwd)) {
+          logger.info({ agentId, command: toolInput.command.substring(0, 80) }, "Auto-approved bash");
+          return { behavior: "allow", updatedInput: toolInput };
+        }
+      }
+
+      // Auto-approve NotebookEdit within cwd
+      if (toolName === "NotebookEdit" && typeof toolInput.file_path === "string") {
+        if (isPathSafe(toolInput.file_path, agentCwd)) {
+          return { behavior: "allow", updatedInput: toolInput };
+        }
+      }
+    }
+
+    // Everything else: escalate to UI
     const request = queries.insertPermissionRequest(
       agentId,
       toolName,

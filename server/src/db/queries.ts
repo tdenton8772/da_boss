@@ -15,8 +15,8 @@ import type {
 export function insertAgent(agent: Omit<AgentRecord, "created_at" | "updated_at" | "started_at" | "completed_at">): AgentRecord {
   const db = getDb();
   db.prepare(`
-    INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message)
-    VALUES (@id, @name, @prompt, @cwd, @state, @priority, @permission_mode, @sdk_session_id, @model, @max_turns, @max_budget_usd, @error_message)
+    INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy)
+    VALUES (@id, @name, @prompt, @cwd, @state, @priority, @permission_mode, @sdk_session_id, @model, @max_turns, @max_budget_usd, @error_message, @supervisor_instructions, @permission_policy)
   `).run(agent);
   return getAgent(agent.id)!;
 }
@@ -73,6 +73,16 @@ export function updateAgentState(
   db.prepare(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?`).run(
     ...params
   );
+}
+
+export function updateAgentSupervisorInstructions(
+  id: string,
+  supervisorInstructions: string
+): void {
+  const db = getDb();
+  db.prepare(
+    "UPDATE agents SET supervisor_instructions = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(supervisorInstructions, id);
 }
 
 // ── Agent Events ────────────────────────────────────────

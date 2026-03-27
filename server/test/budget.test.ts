@@ -19,6 +19,8 @@ describe("TokenBudgetManager", () => {
     max_turns: null,
     max_budget_usd: null,
     error_message: null,
+      supervisor_instructions: "",
+      permission_policy: "auto" as const,
   };
 
   beforeEach(() => {

@@ -35,6 +35,8 @@ export class AgentManager {
       max_turns: req.max_turns || null,
       max_budget_usd: req.max_budget_usd || null,
       error_message: null,
+      supervisor_instructions: req.supervisor_instructions || "",
+      permission_policy: req.permission_policy || "auto",
     });
 
     queries.insertAgentEvent(id, "state_change", {
@@ -117,10 +119,25 @@ export class AgentManager {
 
   async sendInput(agentId: string, message: string): Promise<void> {
     const runner = this.runners.get(agentId);
-    if (!runner) {
-      throw new Error(`No active runner for agent ${agentId}`);
+    if (runner) {
+      await runner.sendInput(message);
+      return;
     }
-    await runner.sendInput(message);
+
+    // No active runner — if agent is completed/paused, resume with the new message as prompt
+    const agent = queries.getAgent(agentId);
+    if (!agent) throw new Error(`Agent ${agentId} not found`);
+
+    if (["completed", "paused", "failed"].includes(agent.state) && agent.sdk_session_id) {
+      // Update the prompt to the new message and resume
+      queries.updateAgentState(agentId, agent.state as any, {});
+      const db = (await import("../db/index.js")).getDb();
+      db.prepare("UPDATE agents SET prompt = ?, updated_at = datetime('now') WHERE id = ?").run(message, agentId);
+      await this.startAgent(agentId);
+      return;
+    }
+
+    throw new Error(`No active runner for agent ${agentId}`);
   }
 
   resolvePermission(

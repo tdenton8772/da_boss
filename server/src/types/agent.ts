@@ -18,6 +18,8 @@ export type PermissionMode =
   | "bypassPermissions"
   | "plan";
 
+export type PermissionPolicy = "auto" | "ask" | "strict";
+
 export interface AgentRecord {
   id: string;
   name: string;
@@ -31,6 +33,8 @@ export interface AgentRecord {
   max_turns: number | null;
   max_budget_usd: number | null;
   error_message: string | null;
+  supervisor_instructions: string;
+  permission_policy: PermissionPolicy;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -46,6 +50,8 @@ export interface CreateAgentRequest {
   model?: string;
   max_turns?: number;
   max_budget_usd?: number;
+  supervisor_instructions?: string;
+  permission_policy?: PermissionPolicy;
 }
 
 export interface PermissionRequest {

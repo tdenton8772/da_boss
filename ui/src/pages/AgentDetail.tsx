@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router";
 import { api, type PermissionReq } from "../api";
+import { Save } from "lucide-react";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
@@ -18,6 +19,7 @@ interface AgentData {
   max_turns: number | null;
   max_budget_usd: number | null;
   error_message: string | null;
+  supervisor_instructions?: string;
   total_cost_usd?: number;
   tokens?: { total_cost_usd: number };
 }
@@ -30,13 +32,22 @@ export function AgentDetail() {
   const [permissions, setPermissions] = useState<PermissionReq[]>([]);
   const [streamBuffer, setStreamBuffer] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [instructions, setInstructions] = useState("");
+  const [instructionsDirty, setInstructionsDirty] = useState(false);
+  const [savingInstructions, setSavingInstructions] = useState(false);
   const subscribedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (!id) return;
     api
       .getAgent(id)
-      .then((a) => setAgent(a as AgentData))
+      .then((a) => {
+        const data = a as AgentData;
+        setAgent(data);
+        if (!instructionsDirty) {
+          setInstructions(data.supervisor_instructions || "");
+        }
+      })
       .catch((err) => setError(err.message));
     api
       .getPendingPermissions()
@@ -178,10 +189,11 @@ export function AgentDetail() {
       </div>
 
       {/* Info */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 text-sm text-gray-400">
-        <p className="mb-1">
-          <span className="text-gray-500">Prompt:</span> {agent.prompt}
-        </p>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 text-sm text-gray-400 overflow-hidden">
+        <div className="mb-1 min-w-0">
+          <span className="text-gray-500">Prompt:</span>
+          <pre className="whitespace-pre-wrap break-words mt-0.5 font-sans overflow-x-hidden">{agent.prompt}</pre>
+        </div>
         <div className="flex gap-4 text-xs text-gray-500">
           <span>Priority: {agent.priority}</span>
           <span>Model: {agent.model}</span>
@@ -190,6 +202,47 @@ export function AgentDetail() {
             <span>Budget: ${agent.max_budget_usd}</span>
           )}
         </div>
+      </div>
+
+      {/* Supervisor Instructions */}
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-medium text-gray-300">Supervisor Instructions</h3>
+          {instructionsDirty && (
+            <button
+              onClick={async () => {
+                setSavingInstructions(true);
+                try {
+                  await fetch(`/api/agents/${agent.id}/instructions`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ supervisor_instructions: instructions }),
+                  });
+                  setInstructionsDirty(false);
+                } catch {} finally {
+                  setSavingInstructions(false);
+                }
+              }}
+              className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded"
+            >
+              <Save size={12} />
+              {savingInstructions ? "Saving..." : "Save"}
+            </button>
+          )}
+        </div>
+        <textarea
+          value={instructions}
+          onChange={(e) => {
+            setInstructions(e.target.value);
+            setInstructionsDirty(true);
+          }}
+          placeholder="Tell the supervisor what this agent should do, what to do when it finishes, and when to escalate to you..."
+          rows={3}
+          className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 resize-y"
+        />
+        <p className="text-xs text-gray-600 mt-1">
+          The supervisor checks every 5 min. When this agent completes or needs input, it uses these instructions to decide the next step.
+        </p>
       </div>
 
       {/* Permissions */}

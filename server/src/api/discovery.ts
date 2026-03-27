@@ -543,6 +543,8 @@ export function createDiscoveryRouter(): Router {
         max_turns: null,
         max_budget_usd: null,
         error_message: "Imported from existing session - resume when ready",
+        supervisor_instructions: "",
+        permission_policy: "auto",
       });
 
       logger.info(

@@ -38,10 +38,10 @@ export function ControlBar({
   };
 
   const showStart = state === "pending" || state === "failed";
-  const showResume = state === "paused";
+  const showResume = state === "paused" || state === "completed";
   const showPause = state === "running";
   const showKill = ["running", "paused", "waiting_permission", "waiting_input"].includes(state);
-  const showInput = ["running", "waiting_input"].includes(state);
+  const showInput = ["running", "waiting_input", "completed"].includes(state);
 
   return (
     <div className="space-y-3">
@@ -85,19 +85,24 @@ export function ControlBar({
       </div>
 
       {showInput && (
-        <div className="flex gap-2">
-          <input
-            type="text"
+        <div className="flex gap-2 items-end">
+          <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-resize
+              e.target.style.height = "auto";
+              e.target.style.height = e.target.scrollHeight + "px";
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSendInput();
               }
             }}
-            placeholder="Send input to agent..."
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+            rows={1}
+            placeholder="Send input to agent... (Shift+Enter for newline)"
+            className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none overflow-hidden min-h-[38px] max-h-48"
           />
           <button
             onClick={handleSendInput}

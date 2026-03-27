@@ -168,7 +168,7 @@ export interface BudgetStatus {
 
 export interface DiscoveredProject {
   projectKey: string;
-  path: string;
+  realPath: string;
   sessionCount: number;
   latestModified: string;
 }

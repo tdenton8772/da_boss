@@ -86,6 +86,14 @@ const migrations: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "add_supervisor_instructions",
+    up: `
+      ALTER TABLE agents ADD COLUMN supervisor_instructions TEXT DEFAULT '';
+      ALTER TABLE agents ADD COLUMN permission_policy TEXT DEFAULT 'auto';
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
