@@ -274,8 +274,8 @@ export function AgentDetail() {
       {agent.error_message && (
         <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
           <p>{agent.error_message}</p>
-          {(agent.error_message.toLowerCase().includes("fresh start") || agent.error_message.toLowerCase().includes("too long") || agent.error_message.toLowerCase().includes("too large") || agent.error_message.toLowerCase().includes("compact")) && (
-            <div className="flex gap-2 mt-2">
+          {(agent.error_message.toLowerCase().includes("fresh start") || agent.error_message.toLowerCase().includes("too long") || agent.error_message.toLowerCase().includes("too large") || agent.error_message.toLowerCase().includes("compact") || agent.error_message.toLowerCase().includes("trim")) && (
+            <div className="flex flex-wrap gap-2 mt-2">
               <button
                 onClick={async () => {
                   try {
@@ -287,7 +287,22 @@ export function AgentDetail() {
                 }}
                 className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded"
               >
-                Compact & Resume
+                Compact (summarize history)
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/agents/${agent.id}/trim`, { method: "POST" });
+                    const data = await res.json();
+                    if (!res.ok) alert(data.error);
+                    refresh();
+                  } catch {
+                    alert("Failed to trim");
+                  }
+                }}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded"
+              >
+                Trim (keep last 10 messages)
               </button>
               <button
                 onClick={async () => {

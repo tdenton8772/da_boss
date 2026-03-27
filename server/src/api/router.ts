@@ -209,6 +209,58 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  router.post("/api/agents/:id/trim", async (req, res) => {
+    try {
+      const agent = queries.getAgent(req.params.id);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      if (!agent.sdk_session_id) {
+        res.status(400).json({ error: "No session to trim" });
+        return;
+      }
+
+      const os = await import("node:os");
+      const path = await import("node:path");
+
+      // Find the session file
+      const projectsDir = path.join(os.default.homedir(), ".claude", "projects");
+      const { readdirSync, existsSync } = await import("node:fs");
+      let sessionPath = "";
+
+      for (const dir of readdirSync(projectsDir)) {
+        const candidate = path.join(projectsDir, dir, `${agent.sdk_session_id}.jsonl`);
+        if (existsSync(candidate)) {
+          sessionPath = candidate;
+          break;
+        }
+      }
+
+      if (!sessionPath) {
+        res.status(400).json({ error: "Session file not found on disk" });
+        return;
+      }
+
+      const { trimSession } = await import("../utils/session-trim.js");
+      const keepLast = parseInt(req.query.keep as string) || 10;
+      const result = await trimSession(sessionPath, keepLast);
+
+      queries.updateAgentState(agent.id, "paused" as any, {
+        error_message: `Session trimmed: ${result.originalLines} → ${result.trimmedLines} lines. Original backed up. Ready to resume.`,
+      });
+
+      res.json({
+        ok: true,
+        originalLines: result.originalLines,
+        trimmedLines: result.trimmedLines,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: message });
+    }
+  });
+
   router.post("/api/agents/:id/kill", async (req, res) => {
     try {
       await manager.killAgent(req.params.id);
