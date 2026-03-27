@@ -274,7 +274,7 @@ export function AgentDetail() {
       {agent.error_message && (
         <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
           <p>{agent.error_message}</p>
-          {(agent.error_message.includes("fresh start") || agent.error_message.includes("too long") || agent.error_message.includes("too large")) && (
+          {(agent.error_message.toLowerCase().includes("fresh start") || agent.error_message.toLowerCase().includes("too long") || agent.error_message.toLowerCase().includes("too large") || agent.error_message.toLowerCase().includes("compact")) && (
             <div className="flex gap-2 mt-2">
               <button
                 onClick={async () => {

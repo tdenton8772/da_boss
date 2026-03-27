@@ -155,7 +155,15 @@ export class AgentRunner {
           }
 
           if (result.is_error) {
-            this.handleError(result.error || "Unknown error", sessionId);
+            const errMsg = result.error || result.result || "Unknown error";
+            if (errMsg.toLowerCase().includes("too long") || errMsg.toLowerCase().includes("too large")) {
+              this.handleError(
+                "Session too large to resume — use Compact & Resume or Fresh Start below.",
+                sessionId
+              );
+            } else {
+              this.handleError(errMsg, sessionId);
+            }
           } else {
             if (result.result) {
               this.emitMessage("assistant", result.result);
