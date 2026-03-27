@@ -15,13 +15,19 @@ type EventHandler = (event: ServerEvent) => void;
 
 export function useWebSocket(onEvent: EventHandler) {
   const wsRef = useRef<WebSocket | null>(null);
+  const onEventRef = useRef(onEvent);
   const [connected, setConnected] = useState(false);
+
+  // Keep the callback ref up to date without causing reconnects
+  onEventRef.current = onEvent;
 
   useEffect(() => {
     let reconnectTimeout: ReturnType<typeof setTimeout>;
     let ws: WebSocket;
+    let closed = false;
 
     function connect() {
+      if (closed) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
       wsRef.current = ws;
@@ -29,13 +35,15 @@ export function useWebSocket(onEvent: EventHandler) {
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {
         setConnected(false);
-        reconnectTimeout = setTimeout(connect, 3000);
+        if (!closed) {
+          reconnectTimeout = setTimeout(connect, 3000);
+        }
       };
       ws.onerror = () => ws.close();
       ws.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as ServerEvent;
-          onEvent(event);
+          onEventRef.current(event);
         } catch {
           // ignore
         }
@@ -45,10 +53,11 @@ export function useWebSocket(onEvent: EventHandler) {
     connect();
 
     return () => {
+      closed = true;
       clearTimeout(reconnectTimeout);
       ws?.close();
     };
-  }, [onEvent]);
+  }, []); // stable — never reconnects due to callback changes
 
   const subscribe = useCallback((agentId: string) => {
     wsRef.current?.send(JSON.stringify({ type: "subscribe", agentId }));

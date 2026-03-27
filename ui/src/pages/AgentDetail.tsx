@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router";
-import { api, type AgentWithTokens, type PermissionReq } from "../api";
+import { api, type AgentDetail as AgentDetailType, type PermissionReq } from "../api";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
@@ -9,7 +9,7 @@ import { ArrowLeft } from "lucide-react";
 
 export function AgentDetail() {
   const { id } = useParams<{ id: string }>();
-  const [agent, setAgent] = useState<AgentWithTokens | null>(null);
+  const [agent, setAgent] = useState<AgentDetailType | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [permissions, setPermissions] = useState<PermissionReq[]>([]);
   const [streamBuffer, setStreamBuffer] = useState("");
@@ -17,7 +17,7 @@ export function AgentDetail() {
 
   const refresh = useCallback(() => {
     if (!id) return;
-    api.getAgent(id).then((a) => setAgent(a as AgentWithTokens)).catch(() => {});
+    api.getAgent(id).then(setAgent).catch(() => {});
     api.getPendingPermissions().then((all) =>
       setPermissions(all.filter((p) => p.agent_id === id))
     ).catch(() => {});
@@ -115,7 +115,7 @@ export function AgentDetail() {
     );
   }
 
-  const cost = agent.tokens?.total_cost_usd ?? 0;
+  const cost = agent.total_cost_usd ?? agent.tokens?.total_cost_usd ?? 0;
 
   return (
     <div className="min-h-screen bg-gray-950 p-4 md:p-8 max-w-4xl mx-auto">
