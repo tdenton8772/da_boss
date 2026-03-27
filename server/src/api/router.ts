@@ -150,38 +150,56 @@ export function createRouter(manager: AgentManager): Router {
       });
 
       // Shell out to claude CLI to compact the session
-      const { execFile } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const execFileAsync = promisify(execFile);
+      const { spawn } = await import("node:child_process");
+      const { logger } = await import("../utils/logger.js");
 
-      const claudePath = process.env.CLAUDE_PATH || "claude";
+      const claudePath = process.env.CLAUDE_PATH || "/Users/tylerdenton/.local/bin/claude";
+      const agentId = agent.id;
+      const agentState = agent.state;
 
-      // Run compaction in background
-      execFileAsync(claudePath, [
-        "-r", agent.sdk_session_id,
+      // Run compaction in background with stdin closed
+      const child = spawn(claudePath, [
+        "-r", agent.sdk_session_id!,
         "-p", "/compact",
         "--output-format", "json",
         "--max-turns", "1",
       ], {
         cwd: agent.cwd,
-        timeout: 120_000, // 2 min timeout
-        env: { ...process.env },
-      }).then(async () => {
-        queries.updateAgentState(agent.id, "paused" as any, {
-          error_message: "Session compacted — ready to resume",
+        env: { ...process.env, HOME: process.env.HOME },
+        stdio: ["ignore", "pipe", "pipe"],  // stdin closed, capture stdout/stderr
+        timeout: 300_000, // 5 min timeout
+      });
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+      child.on("close", (code) => {
+        if (code === 0) {
+          queries.updateAgentState(agentId, "paused" as any, {
+            error_message: "Session compacted — ready to resume",
+          });
+          queries.insertAgentEvent(agentId, "state_change", {
+            from: agentState,
+            to: "paused",
+            reason: "Session compacted",
+          });
+          logger.info({ agentId, stdout: stdout.substring(0, 200) }, "Session compacted successfully");
+        } else {
+          const errDetail = stderr || stdout || `exit code ${code}`;
+          queries.updateAgentState(agentId, "failed" as any, {
+            error_message: `Compaction failed (code ${code}): ${errDetail.substring(0, 300)}`,
+          });
+          logger.error({ agentId, code, stderr: stderr.substring(0, 500) }, "Compaction failed");
+        }
+      });
+
+      child.on("error", (err) => {
+        queries.updateAgentState(agentId, "failed" as any, {
+          error_message: `Compaction failed: ${err.message}`,
         });
-        queries.insertAgentEvent(agent.id, "state_change", {
-          from: agent.state,
-          to: "paused",
-          reason: "Session compacted",
-        });
-        const { logger } = await import("../utils/logger.js");
-        logger.info({ agentId: agent.id }, "Session compacted successfully");
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        queries.updateAgentState(agent.id, "failed" as any, {
-          error_message: `Compaction failed: ${msg}`,
-        });
+        logger.error({ agentId, err }, "Compaction spawn failed");
       });
 
       res.json({ ok: true, message: "Compaction started" });
