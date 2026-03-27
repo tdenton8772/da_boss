@@ -273,26 +273,41 @@ export function AgentDetail() {
       {agent.error_message && (
         <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
           <p>{agent.error_message}</p>
-          {agent.error_message.includes("fresh start") && (
-            <button
-              onClick={async () => {
-                const newPrompt = prompt("Enter a prompt for the fresh start (or leave empty to reuse the original):");
-                if (newPrompt === null) return;
-                try {
-                  await fetch(`/api/agents/${agent.id}/fresh-start`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ prompt: newPrompt || undefined }),
-                  });
-                  refresh();
-                } catch {
-                  alert("Failed to start");
-                }
-              }}
-              className="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded"
-            >
-              Fresh Start (new session, same repo)
-            </button>
+          {(agent.error_message.includes("fresh start") || agent.error_message.includes("too long") || agent.error_message.includes("too large")) && (
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch(`/api/agents/${agent.id}/compact`, { method: "POST" });
+                    refresh();
+                  } catch {
+                    alert("Failed to start compaction");
+                  }
+                }}
+                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded"
+              >
+                Compact & Resume
+              </button>
+              <button
+                onClick={async () => {
+                  const newPrompt = window.prompt("Enter a prompt for the fresh start (or leave empty to reuse the original):");
+                  if (newPrompt === null) return;
+                  try {
+                    await fetch(`/api/agents/${agent.id}/fresh-start`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ prompt: newPrompt || undefined }),
+                    });
+                    refresh();
+                  } catch {
+                    alert("Failed to start");
+                  }
+                }}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded"
+              >
+                Fresh Start (no history)
+              </button>
+            </div>
           )}
         </div>
       )}

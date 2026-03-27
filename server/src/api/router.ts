@@ -113,6 +113,65 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  router.post("/api/agents/:id/compact", async (req, res) => {
+    try {
+      const agent = queries.getAgent(req.params.id);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      if (!agent.sdk_session_id) {
+        res.status(400).json({ error: "No session to compact" });
+        return;
+      }
+
+      // Update state to show we're compacting
+      queries.updateAgentState(agent.id, agent.state as any, {
+        error_message: "Compacting session...",
+      });
+
+      // Shell out to claude CLI to compact the session
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+
+      const claudePath = process.env.CLAUDE_PATH || "claude";
+
+      // Run compaction in background
+      execFileAsync(claudePath, [
+        "-r", agent.sdk_session_id,
+        "-p", "/compact",
+        "--output-format", "json",
+        "--max-turns", "1",
+      ], {
+        cwd: agent.cwd,
+        timeout: 120_000, // 2 min timeout
+        env: { ...process.env },
+      }).then(async () => {
+        queries.updateAgentState(agent.id, "paused" as any, {
+          error_message: "Session compacted — ready to resume",
+        });
+        queries.insertAgentEvent(agent.id, "state_change", {
+          from: agent.state,
+          to: "paused",
+          reason: "Session compacted",
+        });
+        const { logger } = await import("../utils/logger.js");
+        logger.info({ agentId: agent.id }, "Session compacted successfully");
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        queries.updateAgentState(agent.id, "failed" as any, {
+          error_message: `Compaction failed: ${msg}`,
+        });
+      });
+
+      res.json({ ok: true, message: "Compaction started" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: message });
+    }
+  });
+
   router.post("/api/agents/:id/kill", async (req, res) => {
     try {
       await manager.killAgent(req.params.id);
