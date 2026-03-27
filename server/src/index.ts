@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { getDb, closeDb } from "./db/index.js";
 import { AgentManager } from "./agent/manager.js";
 import { createRouter } from "./api/router.js";
+import { createDiscoveryRouter } from "./api/discovery.js";
 import { setupWebSocket } from "./api/websocket.js";
 import { startSupervisor, stopSupervisor, runSupervisorOnce } from "./supervisor/index.js";
 import { logger } from "./utils/logger.js";
@@ -56,6 +57,7 @@ async function main() {
   });
 
   app.use(router);
+  app.use(createDiscoveryRouter());
 
   // Serve UI static files in production
   const __dirname = path.dirname(fileURLToPath(import.meta.url));

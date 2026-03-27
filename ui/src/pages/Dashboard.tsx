@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router";
 import { api, type AgentWithTokens, type BudgetStatus, type PermissionReq } from "../api";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { AgentCard } from "../components/AgentCard";
@@ -65,13 +66,21 @@ export function Dashboard() {
             {connected ? "live" : "disconnected"}
           </span>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded"
-        >
-          <Plus size={16} />
-          New Agent
-        </button>
+        <div className="flex gap-2">
+          <Link
+            to="/discover"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
+          >
+            Import
+          </Link>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded"
+          >
+            <Plus size={16} />
+            New Agent
+          </button>
+        </div>
       </div>
 
       {/* Budget + Permissions */}

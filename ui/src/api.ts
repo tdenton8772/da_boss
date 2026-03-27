@@ -71,6 +71,32 @@ export const api = {
 
   // Supervisor
   runSupervisor: () => request("/supervisor/run", { method: "POST" }),
+
+  // Discover
+  discoverProjects: () =>
+    request<DiscoveredProject[]>("/discover/projects"),
+  discoverSessions: (projectKey: string) =>
+    request<DiscoveredSession[]>(
+      `/discover/projects/${encodeURIComponent(projectKey)}/sessions`
+    ),
+  discoverMessages: (
+    projectKey: string,
+    sessionId: string,
+    limit?: number
+  ) =>
+    request<SessionMessage[]>(
+      `/discover/projects/${encodeURIComponent(projectKey)}/sessions/${sessionId}/messages?limit=${limit || 50}`
+    ),
+  importSession: (data: {
+    projectKey: string;
+    sessionId: string;
+    name: string;
+    priority?: string;
+  }) =>
+    request<{ id: string }>("/discover/import", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 // Types shared with UI
@@ -138,4 +164,26 @@ export interface BudgetStatus {
   monthly_remaining_usd: number;
   daily_percent: number;
   monthly_percent: number;
+}
+
+export interface DiscoveredProject {
+  projectKey: string;
+  path: string;
+  sessionCount: number;
+  latestModified: string;
+}
+
+export interface DiscoveredSession {
+  sessionId: string;
+  modified: string;
+  sizeBytes: number;
+  firstPrompt: string | null;
+  messageCount: number;
+  isLocked: boolean;
+}
+
+export interface SessionMessage {
+  role: string;
+  content: string;
+  timestamp: string;
 }
