@@ -272,7 +272,28 @@ export function AgentDetail() {
       {/* Error */}
       {agent.error_message && (
         <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
-          {agent.error_message}
+          <p>{agent.error_message}</p>
+          {agent.error_message.includes("fresh start") && (
+            <button
+              onClick={async () => {
+                const newPrompt = prompt("Enter a prompt for the fresh start (or leave empty to reuse the original):");
+                if (newPrompt === null) return;
+                try {
+                  await fetch(`/api/agents/${agent.id}/fresh-start`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ prompt: newPrompt || undefined }),
+                  });
+                  refresh();
+                } catch {
+                  alert("Failed to start");
+                }
+              }}
+              className="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded"
+            >
+              Fresh Start (new session, same repo)
+            </button>
+          )}
         </div>
       )}
     </div>

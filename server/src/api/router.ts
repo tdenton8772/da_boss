@@ -89,6 +89,30 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  router.post("/api/agents/:id/fresh-start", async (req, res) => {
+    try {
+      const { prompt } = req.body as { prompt?: string };
+      const agent = queries.getAgent(req.params.id);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+
+      // Clear the session ID so it starts fresh, update prompt if provided
+      const db = (await import("../db/index.js")).getDb();
+      db.prepare(
+        "UPDATE agents SET sdk_session_id = NULL, state = 'pending', error_message = NULL, prompt = ?, updated_at = datetime('now') WHERE id = ?"
+      ).run(prompt || agent.prompt, agent.id);
+
+      // Start it
+      await manager.startAgent(agent.id);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: message });
+    }
+  });
+
   router.post("/api/agents/:id/kill", async (req, res) => {
     try {
       await manager.killAgent(req.params.id);

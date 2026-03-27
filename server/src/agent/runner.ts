@@ -176,6 +176,12 @@ export class AgentRunner {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("aborted") || message.includes("abort")) {
         logger.info({ agentId: this.agentId }, "Agent aborted");
+      } else if (message.includes("too long") || message.includes("too large") || message.includes("context")) {
+        // Session too large to resume — mark as failed with actionable message
+        this.handleError(
+          "Session too large to resume. Use 'fresh start' to begin a new session with a summary of the previous work.",
+          agent.sdk_session_id
+        );
       } else {
         this.handleError(message, null);
       }
