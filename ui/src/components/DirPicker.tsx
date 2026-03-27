@@ -40,7 +40,7 @@ export function DirPicker({
   };
 
   useEffect(() => {
-    browse(value || process.env.HOME || "/Users");
+    browse(value || "/Users");
   }, []);
 
   return (
