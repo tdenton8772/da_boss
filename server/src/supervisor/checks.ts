@@ -54,6 +54,52 @@ export async function runChecks(
     const elapsed = now - new Date(perm.created_at + "Z").getTime();
     const minutes = elapsed / 60_000;
 
+    // Interactive tools (AskUserQuestion, ExitPlanMode): let supervisor handle after 5 min
+    if (
+      (perm.tool_name === "AskUserQuestion" || perm.tool_name === "ExitPlanMode") &&
+      minutes > 5
+    ) {
+      const agent = queries.getAgent(perm.agent_id);
+      if (agent?.supervisor_instructions) {
+        try {
+          const decision = await evaluatePermission(
+            perm.agent_id,
+            agent.name,
+            agent.prompt,
+            agent.supervisor_instructions,
+            perm.tool_name,
+            perm.tool_input
+          );
+
+          manager.resolvePermission(perm.id, decision.decision, decision.answer);
+          actions.push({
+            agentId: perm.agent_id,
+            type: "supervisor_permission",
+            detail: `Supervisor ${decision.decision} ${perm.tool_name}: ${(decision.answer || "").substring(0, 100)}`,
+          });
+          logger.info(
+            { agentId: perm.agent_id, tool: perm.tool_name, decision: decision.decision },
+            "Supervisor resolved interactive permission"
+          );
+          continue;
+        } catch (err) {
+          logger.error({ agentId: perm.agent_id, err }, "Supervisor permission evaluation failed");
+        }
+      }
+      // No supervisor instructions — notify user
+      findings.push({
+        agentId: perm.agent_id,
+        type: "permission_needs_attention",
+        message: `${perm.tool_name} waiting for response for ${Math.round(minutes)} min`,
+      });
+      await sendNotification(
+        `Agent "${agent?.name || perm.agent_id}" needs your input`,
+        `${perm.tool_name} has been waiting ${Math.round(minutes)} minutes`,
+        "high"
+      );
+      continue;
+    }
+
     if (minutes > config.permissionTimeoutMinutes) {
       findings.push({
         agentId: perm.agent_id,
@@ -262,5 +308,117 @@ Respond with ONLY the ACTION and MESSAGE lines, nothing else.`;
   } catch (err) {
     logger.error({ agentId, err }, "Supervisor Claude call failed");
     return { action: "notify", message: "Supervisor evaluation failed - needs human review" };
+  }
+}
+
+interface PermissionDecision {
+  decision: "approved" | "denied";
+  answer: string;
+}
+
+async function evaluatePermission(
+  agentId: string,
+  agentName: string,
+  originalPrompt: string,
+  instructions: string,
+  toolName: string,
+  toolInputJson: string
+): Promise<PermissionDecision> {
+  const recentEvents = queries.getAgentEvents(agentId, 20);
+  const recentMessages = recentEvents
+    .filter((e) => e.type === "message")
+    .reverse()
+    .map((e) => {
+      const data = JSON.parse(e.data);
+      return `[${data.role}]: ${(data.content || "").substring(0, 500)}`;
+    })
+    .join("\n");
+
+  let toolContext = "";
+  try {
+    const parsed = JSON.parse(toolInputJson);
+    if (toolName === "AskUserQuestion" && Array.isArray(parsed.questions)) {
+      toolContext = parsed.questions.map((q: { question?: string; header?: string; options?: Array<{ label?: string; description?: string }> }) => {
+        const opts = q.options?.map((o) => `  - ${o.label}${o.description ? ` (${o.description})` : ""}`).join("\n") || "";
+        return `Q: ${q.header ? `[${q.header}] ` : ""}${q.question || ""}\n${opts}`;
+      }).join("\n\n");
+    } else if (toolName === "ExitPlanMode" && parsed.plan) {
+      toolContext = `PLAN:\n${String(parsed.plan).substring(0, 2000)}`;
+    }
+  } catch {
+    toolContext = toolInputJson.substring(0, 1000);
+  }
+
+  const prompt = toolName === "ExitPlanMode"
+    ? `You are a supervisor managing an AI coding agent. The agent has proposed a plan and is waiting for approval.
+
+AGENT: "${agentName}"
+ORIGINAL TASK: ${originalPrompt.substring(0, 500)}
+
+SUPERVISOR INSTRUCTIONS:
+${instructions}
+
+RECENT AGENT OUTPUT:
+${recentMessages || "(no messages)"}
+
+${toolContext}
+
+Evaluate whether this plan aligns with the original task and supervisor instructions.
+- If the plan is reasonable and matches the task requirements, respond with: DECISION: approved
+  Then on the next line: ANSWER: <any feedback or notes for the agent>
+- If the plan is wrong, off-track, or missing key requirements, respond with: DECISION: denied
+  Then on the next line: ANSWER: <specific feedback on what to change>
+
+Respond with ONLY the DECISION and ANSWER lines.`
+    : `You are a supervisor managing an AI coding agent. The agent has asked a question and is waiting for user input, but the user hasn't responded.
+
+AGENT: "${agentName}"
+ORIGINAL TASK: ${originalPrompt.substring(0, 500)}
+
+SUPERVISOR INSTRUCTIONS:
+${instructions}
+
+RECENT AGENT OUTPUT:
+${recentMessages || "(no messages)"}
+
+QUESTION:
+${toolContext}
+
+Based on the original task and supervisor instructions, provide the best answer to unblock the agent.
+Respond with: DECISION: approved
+Then on the next line: ANSWER: <your answer to the question, picking the most appropriate option or providing text>
+
+If you genuinely cannot determine the right answer, respond with: DECISION: denied
+Then on the next line: ANSWER: <explain why this needs human attention>
+
+Respond with ONLY the DECISION and ANSWER lines.`;
+
+  try {
+    let result = "";
+    for await (const msg of sdkQuery({
+      prompt,
+      options: {
+        maxTurns: 1,
+        maxBudgetUsd: 0.05,
+        model: "claude-haiku-4-5-20251001",
+      },
+    })) {
+      if ("type" in msg && msg.type === "result" && "result" in msg) {
+        result = (msg as { result: string }).result || "";
+      }
+    }
+
+    const decisionMatch = result.match(/DECISION:\s*(approved|denied)/i);
+    const answerMatch = result.match(/ANSWER:\s*(.+)/is);
+
+    const decision = (decisionMatch?.[1]?.toLowerCase() === "approved" ? "approved" : "denied") as PermissionDecision["decision"];
+    const answer = answerMatch?.[1]?.trim() || "Supervisor auto-resolved";
+
+    logger.info({ agentId, toolName, decision, answer: answer.substring(0, 100) }, "Supervisor permission evaluation");
+
+    return { decision, answer };
+  } catch (err) {
+    logger.error({ agentId, err }, "Supervisor permission evaluation failed");
+    return { decision: "denied", answer: "Supervisor evaluation failed — needs human review" };
   }
 }
