@@ -209,12 +209,15 @@ export function resolvePermissionRequest(
       // The agent sees the deny message as the tool result containing the user's response.
       pending.resolve({ behavior: "deny", message: `User answered: ${answer}` });
     } else if (request.tool_name === "ExitPlanMode") {
-      if (decision === "approved") {
+      if (decision === "approved" && answer) {
+        // Approve with feedback — deny so the agent sees the message, but prefix with approval
+        pending.resolve({ behavior: "deny", message: `Plan approved. User feedback: ${answer}` });
+      } else if (decision === "approved") {
         pending.resolve({ behavior: "allow", updatedInput: toolInput });
       } else {
         // Deny with feedback so agent knows to revise the plan
         const feedback = answer || "Plan rejected by user";
-        pending.resolve({ behavior: "deny", message: feedback });
+        pending.resolve({ behavior: "deny", message: `Plan rejected. ${feedback}` });
       }
     } else if (decision === "approved") {
       pending.resolve({ behavior: "allow", updatedInput: toolInput });

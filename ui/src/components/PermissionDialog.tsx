@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type PermissionReq } from "../api";
 import {
   ShieldQuestion,
@@ -320,12 +322,21 @@ function ExitPlanModeCard({
   const [feedback, setFeedback] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Extract plan content from tool input
+  let planContent = "";
+  try {
+    const parsed = JSON.parse(perm.tool_input);
+    planContent = parsed.plan || "";
+  } catch {
+    planContent = "";
+  }
+
   const badge = TOOL_BADGES.ExitPlanMode;
 
   const handleApprove = async () => {
     setSubmitting(true);
     try {
-      await api.resolvePermission(perm.id, "approved");
+      await api.resolvePermission(perm.id, "approved", feedback.trim() || undefined);
       onResolve(perm.id, "approved");
     } catch {} finally { setSubmitting(false); }
   };
@@ -358,33 +369,52 @@ function ExitPlanModeCard({
       </div>
 
       <div className="px-3 py-3 space-y-3">
-        <p className="text-xs text-gray-400">
-          Review the agent's plan in the message stream below, then approve or reject with feedback.
-        </p>
+        {/* Plan content rendered as markdown */}
+        {planContent ? (
+          <div className="max-h-96 overflow-y-auto bg-gray-950 border border-gray-800 rounded-lg p-4 prose prose-invert prose-sm max-w-none
+            prose-headings:text-gray-200 prose-headings:mt-3 prose-headings:mb-1
+            prose-p:my-1.5 prose-p:text-gray-300
+            prose-a:text-blue-400
+            prose-strong:text-gray-200
+            prose-code:text-green-400 prose-code:bg-gray-800 prose-code:px-1 prose-code:rounded prose-code:text-xs
+            prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-700 prose-pre:rounded prose-pre:text-xs
+            prose-li:text-gray-300 prose-li:my-0.5
+            prose-ul:my-1 prose-ol:my-1
+            prose-hr:border-gray-700">
+            <Markdown remarkPlugins={[remarkGfm]}>{planContent}</Markdown>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400">
+            Review the agent's plan in the message stream below.
+          </p>
+        )}
 
         {/* Feedback input */}
-        <textarea
-          value={feedback}
-          onChange={(e) => setFeedback(e.target.value)}
-          placeholder="Optional feedback if rejecting (e.g. 'use a different approach for auth...')"
-          rows={2}
-          className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600 resize-y"
-        />
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Feedback (required for rejection, optional for approval)</label>
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="e.g. 'Use a different approach for auth' or 'Looks good, but also add error handling for...'"
+            rows={3}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600 resize-y"
+          />
+        </div>
 
         {/* Approve / Reject */}
         <div className="flex justify-end gap-2">
           <button
             onClick={handleReject}
             disabled={submitting}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/40 hover:bg-red-800/50 text-red-300 text-sm rounded disabled:opacity-50"
+            className="flex items-center gap-1.5 px-4 py-2 bg-red-900/40 hover:bg-red-800/50 text-red-300 text-sm rounded border border-red-800/50 disabled:opacity-50"
           >
             <X size={14} />
-            Reject
+            Reject & Revise
           </button>
           <button
             onClick={handleApprove}
             disabled={submitting}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-green-700 hover:bg-green-600 text-white text-sm rounded font-medium disabled:opacity-50"
+            className="flex items-center gap-1.5 px-5 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded font-medium disabled:opacity-50"
           >
             <Check size={14} />
             {submitting ? "..." : "Approve Plan"}
