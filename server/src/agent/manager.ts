@@ -211,9 +211,10 @@ export class AgentManager {
 
   resolvePermission(
     requestId: number,
-    decision: "approved" | "denied"
+    decision: "approved" | "denied",
+    answer?: string
   ): boolean {
-    return resolvePermissionRequest(requestId, decision, this.eventBus);
+    return resolvePermissionRequest(requestId, decision, this.eventBus, answer);
   }
 
   getActiveCount(): number {

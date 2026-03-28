@@ -7,17 +7,20 @@ import { config } from "../config.js";
 
 const ALWAYS_SAFE_TOOLS = [
   // Read-only tools
-  "Read", "Grep", "Glob", "Explore", "LSP",
+  "Read", "Grep", "Glob", "Explore", "LSP", "ToolSearch",
   // Agent/task management
   "Agent", "Task", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList",
-  // User interaction (harmless — just asks questions or signals plan mode)
-  "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+  "TaskOutput", "TaskStop",
+  // EnterPlanMode is auto-approved (just a mode signal)
+  "EnterPlanMode",
   // Todo management
   "TodoRead", "TodoWrite",
   // Web (read-only fetches)
   "WebFetch", "WebSearch",
   // Skills
   "Skill",
+  // Note: AskUserQuestion and ExitPlanMode are NOT here — they route to UI
+  // Note: Config and KillShell are NOT here — they escalate to UI
 ];
 
 // Bash commands that are safe to auto-approve
@@ -35,6 +38,18 @@ const SAFE_BASH_PREFIXES = [
   "node -e", "node --eval", "python -c", "python3 -c",
   "mkdir -p ", "touch ",
   "curl ", "wget ",
+  "docker ps", "docker images", "docker logs", "docker inspect", "docker stats",
+  "docker build", "docker run ", "docker exec ", "docker start", "docker stop",
+  "docker rm ", "docker rmi ", "docker pull ", "docker push ", "docker tag ",
+  "docker network", "docker volume", "docker info", "docker version",
+  "docker compose ", "docker-compose ",
+  "kubectl get", "kubectl describe", "kubectl logs", "kubectl exec ", "kubectl apply ",
+  "kubectl delete ", "kubectl create ", "kubectl patch ", "kubectl scale ",
+  "kubectl rollout", "kubectl config", "kubectl cluster-info", "kubectl version",
+  "kubectl port-forward", "kubectl label", "kubectl annotate", "kubectl explain",
+  "helm install ", "helm upgrade ", "helm uninstall ", "helm list", "helm status ",
+  "helm get ", "helm show ", "helm search ", "helm repo ", "helm template ",
+  "helm rollback ", "helm history ", "helm lint ",
 ];
 
 // Bash commands that should NEVER be auto-approved
@@ -42,9 +57,8 @@ const DANGEROUS_BASH_PATTERNS = [
   /rm\s+(-rf?|--recursive)\s+[\/~]/,  // rm -rf with absolute/home paths
   />\s*\/etc\//, />\s*\/usr\//,         // writing to system dirs
   /sudo\s/, /chmod\s.*777/,             // privilege escalation
-  /ssh\s/, /scp\s/,                     // remote access
   /curl.*\|\s*(bash|sh)/,               // pipe to shell
-  /eval\s/, /exec\s/,                   // code execution
+  /\beval\s+[^"(]/, /\beval\s+"[^$]/,   // code execution (allow eval "$(tool init -)" patterns)
   /DROP\s+TABLE/i, /DELETE\s+FROM/i,    // destructive SQL
   /git\s+push\s+.*--force/,             // force push
   /git\s+reset\s+--hard/,              // destructive git
@@ -178,7 +192,8 @@ export function createPermissionHandler(
 export function resolvePermissionRequest(
   requestId: number,
   decision: "approved" | "denied",
-  eventBus: EventEmitter
+  eventBus: EventEmitter,
+  answer?: string
 ): boolean {
   const request = queries.getPermission(requestId);
   if (!request || request.status !== "pending") return false;
@@ -189,7 +204,19 @@ export function resolvePermissionRequest(
   const pending = pendingResolvers.get(request.tool_use_id);
   if (pending) {
     clearTimeout(pending.timeoutId);
-    if (decision === "approved") {
+    if (request.tool_name === "AskUserQuestion" && answer) {
+      // For AskUserQuestion, deny with the user's answer so the agent receives it.
+      // The agent sees the deny message as the tool result containing the user's response.
+      pending.resolve({ behavior: "deny", message: `User answered: ${answer}` });
+    } else if (request.tool_name === "ExitPlanMode") {
+      if (decision === "approved") {
+        pending.resolve({ behavior: "allow", updatedInput: toolInput });
+      } else {
+        // Deny with feedback so agent knows to revise the plan
+        const feedback = answer || "Plan rejected by user";
+        pending.resolve({ behavior: "deny", message: feedback });
+      }
+    } else if (decision === "approved") {
       pending.resolve({ behavior: "allow", updatedInput: toolInput });
     } else {
       pending.resolve({ behavior: "deny", message: "Denied by user" });

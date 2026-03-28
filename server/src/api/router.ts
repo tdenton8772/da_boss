@@ -369,13 +369,13 @@ export function createRouter(manager: AgentManager): Router {
   });
 
   router.post("/api/permissions/:id/resolve", (req, res) => {
-    const { decision } = req.body as { decision?: "approved" | "denied" };
+    const { decision, answer } = req.body as { decision?: "approved" | "denied"; answer?: string };
     if (!decision || !["approved", "denied"].includes(decision)) {
       res.status(400).json({ error: "decision must be 'approved' or 'denied'" });
       return;
     }
     const id = parseInt(req.params.id);
-    const ok = manager.resolvePermission(id, decision);
+    const ok = manager.resolvePermission(id, decision, answer);
     if (!ok) {
       res.status(404).json({ error: "Permission request not found or already resolved" });
       return;

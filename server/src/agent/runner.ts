@@ -429,6 +429,30 @@ export class AgentRunner {
         if ((name === "Grep" || name === "Glob") && input.pattern) {
           return `**${name}**: \`${input.pattern}\`${input.path ? ` in \`${input.path}\`` : ""}`;
         }
+        if (name === "TodoWrite" && Array.isArray(input.todos)) {
+          const todos = input.todos as Array<{ content?: string; status?: string }>;
+          const lines = todos.map((t) => {
+            const check = t.status === "completed" ? "x" : " ";
+            const label = t.status === "in_progress" ? " *(in progress)*" : "";
+            return `- [${check}] ${t.content || ""}${label}`;
+          });
+          return `**Tasks**:\n${lines.join("\n")}`;
+        }
+        if (name === "AskUserQuestion" && Array.isArray(input.questions)) {
+          const qs = input.questions as Array<{ question?: string; header?: string; options?: Array<{ label?: string }> }>;
+          const lines = qs.map((q) => {
+            const header = q.header ? `**${q.header}**: ` : "";
+            const opts = q.options?.map((o) => o.label).join(", ") || "";
+            return `${header}${q.question || ""}${opts ? `\n  Options: ${opts}` : ""}`;
+          });
+          return `**Question for user**:\n${lines.join("\n")}`;
+        }
+        if (name === "EnterPlanMode") {
+          return "**Entering plan mode** — agent is designing an approach before coding";
+        }
+        if (name === "ExitPlanMode") {
+          return "**Plan ready for review** — waiting for your approval";
+        }
         // Generic fallback
         return `**${name}**: ${JSON.stringify(input).substring(0, 500)}`;
       });

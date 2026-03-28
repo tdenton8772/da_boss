@@ -13,6 +13,9 @@ import {
   Globe,
   HelpCircle,
   Clock,
+  MessageCircleQuestion,
+  Send,
+  ClipboardCheck,
 } from "lucide-react";
 
 // Tool category badges
@@ -23,6 +26,8 @@ const TOOL_BADGES: Record<string, { color: string; icon: React.ReactNode }> = {
   NotebookEdit: { color: "bg-purple-900/50 text-purple-300 border-purple-800/50", icon: <FileText size={12} /> },
   WebFetch: { color: "bg-green-900/50 text-green-300 border-green-800/50", icon: <Globe size={12} /> },
   WebSearch: { color: "bg-green-900/50 text-green-300 border-green-800/50", icon: <Globe size={12} /> },
+  AskUserQuestion: { color: "bg-cyan-900/50 text-cyan-300 border-cyan-800/50", icon: <MessageCircleQuestion size={12} /> },
+  ExitPlanMode: { color: "bg-indigo-900/50 text-indigo-300 border-indigo-800/50", icon: <ClipboardCheck size={12} /> },
 };
 
 const DEFAULT_BADGE = { color: "bg-gray-800 text-gray-300 border-gray-700", icon: <HelpCircle size={12} /> };
@@ -118,6 +123,275 @@ function ToolInputPreview({ toolName, toolInput }: { toolName: string; toolInput
     <pre className="text-xs text-gray-300 bg-gray-950 rounded p-2 whitespace-pre-wrap break-words border border-gray-800 font-mono max-h-48 overflow-y-auto">
       {JSON.stringify(parsed, null, 2)}
     </pre>
+  );
+}
+
+interface AskQuestion {
+  question: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+}
+
+function AskUserQuestionCard({
+  perm,
+  agentName,
+  onResolve,
+}: {
+  perm: PermissionReq;
+  agentName?: string;
+  onResolve: (id: number, decision: "approved" | "denied") => void;
+}) {
+  const [selectedOptions, setSelectedOptions] = useState<Record<number, Set<number>>>({});
+  const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  let questions: AskQuestion[] = [];
+  try {
+    const parsed = JSON.parse(perm.tool_input);
+    questions = parsed.questions || [];
+  } catch {
+    questions = [];
+  }
+
+  const toggleOption = (qIdx: number, optIdx: number, multiSelect: boolean) => {
+    setSelectedOptions((prev) => {
+      const current = prev[qIdx] || new Set<number>();
+      const next = new Set(current);
+      if (multiSelect) {
+        if (next.has(optIdx)) next.delete(optIdx);
+        else next.add(optIdx);
+      } else {
+        if (next.has(optIdx)) next.clear();
+        else { next.clear(); next.add(optIdx); }
+      }
+      return { ...prev, [qIdx]: next };
+    });
+  };
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      // Build a combined answer string from all questions
+      const answers: string[] = [];
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const selected = selectedOptions[i] || new Set<number>();
+        const custom = customAnswers[i]?.trim();
+        const parts: string[] = [];
+
+        if (selected.size > 0 && q.options) {
+          for (const idx of selected) {
+            parts.push(q.options[idx]?.label || `Option ${idx + 1}`);
+          }
+        }
+        if (custom) parts.push(custom);
+
+        if (parts.length > 0) {
+          const prefix = questions.length > 1 ? `${q.header || q.question}: ` : "";
+          answers.push(`${prefix}${parts.join(", ")}`);
+        }
+      }
+
+      const answer = answers.join("\n") || "No answer provided";
+      await api.resolvePermission(perm.id, "approved", answer);
+      onResolve(perm.id, "approved");
+    } catch {
+      // ignore
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const badge = TOOL_BADGES.AskUserQuestion;
+
+  return (
+    <div className="bg-gray-900 border border-cyan-800/50 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-800/50">
+        <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border ${badge.color}`}>
+          {badge.icon}
+          Question
+        </span>
+        <span className="flex-1 text-sm text-cyan-200 font-medium">Agent needs your input</span>
+        <span className="text-xs text-gray-600">
+          Agent:{" "}
+          <Link to={`/agent/${perm.agent_id}`} className="text-blue-500 hover:text-blue-400">
+            {agentName || perm.agent_id}
+          </Link>
+        </span>
+      </div>
+
+      {/* Questions */}
+      <div className="px-3 py-3 space-y-4">
+        {questions.map((q, qIdx) => (
+          <div key={qIdx}>
+            {q.header && (
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">{q.header}</div>
+            )}
+            <div className="text-sm text-gray-200 mb-2">{q.question}</div>
+
+            {/* Options */}
+            {q.options && q.options.length > 0 && (
+              <div className="space-y-1.5 mb-2">
+                {q.options.map((opt, optIdx) => {
+                  const isSelected = selectedOptions[qIdx]?.has(optIdx) ?? false;
+                  return (
+                    <button
+                      key={optIdx}
+                      onClick={() => toggleOption(qIdx, optIdx, !!q.multiSelect)}
+                      className={`w-full text-left px-3 py-2 rounded border text-sm transition-colors ${
+                        isSelected
+                          ? "bg-cyan-900/40 border-cyan-600 text-cyan-200"
+                          : "bg-gray-800/50 border-gray-700 text-gray-300 hover:border-gray-600 hover:bg-gray-800"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className={`mt-0.5 w-4 h-4 rounded${q.multiSelect ? "" : "-full"} border flex items-center justify-center shrink-0 ${
+                          isSelected ? "border-cyan-500 bg-cyan-600" : "border-gray-600"
+                        }`}>
+                          {isSelected && <Check size={10} className="text-white" />}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium">{opt.label}</div>
+                          {opt.description && (
+                            <div className="text-xs text-gray-500 mt-0.5">{opt.description}</div>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Custom text input (always shown — "Other" option) */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customAnswers[qIdx] || ""}
+                onChange={(e) => setCustomAnswers((prev) => ({ ...prev, [qIdx]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+                placeholder="Type a custom answer..."
+                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-cyan-600"
+              />
+            </div>
+          </div>
+        ))}
+
+        {/* Submit button */}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={async () => {
+              setSubmitting(true);
+              try {
+                await api.resolvePermission(perm.id, "denied");
+                onResolve(perm.id, "denied");
+              } catch {} finally { setSubmitting(false); }
+            }}
+            disabled={submitting}
+            className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 text-sm rounded disabled:opacity-50"
+          >
+            Skip
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white text-sm rounded font-medium disabled:opacity-50"
+          >
+            <Send size={14} />
+            {submitting ? "Sending..." : "Answer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExitPlanModeCard({
+  perm,
+  agentName,
+  onResolve,
+}: {
+  perm: PermissionReq;
+  agentName?: string;
+  onResolve: (id: number, decision: "approved" | "denied") => void;
+}) {
+  const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const badge = TOOL_BADGES.ExitPlanMode;
+
+  const handleApprove = async () => {
+    setSubmitting(true);
+    try {
+      await api.resolvePermission(perm.id, "approved");
+      onResolve(perm.id, "approved");
+    } catch {} finally { setSubmitting(false); }
+  };
+
+  const handleReject = async () => {
+    setSubmitting(true);
+    try {
+      await api.resolvePermission(perm.id, "denied", feedback.trim() || "Plan rejected — please revise.");
+      onResolve(perm.id, "denied");
+    } catch {} finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="bg-gray-900 border border-indigo-800/50 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-800/50">
+        <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border ${badge.color}`}>
+          {badge.icon}
+          Plan Review
+        </span>
+        <span className="flex-1 text-sm text-indigo-200 font-medium">
+          Agent has a plan ready for approval
+        </span>
+        <span className="text-xs text-gray-600">
+          Agent:{" "}
+          <Link to={`/agent/${perm.agent_id}`} className="text-blue-500 hover:text-blue-400">
+            {agentName || perm.agent_id}
+          </Link>
+        </span>
+      </div>
+
+      <div className="px-3 py-3 space-y-3">
+        <p className="text-xs text-gray-400">
+          Review the agent's plan in the message stream below, then approve or reject with feedback.
+        </p>
+
+        {/* Feedback input */}
+        <textarea
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder="Optional feedback if rejecting (e.g. 'use a different approach for auth...')"
+          rows={2}
+          className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600 resize-y"
+        />
+
+        {/* Approve / Reject */}
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={handleReject}
+            disabled={submitting}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/40 hover:bg-red-800/50 text-red-300 text-sm rounded disabled:opacity-50"
+          >
+            <X size={14} />
+            Reject
+          </button>
+          <button
+            onClick={handleApprove}
+            disabled={submitting}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-green-700 hover:bg-green-600 text-white text-sm rounded font-medium disabled:opacity-50"
+          >
+            <Check size={14} />
+            {submitting ? "..." : "Approve Plan"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -253,14 +527,30 @@ export function PermissionDialog({
         Pending Approvals ({permissions.length})
       </h3>
       <div className="space-y-2">
-        {permissions.map((perm) => (
-          <PermissionCard
-            key={perm.id}
-            perm={perm}
-            agentName={agentNames?.[perm.agent_id]}
-            onResolve={() => onResolved()}
-          />
-        ))}
+        {permissions.map((perm) =>
+          perm.tool_name === "AskUserQuestion" ? (
+            <AskUserQuestionCard
+              key={perm.id}
+              perm={perm}
+              agentName={agentNames?.[perm.agent_id]}
+              onResolve={() => onResolved()}
+            />
+          ) : perm.tool_name === "ExitPlanMode" ? (
+            <ExitPlanModeCard
+              key={perm.id}
+              perm={perm}
+              agentName={agentNames?.[perm.agent_id]}
+              onResolve={() => onResolved()}
+            />
+          ) : (
+            <PermissionCard
+              key={perm.id}
+              perm={perm}
+              agentName={agentNames?.[perm.agent_id]}
+              onResolve={() => onResolved()}
+            />
+          )
+        )}
       </div>
     </div>
   );

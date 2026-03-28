@@ -54,10 +54,10 @@ export const api = {
   // Permissions
   getPendingPermissions: () =>
     request<PermissionReq[]>("/permissions/pending"),
-  resolvePermission: (id: number, decision: "approved" | "denied") =>
+  resolvePermission: (id: number, decision: "approved" | "denied", answer?: string) =>
     request(`/permissions/${id}/resolve`, {
       method: "POST",
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, ...(answer && { answer }) }),
     }),
 
   // Budget
