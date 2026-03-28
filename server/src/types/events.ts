@@ -53,6 +53,23 @@ export type ServerEvent =
       type: "supervisor:finding";
       finding: string;
       action?: string;
+    }
+  | {
+      type: "agent:subagent_start";
+      agentId: string;
+      subagent: {
+        agentId: string;
+        agentType: string;
+        sessionId: string;
+        transcriptPath: string;
+        startedAt: string;
+      };
+    }
+  | {
+      type: "agent:subagent_stop";
+      agentId: string;
+      subagentId: string;
+      transcriptPath: string;
     };
 
 // Client → Server WebSocket commands

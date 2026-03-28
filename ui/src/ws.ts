@@ -9,7 +9,9 @@ export type ServerEvent =
   | { type: "permission:requested"; request: { id: number; agent_id: string; tool_name: string; tool_input: string; status: string } }
   | { type: "permission:resolved"; requestId: number; decision: string }
   | { type: "budget:updated"; dailySpendUsd: number; dailyBudgetUsd: number; monthlySpendUsd: number; monthlyBudgetUsd: number }
-  | { type: "supervisor:finding"; finding: string; action?: string };
+  | { type: "supervisor:finding"; finding: string; action?: string }
+  | { type: "agent:subagent_start"; agentId: string; subagent: { agentId: string; agentType: string; sessionId: string; transcriptPath: string; startedAt: string } }
+  | { type: "agent:subagent_stop"; agentId: string; subagentId: string; transcriptPath: string };
 
 type EventHandler = (event: ServerEvent) => void;
 

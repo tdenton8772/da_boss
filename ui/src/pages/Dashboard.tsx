@@ -18,12 +18,14 @@ export function Dashboard() {
   const [sortBy, setSortBy] = useState<"name" | "date" | "cost" | "status">("date");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [processInfo, setProcessInfo] = useState<Record<string, { pids: number[]; descendants: number[] }>>({});
+  const [queueInfo, setQueueInfo] = useState<Record<string, number>>({});
 
   const refresh = useCallback(() => {
     api.getAgents().then(setAgents).catch(() => {});
     api.getBudget().then(setBudget).catch(() => {});
     api.getPendingPermissions().then(setPermissions).catch(() => {});
     api.getProcesses().then(setProcessInfo).catch(() => {});
+    api.getQueue().then(setQueueInfo).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -200,7 +202,7 @@ export function Dashboard() {
           </h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {active.map((a) => (
-              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} />
+              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} queuedCount={queueInfo[a.id]} />
             ))}
           </div>
         </div>
@@ -214,7 +216,7 @@ export function Dashboard() {
           </h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {other.map((a) => (
-              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} />
+              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} queuedCount={queueInfo[a.id]} />
             ))}
           </div>
         </div>

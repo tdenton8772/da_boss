@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router";
-import { api, type PermissionReq } from "../api";
-import { Save } from "lucide-react";
+import { api, type PermissionReq, type SubagentInfo } from "../api";
+import { Save, ChevronDown, ChevronRight, Cpu } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
@@ -36,10 +38,14 @@ export function AgentDetail() {
   const [instructions, setInstructions] = useState("");
   const [instructionsDirty, setInstructionsDirty] = useState(false);
   const [savingInstructions, setSavingInstructions] = useState(false);
+  const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
+  const [queuedCount, setQueuedCount] = useState(0);
   const subscribedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (!id) return;
+    api.getSubagents(id).then(setSubagents).catch(() => {});
+    api.getQueue().then((q) => setQueuedCount(q[id!] || 0)).catch(() => {});
     api
       .getAgent(id)
       .then((a) => {
@@ -122,6 +128,13 @@ export function AgentDetail() {
           .getPendingPermissions()
           .then((all) => setPermissions(all.filter((p) => p.agent_id === id)))
           .catch(() => {});
+      }
+
+      if (
+        (event.type === "agent:subagent_start" || event.type === "agent:subagent_stop") &&
+        event.agentId === id
+      ) {
+        api.getSubagents(id).then(setSubagents).catch(() => {});
       }
 
       if (event.type === "agent:error" && event.agentId === id) {
@@ -267,7 +280,25 @@ export function AgentDetail() {
       {/* Controls */}
       <div className="mb-4">
         <ControlBar agentId={agent.id} state={agent.state} onAction={refresh} onDelete={() => navigate("/")} />
+        {queuedCount > 0 && (
+          <div className="mt-2 px-3 py-1.5 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-amber-300">
+            {queuedCount} message{queuedCount !== 1 ? "s" : ""} queued — waiting for agent to be ready
+          </div>
+        )}
       </div>
+
+      {/* Subagents */}
+      {subagents.length > 0 && (
+        <div className="mb-4 space-y-2">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-gray-300">
+            <Cpu size={14} />
+            Subagents ({subagents.length})
+          </h3>
+          {subagents.map((sub) => (
+            <SubagentPanel key={sub.agentId} subagent={sub} />
+          ))}
+        </div>
+      )}
 
       {/* Messages */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
@@ -336,6 +367,64 @@ export function AgentDetail() {
               </button>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubagentPanel({ subagent }: { subagent: SubagentInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const loadTranscript = async () => {
+    if (loaded || !subagent.transcriptPath) return;
+    try {
+      const msgs = await api.getSubagentTranscript(subagent.transcriptPath);
+      setMessages(msgs);
+      setLoaded(true);
+    } catch { /* ignore */ }
+  };
+
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) loadTranscript();
+  };
+
+  const isActive = !subagent.stoppedAt;
+
+  return (
+    <div className={`bg-gray-900 border rounded-lg overflow-hidden ${isActive ? "border-green-800/50" : "border-gray-800"}`}>
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/50"
+      >
+        {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
+        <span className={`text-xs font-medium px-2 py-0.5 rounded ${isActive ? "bg-green-900/50 text-green-300" : "bg-gray-800 text-gray-400"}`}>
+          {subagent.agentType}
+        </span>
+        <span className="text-xs text-gray-500 truncate flex-1">{subagent.agentId}</span>
+        {isActive && <span className="text-xs text-green-400 animate-pulse">running</span>}
+        {!isActive && <span className="text-xs text-gray-600">done</span>}
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-800 px-3 py-2 max-h-64 overflow-y-auto space-y-1">
+          {messages.length === 0 && (
+            <div className="text-xs text-gray-600">{loaded ? "No messages" : "Loading..."}</div>
+          )}
+          {messages.map((msg, i) => (
+            <div key={i} className="text-xs">
+              <span className={`font-medium ${msg.role === "assistant" ? "text-blue-400" : msg.role === "tool" ? "text-green-400" : "text-gray-500"}`}>
+                {msg.role}
+              </span>
+              <div className="text-gray-400 ml-2 prose prose-invert prose-xs max-w-none prose-p:my-0.5 prose-code:text-green-400 prose-code:bg-gray-800 prose-code:px-1 prose-code:rounded">
+                <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

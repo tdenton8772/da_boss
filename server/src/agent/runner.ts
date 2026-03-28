@@ -64,6 +64,16 @@ function killProcessTree(pid: number): number {
   return killed;
 }
 
+export interface SubagentInfo {
+  agentId: string;     // SDK's agent_id
+  agentType: string;   // e.g. "Explore", "general-purpose"
+  sessionId: string;
+  transcriptPath: string;
+  parentAgentId: string; // da_boss agent ID
+  startedAt: string;
+  stoppedAt?: string;
+}
+
 export class AgentRunner {
   private currentQuery: SDKQuery | null = null;
   private abortController: AbortController | null = null;
@@ -71,6 +81,8 @@ export class AgentRunner {
   private _sessionId: string | null = null;
   /** PIDs spawned by this runner (claude + subagents). */
   private _trackedPids = new Set<number>();
+  /** Active subagents tracked via SDK hooks. */
+  private _subagents = new Map<string, SubagentInfo>();
 
   constructor(
     private agentId: string,
@@ -81,6 +93,10 @@ export class AgentRunner {
 
   get trackedPids(): Set<number> {
     return this._trackedPids;
+  }
+
+  get subagents(): Map<string, SubagentInfo> {
+    return this._subagents;
   }
 
   get running(): boolean {
@@ -142,6 +158,70 @@ export class AgentRunner {
         ...(agent.max_turns && { maxTurns: agent.max_turns }),
         ...(agent.max_budget_usd && { maxBudgetUsd: agent.max_budget_usd }),
         ...(agent.sdk_session_id && { resume: agent.sdk_session_id }),
+        hooks: {
+          SubagentStart: [{
+            hooks: [async (input) => {
+              logger.info({ agentId: this.agentId, hookInput: JSON.stringify(input).substring(0, 500) }, "SubagentStart hook fired");
+              const hi = input as Record<string, unknown>;
+              const subId = String(hi.agent_id || hi.agentId || `sub_${Date.now()}`);
+              const info: SubagentInfo = {
+                agentId: subId,
+                agentType: String(hi.agent_type || "unknown"),
+                sessionId: String(hi.session_id || ""),
+                transcriptPath: String(hi.transcript_path || ""),
+                parentAgentId: this.agentId,
+                startedAt: new Date().toISOString(),
+              };
+              this._subagents.set(subId, info);
+              logger.info({ parentId: this.agentId, subagentId: subId, type: info.agentType }, "Subagent started");
+
+              // Detect the new PID
+              setTimeout(() => {
+                const currentPids = getClaudePids();
+                for (const pid of currentPids) {
+                  if (!this._trackedPids.has(pid)) {
+                    this._trackedPids.add(pid);
+                    logger.info({ agentId: this.agentId, subagentId: subId, pid }, "Tracking subagent process");
+                  }
+                }
+              }, 500);
+
+              this.eventBus.emit("server-event", {
+                type: "agent:subagent_start",
+                agentId: this.agentId,
+                subagent: info,
+              });
+              queries.insertAgentEvent(this.agentId, "message", {
+                role: "system",
+                content: `Subagent started: **${info.agentType}** (${subId})`,
+              });
+              return { continue: true };
+            }],
+          }],
+          SubagentStop: [{
+            hooks: [async (input) => {
+              const hi = input as { agent_id?: string; agent_transcript_path?: string };
+              const subId = hi.agent_id || "";
+              const info = this._subagents.get(subId);
+              if (info) {
+                info.stoppedAt = new Date().toISOString();
+                if (hi.agent_transcript_path) info.transcriptPath = hi.agent_transcript_path;
+              }
+              logger.info({ parentId: this.agentId, subagentId: subId }, "Subagent stopped");
+              this.eventBus.emit("server-event", {
+                type: "agent:subagent_stop",
+                agentId: this.agentId,
+                subagentId: subId,
+                transcriptPath: hi.agent_transcript_path || "",
+              });
+              queries.insertAgentEvent(this.agentId, "message", {
+                role: "system",
+                content: `Subagent finished: **${info?.agentType || "unknown"}** (${subId})`,
+              });
+              return { continue: true };
+            }],
+          }],
+        },
       };
 
       this.currentQuery = sdkQuery({

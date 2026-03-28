@@ -110,11 +110,19 @@ export const api = {
   getAuditLog: (limit?: number, offset?: number) =>
     request<AuditResponse>(`/audit?limit=${limit || 50}&offset=${offset || 0}`),
 
-  // Processes
+  // Processes & queue
   getProcesses: () =>
     request<Record<string, { pids: number[]; descendants: number[] }>>("/processes"),
+  getQueue: () =>
+    request<Record<string, number>>("/queue"),
   killAll: () =>
     request<{ ok: boolean; killed: number; orphans: number }>("/agents/kill-all", { method: "POST" }),
+
+  // Subagents
+  getSubagents: (agentId: string) =>
+    request<SubagentInfo[]>(`/agents/${agentId}/subagents`),
+  getSubagentTranscript: (transcriptPath: string) =>
+    request<Array<{ role: string; content: string }>>(`/subagent-transcript?path=${encodeURIComponent(transcriptPath)}`),
 
 };
 
@@ -236,6 +244,16 @@ export interface AuditResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface SubagentInfo {
+  agentId: string;
+  agentType: string;
+  sessionId: string;
+  transcriptPath: string;
+  parentAgentId: string;
+  startedAt: string;
+  stoppedAt?: string;
 }
 
 export interface AgentTemplate {

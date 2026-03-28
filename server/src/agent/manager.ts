@@ -146,6 +146,9 @@ export class AgentManager {
       to: "waiting_input",
     });
     logger.info({ agentId }, "Agent resumed — waiting for input");
+
+    // Drain any queued messages now that agent is ready
+    this.drainQueue(agentId);
   }
 
   async killAgent(agentId: string): Promise<void> {
@@ -191,9 +194,17 @@ export class AgentManager {
     // Check agent is ready for input
     const agent = queries.getAgent(agentId);
     if (!agent) return;
-    if (!["waiting_input", "completed"].includes(agent.state)) {
+    if (!agent.sdk_session_id) return;
+
+    const readyStates = ["waiting_input", "completed", "failed", "paused"];
+    if (!readyStates.includes(agent.state)) {
       logger.info({ agentId, state: agent.state, queueSize: queue.length }, "Agent not ready, messages queued");
       return;
+    }
+
+    // Transition failed/paused agents to waiting_input so runTurn can proceed
+    if (agent.state === "failed" || agent.state === "paused") {
+      queries.updateAgentState(agentId, "waiting_input");
     }
 
     // Check if a runner already exists (shouldn't, but guard against it)
@@ -233,8 +244,39 @@ export class AgentManager {
 
   /** Resume an agent with a system notification (no user message emitted to UI). */
   private async resumeWithNotification(agentId: string, notification: string): Promise<void> {
-    // Route through the same queue to prevent duplicate runners
-    await this.sendInput(agentId, notification);
+    const agent = queries.getAgent(agentId);
+    if (!agent) return;
+    if (!agent.sdk_session_id) return;
+    if (agent.state !== "waiting_input") return;
+
+    // Check if already draining or a runner exists
+    if (this.draining.has(agentId)) {
+      // Queue it — it'll drain after current turn
+      if (!this.inputQueues.has(agentId)) this.inputQueues.set(agentId, []);
+      this.inputQueues.get(agentId)!.push(notification);
+      return;
+    }
+
+    const existingRunner = this.runners.get(agentId);
+    if (existingRunner?.running) return;
+
+    const activeCount = this.getActiveCount();
+    if (activeCount >= config.maxConcurrentAgents) return;
+
+    this.draining.add(agentId);
+    const runner = new AgentRunner(agentId, this.eventBus, this.budgetManager, this.taskMonitor);
+    this.runners.set(agentId, runner);
+
+    // Use runTurn directly — sends the notification as the prompt without emitting it as a user message
+    runner.runTurn(notification, true).catch((err) => {
+      logger.error({ agentId, error: err.message }, "Auto-resume after notification failed");
+    }).finally(() => {
+      if (this.runners.get(agentId) === runner) {
+        this.runners.delete(agentId);
+      }
+      this.draining.delete(agentId);
+      this.drainQueue(agentId);
+    });
   }
 
   resolvePermission(
@@ -251,6 +293,22 @@ export class AgentManager {
       if (runner.running) count++;
     }
     return count;
+  }
+
+  /** Get queued message count per agent. */
+  getQueueInfo(): Record<string, number> {
+    const info: Record<string, number> = {};
+    for (const [agentId, queue] of this.inputQueues) {
+      if (queue.length > 0) info[agentId] = queue.length;
+    }
+    return info;
+  }
+
+  /** Get subagent info for an agent. */
+  getSubagents(agentId: string): import("./runner.js").SubagentInfo[] {
+    const runner = this.runners.get(agentId);
+    if (!runner) return [];
+    return [...runner.subagents.values()];
   }
 
   /** Get process info for all agents (PIDs + descendant count). */

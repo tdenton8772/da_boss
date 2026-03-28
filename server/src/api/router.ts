@@ -41,9 +41,57 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
-  // ── Process info ──────────────────────────────────────
+  // ── Process & queue info ──────────────────────────────
   router.get("/api/processes", (_req, res) => {
     res.json(manager.getProcessInfo());
+  });
+
+  router.get("/api/queue", (_req, res) => {
+    res.json(manager.getQueueInfo());
+  });
+
+  // ── Subagents ────────────────────────────────────────
+  router.get("/api/agents/:id/subagents", (req, res) => {
+    res.json(manager.getSubagents(req.params.id));
+  });
+
+  router.get("/api/subagent-transcript", async (req, res) => {
+    const transcriptPath = req.query.path as string;
+    if (!transcriptPath || !transcriptPath.endsWith(".jsonl")) {
+      res.status(400).json({ error: "Invalid transcript path" });
+      return;
+    }
+    try {
+      const fs = await import("node:fs");
+      const content = fs.readFileSync(transcriptPath, "utf-8");
+      const messages: Array<{ role: string; content: string; timestamp?: string }> = [];
+      for (const line of content.split("\n").filter(Boolean)) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === "assistant" && entry.message?.content) {
+            const text = entry.message.content
+              .filter((b: { type: string; text?: string }) => b.type === "text" && b.text)
+              .map((b: { text: string }) => b.text)
+              .join("\n");
+            if (text) messages.push({ role: "assistant", content: text.substring(0, 2000) });
+
+            const tools = entry.message.content
+              .filter((b: { type: string; name?: string }) => b.type === "tool_use" && b.name)
+              .map((b: { name: string; input?: Record<string, unknown> }) => {
+                if (b.name === "Bash" && b.input?.command) return `**Bash**: \`${String(b.input.command).substring(0, 200)}\``;
+                if (b.name === "Edit" && b.input?.file_path) return `**Edit**: \`${b.input.file_path}\``;
+                if (b.name === "Write" && b.input?.file_path) return `**Write**: \`${b.input.file_path}\``;
+                if (b.name === "Read" && b.input?.file_path) return `**Read**: \`${b.input.file_path}\``;
+                return `**${b.name}**`;
+              });
+            for (const t of tools) messages.push({ role: "tool", content: t });
+          }
+        } catch { /* skip bad lines */ }
+      }
+      res.json(messages);
+    } catch {
+      res.json([]);
+    }
   });
 
   // ── Agents ────────────────────────────────────────────
