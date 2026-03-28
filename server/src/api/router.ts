@@ -41,6 +41,11 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  // ── Process info ──────────────────────────────────────
+  router.get("/api/processes", (_req, res) => {
+    res.json(manager.getProcessInfo());
+  });
+
   // ── Agents ────────────────────────────────────────────
   router.get("/api/agents", (_req, res) => {
     const agents = manager.getAllAgents();
@@ -93,6 +98,29 @@ export function createRouter(manager: AgentManager): Router {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: message });
+    }
+  });
+
+  // Kill ALL running agents and orphaned processes — before :id routes
+  router.post("/api/agents/kill-all", async (req, res) => {
+    try {
+      const agents = queries.getAllAgents();
+      let killed = 0;
+      for (const agent of agents) {
+        if (["running", "waiting_permission", "waiting_input"].includes(agent.state)) {
+          try {
+            await manager.killAgent(agent.id);
+            killed++;
+          } catch { /* continue killing others */ }
+        }
+      }
+      const orphans = await manager.killOrphanedProcesses();
+      const ip = req.ip || req.socket.remoteAddress || null;
+      queries.insertAuditLog(ip, "agents.kill_all", null, null, JSON.stringify({ killed, orphans }));
+      res.json({ ok: true, killed, orphans });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
     }
   });
 
@@ -324,6 +352,7 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+
   router.post("/api/agents/:id/input", async (req, res) => {
     try {
       const { message } = req.body as { message?: string };
@@ -332,6 +361,9 @@ export function createRouter(manager: AgentManager): Router {
         return;
       }
       await manager.sendInput(req.params.id, message);
+      // Reset supervisor cooldown — user is actively interacting
+      const { resetAgentCooldown } = await import("../supervisor/checks.js");
+      resetAgentCooldown(req.params.id);
       res.json({ ok: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

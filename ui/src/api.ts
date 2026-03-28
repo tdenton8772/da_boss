@@ -110,6 +110,12 @@ export const api = {
   getAuditLog: (limit?: number, offset?: number) =>
     request<AuditResponse>(`/audit?limit=${limit || 50}&offset=${offset || 0}`),
 
+  // Processes
+  getProcesses: () =>
+    request<Record<string, { pids: number[]; descendants: number[] }>>("/processes"),
+  killAll: () =>
+    request<{ ok: boolean; killed: number; orphans: number }>("/agents/kill-all", { method: "POST" }),
+
 };
 
 // Types shared with UI

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { execSync } from "node:child_process";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRecord } from "../types/agent.js";
 import type { ServerEvent } from "../types/events.js";
@@ -11,11 +12,65 @@ import { logger } from "../utils/logger.js";
 
 type SDKQuery = ReturnType<typeof sdkQuery>;
 
+/** Get all claude PIDs (excluding interactive sessions). */
+function getClaudePids(): Set<number> {
+  try {
+    const output = execSync(
+      "ps -eo pid,command | grep '[c]laude' | grep -v 'skip-permissions' | grep -v 'Code Helper'",
+      { encoding: "utf-8", timeout: 3000 }
+    ).trim();
+    const pids = new Set<number>();
+    for (const line of output.split("\n")) {
+      const pid = parseInt(line.trim());
+      if (pid) pids.add(pid);
+    }
+    return pids;
+  } catch {
+    return new Set();
+  }
+}
+
+/** Recursively find all descendant PIDs of a given PID. */
+function getDescendantPids(pid: number): number[] {
+  const descendants: number[] = [];
+  try {
+    const output = execSync(`pgrep -P ${pid}`, { encoding: "utf-8", timeout: 3000 }).trim();
+    for (const line of output.split("\n")) {
+      const childPid = parseInt(line.trim());
+      if (childPid) {
+        descendants.push(childPid);
+        descendants.push(...getDescendantPids(childPid));
+      }
+    }
+  } catch {
+    // No children
+  }
+  return descendants;
+}
+
+/** SIGKILL a PID and all its descendants. Returns count killed. */
+function killProcessTree(pid: number): number {
+  const descendants = getDescendantPids(pid);
+  const allPids = [...descendants.reverse(), pid]; // children first, then parent
+  let killed = 0;
+  for (const p of allPids) {
+    try {
+      process.kill(p, "SIGKILL");
+      killed++;
+    } catch {
+      // Already dead
+    }
+  }
+  return killed;
+}
+
 export class AgentRunner {
   private currentQuery: SDKQuery | null = null;
   private abortController: AbortController | null = null;
   private _running = false;
   private _sessionId: string | null = null;
+  /** PIDs spawned by this runner (claude + subagents). */
+  private _trackedPids = new Set<number>();
 
   constructor(
     private agentId: string,
@@ -23,6 +78,10 @@ export class AgentRunner {
     private budgetManager: TokenBudgetManager,
     private taskMonitor: TaskMonitor
   ) {}
+
+  get trackedPids(): Set<number> {
+    return this._trackedPids;
+  }
 
   get running(): boolean {
     return this._running;
@@ -45,6 +104,9 @@ export class AgentRunner {
 
     this.abortController = new AbortController();
     this._running = true;
+
+    // Snapshot PIDs before starting so we can detect new ones
+    const pidsBefore = getClaudePids();
 
     // Transition to running
     this.transitionState(agent, "running");
@@ -88,6 +150,17 @@ export class AgentRunner {
       });
 
       let sessionId = agent.sdk_session_id;
+
+      // Detect the new claude PID(s) spawned by the SDK
+      setTimeout(() => {
+        const pidsAfter = getClaudePids();
+        for (const pid of pidsAfter) {
+          if (!pidsBefore.has(pid)) {
+            this._trackedPids.add(pid);
+            logger.info({ agentId: this.agentId, pid }, "Tracking claude process");
+          }
+        }
+      }, 1000);
 
       for await (const msg of this.currentQuery) {
         if (!this._running) break;
@@ -252,9 +325,16 @@ export class AgentRunner {
     } finally {
       this._running = false;
       this.currentQuery = null;
+      // Always abort the child process to prevent orphans
+      if (this.abortController) {
+        try { this.abortController.abort(); } catch { /* ignore */ }
+      }
       this.abortController = null;
-      // Don't stop polling here — background tasks may still be running
-      // Polling stops when all tasks complete or on kill/pause
+      // SIGKILL any tracked processes that are still alive
+      for (const pid of this._trackedPids) {
+        try { process.kill(pid, 0); killProcessTree(pid); } catch { /* already dead */ }
+      }
+      this._trackedPids.clear();
     }
   }
 
@@ -313,15 +393,20 @@ export class AgentRunner {
     this._running = false;
     this.taskMonitor.removeAgent(this.agentId);
 
-    if (this.abortController) {
-      try {
-        this.abortController.abort();
-      } catch {
-        // Ignore abort errors — expected
-      }
+    // SIGKILL the entire process tree first — no mercy
+    let totalKilled = 0;
+    for (const pid of this._trackedPids) {
+      totalKilled += killProcessTree(pid);
     }
+    if (totalKilled > 0) {
+      logger.info({ agentId: this.agentId, killed: totalKilled }, "SIGKILL'd process tree");
+    }
+    this._trackedPids.clear();
 
-    await new Promise((r) => setTimeout(r, 500));
+    // Then abort via SDK (may be redundant but covers edge cases)
+    if (this.abortController) {
+      try { this.abortController.abort(); } catch { /* ignore */ }
+    }
 
     this.currentQuery = null;
     this.abortController = null;

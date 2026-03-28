@@ -69,7 +69,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "bg-gray-800 text-gray-400",
 };
 
-export function AgentCard({ agent }: { agent: AgentWithTokens }) {
+export function AgentCard({ agent, processCount }: { agent: AgentWithTokens; processCount?: number }) {
   const stateInfo = STATE_CONFIG[agent.state] || STATE_CONFIG.pending;
   const cost = agent.tokens.total_cost_usd;
 
@@ -100,6 +100,11 @@ export function AgentCard({ agent }: { agent: AgentWithTokens }) {
           {agent.priority}
         </span>
         <span>{agent.model}</span>
+        {processCount != null && processCount > 0 && (
+          <span className="px-2 py-0.5 rounded bg-orange-900/50 text-orange-300">
+            {processCount} proc{processCount !== 1 ? "s" : ""}
+          </span>
+        )}
         <span className="ml-auto font-mono">
           ${cost.toFixed(4)}
         </span>

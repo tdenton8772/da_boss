@@ -6,7 +6,7 @@ import { AgentCard } from "../components/AgentCard";
 import { TokenBudgetBar } from "../components/TokenBudgetBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { CreateAgentForm } from "../components/CreateAgentForm";
-import { Plus, Wifi, WifiOff, Settings, Search, Filter } from "lucide-react";
+import { Plus, Wifi, WifiOff, Settings, Search, Filter, Skull } from "lucide-react";
 import { UsageWidget } from "../components/UsageWidget";
 
 export function Dashboard() {
@@ -17,11 +17,13 @@ export function Dashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState<"name" | "date" | "cost" | "status">("date");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [processInfo, setProcessInfo] = useState<Record<string, { pids: number[]; descendants: number[] }>>({});
 
   const refresh = useCallback(() => {
     api.getAgents().then(setAgents).catch(() => {});
     api.getBudget().then(setBudget).catch(() => {});
     api.getPendingPermissions().then(setPermissions).catch(() => {});
+    api.getProcesses().then(setProcessInfo).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -102,6 +104,22 @@ export function Dashboard() {
           >
             <Settings size={16} />
           </Link>
+          <button
+            onClick={async () => {
+              if (!confirm("KILL ALL running agents and orphaned processes?")) return;
+              try {
+                const res = await api.killAll();
+                alert(`Killed ${res.killed} agents, ${res.orphans} orphaned processes`);
+                refresh();
+              } catch (err) {
+                alert("Kill all failed: " + (err instanceof Error ? err.message : err));
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white text-sm font-medium rounded"
+          >
+            <Skull size={16} />
+            Kill All
+          </button>
           <Link
             to="/discover"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
@@ -182,7 +200,7 @@ export function Dashboard() {
           </h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {active.map((a) => (
-              <AgentCard key={a.id} agent={a} />
+              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} />
             ))}
           </div>
         </div>
@@ -196,7 +214,7 @@ export function Dashboard() {
           </h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {other.map((a) => (
-              <AgentCard key={a.id} agent={a} />
+              <AgentCard key={a.id} agent={a} processCount={processInfo[a.id] ? processInfo[a.id].pids.length + processInfo[a.id].descendants.length : undefined} />
             ))}
           </div>
         </div>

@@ -17,6 +17,33 @@ interface Action {
   detail: string;
 }
 
+// Cooldown tracking: prevent supervisor from re-acting on the same agent too quickly
+const lastSupervisorAction = new Map<string, number>(); // agentId -> timestamp
+const supervisorActionCount = new Map<string, number>(); // agentId -> count since last reset
+const COOLDOWN_MS = 15 * 60 * 1000; // 15 min between supervisor actions on same agent
+const MAX_ACTIONS_PER_AGENT = 3; // max supervisor interventions before requiring human
+
+function canActOnAgent(agentId: string): boolean {
+  const lastAction = lastSupervisorAction.get(agentId);
+  if (lastAction && Date.now() - lastAction < COOLDOWN_MS) return false;
+
+  const count = supervisorActionCount.get(agentId) || 0;
+  if (count >= MAX_ACTIONS_PER_AGENT) return false;
+
+  return true;
+}
+
+function recordAction(agentId: string): void {
+  lastSupervisorAction.set(agentId, Date.now());
+  supervisorActionCount.set(agentId, (supervisorActionCount.get(agentId) || 0) + 1);
+}
+
+/** Reset action count for an agent (call when user manually interacts). */
+export function resetAgentCooldown(agentId: string): void {
+  lastSupervisorAction.delete(agentId);
+  supervisorActionCount.delete(agentId);
+}
+
 export async function runChecks(
   manager: AgentManager
 ): Promise<{ findings: Finding[]; actions: Action[] }> {
@@ -60,7 +87,7 @@ export async function runChecks(
       minutes > 5
     ) {
       const agent = queries.getAgent(perm.agent_id);
-      if (agent?.supervisor_instructions) {
+      if (agent?.supervisor_instructions && canActOnAgent(perm.agent_id)) {
         try {
           const decision = await evaluatePermission(
             perm.agent_id,
@@ -72,6 +99,7 @@ export async function runChecks(
           );
 
           manager.resolvePermission(perm.id, decision.decision, decision.answer);
+          recordAction(perm.agent_id);
           actions.push({
             agentId: perm.agent_id,
             type: "supervisor_permission",
@@ -137,6 +165,7 @@ export async function runChecks(
   const completed = queries.getAgentsByState("completed");
   for (const agent of completed) {
     if (!agent.supervisor_instructions) continue;
+    if (!canActOnAgent(agent.id)) continue;
 
     try {
       const decision = await evaluateAgent(agent.id, agent.name, agent.prompt, agent.supervisor_instructions);
@@ -144,6 +173,7 @@ export async function runChecks(
       if (decision.action === "continue") {
         // Send input to continue the agent
         await manager.sendInput(agent.id, decision.message);
+        recordAction(agent.id);
         actions.push({
           agentId: agent.id,
           type: "supervisor_continue",
@@ -151,6 +181,7 @@ export async function runChecks(
         });
         logger.info({ agentId: agent.id }, "Supervisor continued agent");
       } else if (decision.action === "notify") {
+        recordAction(agent.id);
         await sendNotification(
           `Agent "${agent.name}" needs attention`,
           decision.message,
@@ -162,7 +193,8 @@ export async function runChecks(
           message: decision.message,
         });
       }
-      // "done" = no action needed
+      // "done" = no action needed, but still record so we don't re-evaluate
+      recordAction(agent.id);
     } catch (err) {
       logger.error({ agentId: agent.id, err }, "Supervisor evaluation failed");
     }
@@ -171,6 +203,8 @@ export async function runChecks(
   // ── Check idle waiting_input agents ───────────────────
   const waiting = queries.getAgentsByState("waiting_input");
   for (const agent of waiting) {
+    if (!canActOnAgent(agent.id)) continue;
+
     const lastEvent = queries.getLatestEventTime(agent.id);
     if (!lastEvent) continue;
 
@@ -183,6 +217,7 @@ export async function runChecks(
         const decision = await evaluateAgent(agent.id, agent.name, agent.prompt, agent.supervisor_instructions);
         if (decision.action === "continue") {
           await manager.sendInput(agent.id, decision.message);
+          recordAction(agent.id);
           actions.push({
             agentId: agent.id,
             type: "supervisor_input",
@@ -194,6 +229,7 @@ export async function runChecks(
           queries.updateAgentState(agent.id, "completed", {
             completed_at: new Date().toISOString(),
           });
+          recordAction(agent.id);
           actions.push({
             agentId: agent.id,
             type: "supervisor_complete",
@@ -201,6 +237,7 @@ export async function runChecks(
           });
           continue; // Skip idle warning
         } else if (decision.action === "notify") {
+          recordAction(agent.id);
           findings.push({
             agentId: agent.id,
             type: "needs_attention",
