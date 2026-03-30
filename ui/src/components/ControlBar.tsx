@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useToastHelpers } from "./Toast";
-import { Play, Pause, Square, RotateCcw, Send, Trash2 } from "lucide-react";
+import { Play, Pause, Square, RotateCcw, Send, Trash2, Zap } from "lucide-react";
 
 export function ControlBar({
   agentId,
@@ -34,9 +34,28 @@ export function ControlBar({
       await api.sendInput(agentId, input);
       setInput("");
       onAction();
-      toast.success("Input sent");
+      toast.success("Input queued");
     } catch (err: unknown) {
       toast.error("Failed to send input", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendUrgent = async () => {
+    if (!input.trim()) return;
+    setSending(true);
+    try {
+      const result = await api.sendUrgent(agentId, input);
+      setInput("");
+      onAction();
+      if (result.delivered === "immediate") {
+        toast.success("Urgent message delivered to running agent");
+      } else {
+        toast.success("Agent not running — message queued");
+      }
+    } catch (err: unknown) {
+      toast.error("Failed to send urgent", err instanceof Error ? err.message : "Unknown error");
     } finally {
       setSending(false);
     }
@@ -128,8 +147,17 @@ export function ControlBar({
             onClick={handleSendInput}
             disabled={sending || !input.trim()}
             className="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 text-white rounded"
+            title="Queue message (delivered when agent is ready)"
           >
             <Send size={16} />
+          </button>
+          <button
+            onClick={handleSendUrgent}
+            disabled={sending || !input.trim()}
+            className="px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white rounded"
+            title="Interrupt agent with urgent message (delivered immediately)"
+          >
+            <Zap size={16} />
           </button>
         </div>
       )}

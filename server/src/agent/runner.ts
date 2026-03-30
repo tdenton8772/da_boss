@@ -322,6 +322,32 @@ export class AgentRunner {
           }
         }
 
+        // Handle tool results (user messages with tool_use_result)
+        if ("type" in msg && msg.type === "user") {
+          const userMsg = msg as {
+            tool_use_result?: unknown;
+            message?: { content?: Array<{ type: string; text?: string; content?: string }> };
+          };
+          if (userMsg.tool_use_result) {
+            const result = userMsg.tool_use_result;
+            let resultText = "";
+            if (typeof result === "string") {
+              resultText = result;
+            } else if (typeof result === "object" && result !== null) {
+              const r = result as Record<string, unknown>;
+              resultText = r.stdout as string || r.output as string || r.content as string || JSON.stringify(result).substring(0, 4000);
+            }
+            if (resultText && resultText.length > 0) {
+              const preview = resultText.length > 2000 ? resultText.substring(0, 2000) + "\n..." : resultText;
+              this.emitMessage("tool", `**Result**:\n\`\`\`\n${preview}\n\`\`\``);
+              queries.insertAgentEvent(this.agentId, "message", {
+                role: "tool",
+                content: `Result: ${resultText.substring(0, 4000)}`,
+              });
+            }
+          }
+        }
+
         // Handle streaming partial messages
         if ("type" in msg && msg.type === "stream_event" && "event" in msg) {
           const event = msg.event as {
@@ -503,6 +529,31 @@ export class AgentRunner {
     // This is called when the runner is active and agent is waiting.
     // Start a new turn with the user's message.
     await this.resumeWithInput(userMessage);
+  }
+
+  /** Interrupt the running agent and deliver an urgent message. */
+  async sendUrgent(userMessage: string): Promise<boolean> {
+    if (!this.currentQuery || !this._running) {
+      return false;
+    }
+
+    try {
+      // Interrupt the current turn — agent pauses after current tool completes
+      this.currentQuery.interrupt();
+      logger.info({ agentId: this.agentId }, "Agent interrupted for urgent message");
+
+      this.emitMessage("system", `Urgent: ${userMessage}`);
+      queries.insertAgentEvent(this.agentId, "message", {
+        role: "user",
+        content: `[URGENT] ${userMessage}`,
+      });
+
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ agentId: this.agentId, error: msg }, "Failed to send urgent message");
+      return false;
+    }
   }
 
   private handleError(message: string, sessionId: string | null): void {

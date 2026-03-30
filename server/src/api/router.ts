@@ -42,8 +42,8 @@ export function createRouter(manager: AgentManager): Router {
   });
 
   // ── Process & queue info ──────────────────────────────
-  router.get("/api/processes", (_req, res) => {
-    res.json(manager.getProcessInfo());
+  router.get("/api/processes", async (_req, res) => {
+    res.json(await manager.getProcessInfo());
   });
 
   router.get("/api/queue", (_req, res) => {
@@ -413,6 +413,23 @@ export function createRouter(manager: AgentManager): Router {
       const { resetAgentCooldown } = await import("../supervisor/checks.js");
       resetAgentCooldown(req.params.id);
       res.json({ ok: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  router.post("/api/agents/:id/urgent", async (req, res) => {
+    try {
+      const { message } = req.body as { message?: string };
+      if (!message) {
+        res.status(400).json({ error: "message is required" });
+        return;
+      }
+      const sent = await manager.sendUrgent(req.params.id, message);
+      const { resetAgentCooldown } = await import("../supervisor/checks.js");
+      resetAgentCooldown(req.params.id);
+      res.json({ ok: true, delivered: sent ? "immediate" : "queued" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: msg });

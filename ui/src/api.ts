@@ -48,6 +48,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  sendUrgent: (id: string, message: string) =>
+    request<{ ok: boolean; delivered: string }>(`/agents/${id}/urgent`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
   getEvents: (id: string, limit?: number) =>
     request<AgentEvent[]>(`/agents/${id}/events?limit=${limit || 100}`),
 

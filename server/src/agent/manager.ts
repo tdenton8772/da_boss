@@ -164,6 +164,23 @@ export class AgentManager {
     }
   }
 
+  async sendUrgent(agentId: string, message: string): Promise<boolean> {
+    const runner = this.runners.get(agentId);
+    if (!runner || !runner.running) {
+      // Not running — fall back to queue
+      await this.sendInput(agentId, message);
+      return false;
+    }
+    // Interrupt the agent, then queue the message for immediate delivery on resume
+    const interrupted = await runner.sendUrgent(message);
+    if (interrupted) {
+      // Queue the message — it'll be delivered as soon as the turn ends from interrupt
+      if (!this.inputQueues.has(agentId)) this.inputQueues.set(agentId, []);
+      this.inputQueues.get(agentId)!.unshift(message); // Front of queue
+    }
+    return interrupted;
+  }
+
   async sendInput(agentId: string, message: string): Promise<void> {
     const agent = queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
@@ -312,8 +329,8 @@ export class AgentManager {
   }
 
   /** Get process info for all agents (PIDs + descendant count). */
-  getProcessInfo(): Record<string, { pids: number[]; descendants: number[] }> {
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+  async getProcessInfo(): Promise<Record<string, { pids: number[]; descendants: number[] }>> {
+    const { execSync } = await import("node:child_process");
     const info: Record<string, { pids: number[]; descendants: number[] }> = {};
     for (const [agentId, runner] of this.runners) {
       const pids = [...runner.trackedPids];
