@@ -89,6 +89,42 @@ launchctl list | grep daboss                                    # check status
 
 The service auto-restarts on crash (KeepAlive) and starts on login (RunAtLoad). Logs are at `~/Library/Logs/da_boss/`.
 
+## Authentication: Claude Max vs API Key
+
+da_boss works with both Claude Max (interactive login) and Anthropic API keys.
+
+### Claude Max (default)
+
+Run `claude login` on the machine. The CLI stores auth in `~/.claude/`. This is what you use for local development — flat monthly rate, unlimited usage.
+
+### API Key
+
+Set the `ANTHROPIC_API_KEY` environment variable. No login needed. The CLI and agent SDK check for this env var first.
+
+```bash
+# In .env
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Or export directly
+export ANTHROPIC_API_KEY=sk-ant-...
+claude  # works without login
+```
+
+For the launchd service, add it to the plist's EnvironmentVariables or to `.env`. The server passes the environment to child claude processes automatically.
+
+### Which to use
+
+| | Claude Max | API Key |
+|---|---|---|
+| Billing | Flat monthly ($100) | Pay per token |
+| Auth | Interactive `claude login` per machine | Env var, no login |
+| Fleet | One machine only (per-user auth) | Any machine, scalable |
+| Best for | Local development, single machine | Fleet workers, CI/CD, cloud deployment |
+
+For **fleet deployment** (Phase 2+), API keys are the only scalable option. You can't run `claude login` on ephemeral workers. Set `ANTHROPIC_API_KEY` in the worker's environment and da_boss works without any code changes.
+
+**Cost consideration**: A single agent running continuously can use significant tokens. Compare your typical daily token usage against API pricing before switching from Max.
+
 ## Remote Access with Tailscale
 
 da_boss listens on localhost by default. To access it from your phone or other devices, use [Tailscale](https://tailscale.com):
