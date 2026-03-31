@@ -115,6 +115,18 @@ export const api = {
   getAuditLog: (limit?: number, offset?: number) =>
     request<AuditResponse>(`/audit?limit=${limit || 50}&offset=${offset || 0}`),
 
+  // Files
+  viewFile: (path: string) =>
+    request<{ path: string; name: string; size: number; ext: string; isJson: boolean; content: string }>(
+      `/file/view?path=${encodeURIComponent(path)}`
+    ),
+  listFiles: (dir: string, pattern?: string) =>
+    request<{ dir: string; files: Array<{ name: string; path: string; size: number; modified: string }> }>(
+      `/file/list?dir=${encodeURIComponent(dir)}${pattern ? `&pattern=${encodeURIComponent(pattern)}` : ""}`
+    ),
+  downloadFileUrl: (path: string) =>
+    `/api/file/download?path=${encodeURIComponent(path)}`,
+
   // Processes & queue
   getProcesses: () =>
     request<Record<string, { pids: number[]; descendants: number[] }>>("/processes"),

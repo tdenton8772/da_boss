@@ -41,6 +41,116 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  // ── File operations ───────────────────────────────────
+
+  // View file contents (no truncation)
+  router.get("/api/file/view", async (req, res) => {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ error: "path is required" });
+      return;
+    }
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const stat = await fs.stat(filePath);
+      if (stat.size > 50 * 1024 * 1024) {
+        res.status(400).json({ error: "File too large (>50MB). Use download instead." });
+        return;
+      }
+      const content = await fs.readFile(filePath, "utf-8");
+      const ext = path.extname(filePath).toLowerCase();
+      const isJson = ext === ".json" || ext === ".jsonl";
+      res.json({
+        path: filePath,
+        name: path.basename(filePath),
+        size: stat.size,
+        ext,
+        isJson,
+        content,
+      });
+    } catch (err) {
+      res.status(404).json({ error: "File not found or not readable" });
+    }
+  });
+
+  // Download file
+  router.get("/api/file/download", async (req, res) => {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ error: "path is required" });
+      return;
+    }
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      await fs.access(filePath);
+      const name = path.basename(filePath);
+      res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+      const { createReadStream } = await import("node:fs");
+      createReadStream(filePath).pipe(res);
+    } catch {
+      res.status(404).json({ error: "File not found" });
+    }
+  });
+
+  // Upload file to a directory
+  router.post("/api/file/upload", async (req, res) => {
+    const targetDir = req.query.dir as string;
+    const filename = req.query.name as string;
+    if (!targetDir || !filename) {
+      res.status(400).json({ error: "dir and name query params are required" });
+      return;
+    }
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const targetPath = path.join(targetDir, filename);
+      // Read raw body
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
+      await fs.writeFile(targetPath, Buffer.concat(chunks));
+      res.json({ ok: true, path: targetPath, size: Buffer.concat(chunks).length });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // List files in a directory (extends browse to include files)
+  router.get("/api/file/list", async (req, res) => {
+    const dir = (req.query.dir as string) || "/tmp";
+    const pattern = (req.query.pattern as string) || "";
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const files = entries
+        .filter((e) => e.isFile() && (!pattern || e.name.includes(pattern)))
+        .map((e) => ({
+          name: e.name,
+          path: path.join(dir, e.name),
+        }));
+      // Get sizes
+      const result = await Promise.all(
+        files.map(async (f) => {
+          try {
+            const stat = await fs.stat(f.path);
+            return { ...f, size: stat.size, modified: stat.mtime.toISOString() };
+          } catch {
+            return { ...f, size: 0, modified: "" };
+          }
+        })
+      );
+      result.sort((a, b) => b.modified.localeCompare(a.modified));
+      res.json({ dir, files: result });
+    } catch {
+      res.status(400).json({ error: "Cannot read directory" });
+    }
+  });
+
   // ── Process & queue info ──────────────────────────────
   router.get("/api/processes", async (_req, res) => {
     res.json(await manager.getProcessInfo());

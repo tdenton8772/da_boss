@@ -9,6 +9,7 @@ import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { ArrowLeft } from "lucide-react";
+import { FileBrowser } from "../components/FileBrowser";
 
 interface AgentData {
   id: string;
@@ -299,6 +300,11 @@ export function AgentDetail() {
           ))}
         </div>
       )}
+
+      {/* File Browser */}
+      <div className="mb-4">
+        <FileBrowser defaultDir={agent.cwd} />
+      </div>
 
       {/* Messages */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
