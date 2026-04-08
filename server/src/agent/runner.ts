@@ -335,7 +335,10 @@ export class AgentRunner {
               resultText = result;
             } else if (typeof result === "object" && result !== null) {
               const r = result as Record<string, unknown>;
-              resultText = r.stdout as string || r.output as string || r.content as string || JSON.stringify(result).substring(0, 4000);
+              const stdout = typeof r.stdout === "string" ? r.stdout : "";
+              const output = typeof r.output === "string" ? r.output : "";
+              const content = typeof r.content === "string" ? r.content : "";
+              resultText = stdout || output || content || JSON.stringify(result).substring(0, 4000);
             }
             if (resultText && resultText.length > 0) {
               const preview = resultText.length > 2000 ? resultText.substring(0, 2000) + "\n..." : resultText;

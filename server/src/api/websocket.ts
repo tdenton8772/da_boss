@@ -7,6 +7,7 @@ import { logger } from "../utils/logger.js";
 interface Client {
   ws: WebSocket;
   subscriptions: Set<string>;
+  alive: boolean;
 }
 
 export function setupWebSocket(
@@ -16,10 +17,29 @@ export function setupWebSocket(
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<Client>();
 
+  // Ping all clients every 30s to keep connections alive
+  const pingInterval = setInterval(() => {
+    for (const client of clients) {
+      if (!client.alive) {
+        client.ws.terminate();
+        clients.delete(client);
+        continue;
+      }
+      client.alive = false;
+      client.ws.ping();
+    }
+  }, 30_000);
+
+  wss.on("close", () => clearInterval(pingInterval));
+
   wss.on("connection", (ws) => {
-    const client: Client = { ws, subscriptions: new Set() };
+    const client: Client = { ws, subscriptions: new Set(), alive: true };
     clients.add(client);
     logger.info("WebSocket client connected");
+
+    ws.on("pong", () => {
+      client.alive = true;
+    });
 
     ws.on("message", (raw) => {
       try {
