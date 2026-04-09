@@ -132,6 +132,10 @@ export const api = {
     request<Record<string, { pids: number[]; descendants: number[] }>>("/processes"),
   getQueue: () =>
     request<Record<string, number>>("/queue"),
+  getAgentQueue: (id: string) =>
+    request<{ messages: string[] }>(`/agents/${id}/queue`),
+  clearAgentQueue: (id: string) =>
+    request<{ ok: boolean; cleared: number }>(`/agents/${id}/clear-queue`, { method: "POST" }),
   killAll: () =>
     request<{ ok: boolean; killed: number; orphans: number }>("/agents/kill-all", { method: "POST" }),
 

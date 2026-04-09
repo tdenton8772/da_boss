@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -10,10 +10,27 @@ export interface Message {
 
 export function MessageStream({ messages }: { messages: Message[] }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
 
+  // Detect if user has scrolled up from bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      setUserScrolledUp(!atBottom);
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Only auto-scroll if user is at the bottom
+  useEffect(() => {
+    if (!userScrolledUp) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages.length, userScrolledUp]);
 
   if (messages.length === 0) {
     return (
@@ -24,7 +41,7 @@ export function MessageStream({ messages }: { messages: Message[] }) {
   }
 
   return (
-    <div className="space-y-2 overflow-y-auto max-h-[60vh] p-2">
+    <div ref={containerRef} className="space-y-2 overflow-y-auto max-h-[60vh] p-2">
       {messages.map((msg, i) => (
         <div key={i} className="text-sm">
           <div className="flex items-center gap-2 mb-0.5">

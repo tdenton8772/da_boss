@@ -321,6 +321,20 @@ export class AgentManager {
     return info;
   }
 
+  /** Clear queued messages for an agent. */
+  clearQueue(agentId: string): number {
+    const queue = this.inputQueues.get(agentId);
+    if (!queue) return 0;
+    const count = queue.length;
+    queue.length = 0;
+    return count;
+  }
+
+  /** Get queued messages for a specific agent. */
+  getAgentQueue(agentId: string): string[] {
+    return this.inputQueues.get(agentId) || [];
+  }
+
   /** Get subagent info for an agent. */
   getSubagents(agentId: string): import("./runner.js").SubagentInfo[] {
     const runner = this.runners.get(agentId);

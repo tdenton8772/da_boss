@@ -10,6 +10,7 @@ import { ControlBar } from "../components/ControlBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { ArrowLeft } from "lucide-react";
 import { FileBrowser } from "../components/FileBrowser";
+import { QueuePanel } from "../components/QueuePanel";
 
 interface AgentData {
   id: string;
@@ -40,13 +41,11 @@ export function AgentDetail() {
   const [instructionsDirty, setInstructionsDirty] = useState(false);
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
-  const [queuedCount, setQueuedCount] = useState(0);
   const subscribedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (!id) return;
     api.getSubagents(id).then(setSubagents).catch(() => {});
-    api.getQueue().then((q) => setQueuedCount(q[id!] || 0)).catch(() => {});
     api
       .getAgent(id)
       .then((a) => {
@@ -118,7 +117,13 @@ export function AgentDetail() {
       }
 
       if (event.type === "agent:token_usage" && event.agentId === id) {
-        refresh();
+        // Update cost inline without full refresh to avoid disrupting user input
+        setAgent((prev) => {
+          if (!prev) return prev;
+          const usage = event as { costUsd?: number; totalCostUsd?: number };
+          const newCost = usage.totalCostUsd ?? prev.total_cost_usd ?? 0;
+          return { ...prev, total_cost_usd: newCost };
+        });
       }
 
       if (
@@ -281,11 +286,7 @@ export function AgentDetail() {
       {/* Controls */}
       <div className="mb-4">
         <ControlBar agentId={agent.id} state={agent.state} onAction={refresh} onDelete={() => navigate("/")} />
-        {queuedCount > 0 && (
-          <div className="mt-2 px-3 py-1.5 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-amber-300">
-            {queuedCount} message{queuedCount !== 1 ? "s" : ""} queued — waiting for agent to be ready
-          </div>
-        )}
+        <QueuePanel agentId={agent.id} />
       </div>
 
       {/* Subagents */}

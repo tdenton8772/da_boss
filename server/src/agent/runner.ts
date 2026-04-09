@@ -128,6 +128,7 @@ export class AgentRunner {
     this.transitionState(agent, "running");
     queries.updateAgentState(this.agentId, "running", {
       started_at: new Date().toISOString(),
+      error_message: null,
     });
 
     const permissionHandler = createPermissionHandler(
@@ -374,10 +375,11 @@ export class AgentRunner {
         // Handle result — turn completed
         if ("type" in msg && msg.type === "result") {
           const result = msg as {
+            subtype?: string;
             result?: string;
             total_cost_usd?: number;
             is_error?: boolean;
-            error?: string;
+            errors?: string[];
             session_id?: string;
           };
 
@@ -386,8 +388,8 @@ export class AgentRunner {
             this._sessionId = sessionId;
           }
 
-          if (result.is_error) {
-            const errMsg = result.error || result.result || "Unknown error";
+          if (result.is_error || result.subtype?.startsWith("error_")) {
+            const errMsg = result.errors?.join("; ") || result.result || "Unknown error";
             if (errMsg.toLowerCase().includes("too long") || errMsg.toLowerCase().includes("too large")) {
               this.handleError(
                 "Session too large to resume — use Compact & Resume or Fresh Start below.",

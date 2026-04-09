@@ -160,6 +160,16 @@ export function createRouter(manager: AgentManager): Router {
     res.json(manager.getQueueInfo());
   });
 
+  router.post("/api/agents/:id/clear-queue", (req, res) => {
+    const cleared = manager.clearQueue(req.params.id);
+    res.json({ ok: true, cleared });
+  });
+
+  router.get("/api/agents/:id/queue", (req, res) => {
+    const queue = manager.getAgentQueue(req.params.id);
+    res.json({ messages: queue });
+  });
+
   // ── Subagents ────────────────────────────────────────
   router.get("/api/agents/:id/subagents", (req, res) => {
     res.json(manager.getSubagents(req.params.id));
