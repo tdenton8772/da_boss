@@ -137,6 +137,9 @@ CLAUDE_PATH=             # path to claude CLI (default: ~/.local/bin/claude)
 - **Agent templates** — 6 built-in templates (Implementer, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer) with pre-filled prompts and settings
 - Real-time message streaming via WebSocket
 - **Enhanced permission system** — auto-approves 15+ safe tools including `AskUserQuestion`, `WebFetch`, `Task`, `Skill`, etc. with **beautiful permission dialog** showing formatted tool input (syntax-highlighted Bash commands, file diffs, etc.)
+- **Model-aware cost tracking** — uses SDK `modelUsage.costUSD` for accurate per-model costs (Opus/Sonnet/Haiku), no estimation
+- **Usage widget** — account-wide rate limits from Anthropic OAuth API (5-hour, weekly per-model) plus local per-model token breakdown from `~/.claude/stats-cache.json` with in/out split bars
+- **Queue management** — view, inspect, and clear queued messages per agent via UI panel and API (`GET /api/agents/:id/queue`, `POST /api/agents/:id/clear-queue`)
 - Token budget management with priority-based enforcement
 - **Settings page** — budget configuration, server info, logout, audit log viewer
 - **Dashboard search/filter/sort** — search by name/prompt, filter by status, sort by date/name/cost/status
@@ -154,10 +157,10 @@ CLAUDE_PATH=             # path to claude CLI (default: ~/.local/bin/claude)
 
 ## What's In Progress / Known Issues
 
-- **TypeScript build issues** — strict mode and missing type definitions causing build failures, but functionality is complete
 - Supervisor is hybrid (rules + single Claude call) — could be upgraded to a full agent with tool access to inspect work, run tests, verify output
 - Session compaction costs $1-2 per run on large sessions
 - Can't import a live session (the one you're currently talking to)
+- **Usage tracking is local-only** — `stats-cache.json` only covers this machine; phone/desktop/remote agents not included. Anthropic OAuth API provides account-wide rate limit percentages but no per-model breakdown on the 5-hour window. Admin Usage API requires API key which Claude Max accounts don't have.
 
 ## Next Steps for Full Fleet Management
 

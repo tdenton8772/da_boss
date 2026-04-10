@@ -1,5 +1,8 @@
 import { Router } from "express";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { logger } from "../utils/logger.js";
 
 const OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
@@ -15,6 +18,7 @@ interface OAuthCreds {
 }
 
 interface UsageData {
+  [key: string]: unknown;
   five_hour: { utilization: number; resets_at: string } | null;
   seven_day: { utilization: number; resets_at: string } | null;
   seven_day_sonnet: { utilization: number; resets_at: string } | null;
@@ -29,6 +33,7 @@ interface UsageData {
     subscriptionType: string | null;
     rateLimitTier: string | null;
   };
+  local: ReturnType<typeof buildLocalSummary> | null;
   fetched_at: string;
 }
 
@@ -164,15 +169,22 @@ function getAccountInfo(creds: OAuthCreds): UsageData["account"] {
 let cachedEmail: string | null = null;
 
 async function fetchUsage(): Promise<UsageData | null> {
+  // Always attach fresh local stats
+  const attachLocal = (data: UsageData | null): UsageData | null => {
+    if (!data) return null;
+    const localStats = readStatsCache();
+    return { ...data, local: localStats ? buildLocalSummary(localStats) : null };
+  };
+
   // Return cache if fresh
   if (cachedUsage && Date.now() - lastFetchAt < CACHE_TTL_MS) {
-    return cachedUsage;
+    return attachLocal(cachedUsage);
   }
 
   const auth = await getValidToken();
   if (!auth) {
     logger.warn("No valid OAuth token available for usage fetch");
-    return cachedUsage;
+    return attachLocal(cachedUsage);
   }
 
   try {
@@ -187,10 +199,11 @@ async function fetchUsage(): Promise<UsageData | null> {
 
     if (!res.ok) {
       logger.warn({ status: res.status }, "Usage API returned non-OK");
-      return cachedUsage;
+      return attachLocal(cachedUsage);
     }
 
     const data = await res.json();
+    logger.info({ rawUsageKeys: Object.keys(data), rawUsage: JSON.stringify(data).substring(0, 2000) }, "Raw usage API response");
     const account = getAccountInfo(auth.creds);
 
     // Get email once
@@ -206,13 +219,12 @@ async function fetchUsage(): Promise<UsageData | null> {
     }
     account.email = cachedEmail;
 
+    const localStats = readStatsCache();
     cachedUsage = {
-      five_hour: data.five_hour || null,
-      seven_day: data.seven_day || null,
-      seven_day_sonnet: data.seven_day_sonnet || null,
-      extra_usage: data.extra_usage || null,
+      ...data,
       account,
       fetched_at: new Date().toISOString(),
+      local: localStats ? buildLocalSummary(localStats) : null,
     };
     lastFetchAt = Date.now();
 
@@ -222,11 +234,61 @@ async function fetchUsage(): Promise<UsageData | null> {
       extra_usage: data.extra_usage?.utilization,
     }, "Usage data fetched");
 
-    return cachedUsage;
+    return attachLocal(cachedUsage);
   } catch (err) {
     logger.error({ err }, "Failed to fetch usage data");
-    return cachedUsage;
+    return attachLocal(cachedUsage);
   }
+}
+
+function readStatsCache(): {
+  modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>;
+  dailyModelTokens: Array<{ date: string; tokensByModel: Record<string, number> }>;
+  totalSessions: number;
+  totalMessages: number;
+} | null {
+  try {
+    const cachePath = join(homedir(), ".claude", "stats-cache.json");
+    logger.info({ cachePath }, "Reading stats cache");
+    const raw = readFileSync(cachePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    logger.info({ keys: Object.keys(parsed), hasModelUsage: "modelUsage" in parsed }, "Stats cache loaded");
+    return parsed;
+  } catch (err) {
+    logger.error({ err }, "Failed to read stats cache");
+    return null;
+  }
+}
+
+function buildLocalSummary(stats: NonNullable<ReturnType<typeof readStatsCache>>) {
+  const models: Record<string, { input: number; output: number; cacheRead: number; cacheCreate: number }> = {};
+  for (const [model, u] of Object.entries(stats.modelUsage || {})) {
+    models[model] = {
+      input: u.inputTokens,
+      output: u.outputTokens,
+      cacheRead: u.cacheReadInputTokens,
+      cacheCreate: u.cacheCreationInputTokens,
+    };
+  }
+
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const recent = (stats.dailyModelTokens || []).filter(
+    (d) => new Date(d.date) >= sevenDaysAgo
+  );
+  const recentByModel: Record<string, number> = {};
+  for (const day of recent) {
+    for (const [model, tokens] of Object.entries(day.tokensByModel)) {
+      recentByModel[model] = (recentByModel[model] || 0) + tokens;
+    }
+  }
+
+  return {
+    allTime: models,
+    last7Days: recentByModel,
+    totalSessions: stats.totalSessions,
+    totalMessages: stats.totalMessages,
+  };
 }
 
 export function createUsageRouter(): Router {

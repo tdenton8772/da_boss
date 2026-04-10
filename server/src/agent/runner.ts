@@ -299,25 +299,24 @@ export class AgentRunner {
             }
           }
 
-          // Track token usage
+          // Track token usage per-message for live cost updates
           if ("message" in msg && msg.message && "usage" in msg.message) {
-            const usage = msg.message.usage as {
-              input_tokens?: number;
-              output_tokens?: number;
-              cache_read_input_tokens?: number;
-              cache_creation_input_tokens?: number;
-            };
-            if (usage.input_tokens || usage.output_tokens) {
-              const estimatedCost =
-                ((usage.input_tokens || 0) * 0.000003 +
-                  (usage.output_tokens || 0) * 0.000015);
+            const m = msg.message as unknown as { model?: string; usage?: Record<string, number> };
+            const usage = m.usage || {};
+            const input = usage.input_tokens || 0;
+            const output = usage.output_tokens || 0;
+            if (input || output) {
+              const model = m.model || "";
+              const pricing = model.includes("opus") ? { i: 15, o: 75 }
+                : model.includes("haiku") ? { i: 0.25, o: 1.25 }
+                : { i: 3, o: 15 };
+              const cost = (input * pricing.i + output * pricing.o) / 1_000_000;
               this.budgetManager.recordUsage(
                 this.agentId,
-                usage.input_tokens || 0,
-                usage.output_tokens || 0,
+                input, output,
                 usage.cache_read_input_tokens || 0,
                 usage.cache_creation_input_tokens || 0,
-                estimatedCost
+                cost
               );
             }
           }
@@ -381,7 +380,36 @@ export class AgentRunner {
             is_error?: boolean;
             errors?: string[];
             session_id?: string;
+            usage?: { input_tokens?: number; output_tokens?: number };
+            modelUsage?: Record<string, {
+              inputTokens: number;
+              outputTokens: number;
+              cacheReadInputTokens: number;
+              cacheCreationInputTokens: number;
+              costUSD: number;
+            }>;
           };
+
+          // Record accurate usage from SDK result
+          if (result.modelUsage) {
+            for (const [model, mu] of Object.entries(result.modelUsage)) {
+              this.budgetManager.recordUsage(
+                this.agentId,
+                mu.inputTokens,
+                mu.outputTokens,
+                mu.cacheReadInputTokens,
+                mu.cacheCreationInputTokens,
+                mu.costUSD
+              );
+              logger.info({
+                agentId: this.agentId,
+                model,
+                inputTokens: mu.inputTokens,
+                outputTokens: mu.outputTokens,
+                costUSD: mu.costUSD,
+              }, "Usage recorded from SDK result");
+            }
+          }
 
           if (result.session_id) {
             sessionId = result.session_id;
