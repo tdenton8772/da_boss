@@ -9,16 +9,16 @@ export function TokenBudgetBar({
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">Token Budget</h3>
+      <h3 className="text-sm font-medium text-gray-300 mb-3">Usage Limits</h3>
       <div className="space-y-3">
         <BudgetMeter
-          label="Daily"
+          label="5-hour window"
           spent={budget.daily_spend_usd}
           total={budget.config.daily_budget_usd}
           percent={budget.daily_percent}
         />
         <BudgetMeter
-          label="Monthly"
+          label="Weekly"
           spent={budget.monthly_spend_usd}
           total={budget.config.monthly_budget_usd}
           percent={budget.monthly_percent}
@@ -53,7 +53,7 @@ function BudgetMeter({
       <div className="flex justify-between text-xs text-gray-400 mb-1">
         <span>{label}</span>
         <span>
-          ${spent.toFixed(2)} / ${total.toFixed(2)}
+          {spent.toFixed(0)}% used / {total.toFixed(0)}% limit
         </span>
       </div>
       <div className="h-2 bg-gray-800 rounded-full overflow-hidden">

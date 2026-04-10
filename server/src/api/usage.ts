@@ -41,6 +41,29 @@ let cachedUsage: UsageData | null = null;
 let lastFetchAt = 0;
 const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
+// Tokens consumed locally since the last successful OAuth refresh.
+// Used for predictive utilization between server-side refreshes.
+let tokensSinceRefresh = 0;
+// Calibration: tokens per 1% of 5-hour utilization. Learned from observed deltas.
+let tokensPerPct5h = 50_000; // initial guess; refined on each refresh via EMA
+let prevRefreshSnapshot: { fivehourPct: number; tokensConsumed: number } | null = null;
+
+export function recordTokensConsumed(tokens: number): void {
+  if (tokens > 0) tokensSinceRefresh += tokens;
+}
+
+/** Effective utilization = cached OAuth value + predicted delta from local consumption. */
+export function getEffectiveUtilization(): { fivehour: number; sevenday: number } {
+  const cached5h = (cachedUsage?.five_hour as { utilization?: number } | null)?.utilization ?? 0;
+  const cached7d = (cachedUsage?.seven_day as { utilization?: number } | null)?.utilization ?? 0;
+  if (tokensPerPct5h <= 0) return { fivehour: cached5h, sevenday: cached7d };
+  const predictedDeltaPct = tokensSinceRefresh / tokensPerPct5h;
+  return {
+    fivehour: Math.min(150, cached5h + predictedDeltaPct),
+    sevenday: Math.min(150, cached7d + predictedDeltaPct / 35), // 5h ≈ 1/35 of a week
+  };
+}
+
 function readKeychainCreds(): OAuthCreds | null {
   try {
     const raw = execSync(
@@ -228,10 +251,25 @@ async function fetchUsage(): Promise<UsageData | null> {
     };
     lastFetchAt = Date.now();
 
+    // Calibrate tokensPerPct5h: how many tokens did 1% of utilization cost between refreshes?
+    const newPct = data.five_hour?.utilization ?? 0;
+    if (prevRefreshSnapshot && tokensSinceRefresh > 0) {
+      const deltaPct = newPct - prevRefreshSnapshot.fivehourPct;
+      if (deltaPct > 0.5) {
+        const observed = tokensSinceRefresh / deltaPct;
+        // Exponential moving average — weight new observation 30%
+        tokensPerPct5h = 0.7 * tokensPerPct5h + 0.3 * observed;
+        logger.info({ deltaPct, tokens: tokensSinceRefresh, observed, ema: tokensPerPct5h }, "Calibrated tokensPerPct5h");
+      }
+    }
+    prevRefreshSnapshot = { fivehourPct: newPct, tokensConsumed: tokensSinceRefresh };
+    tokensSinceRefresh = 0;
+
     logger.info({
       five_hour: data.five_hour?.utilization,
       seven_day: data.seven_day?.utilization,
       extra_usage: data.extra_usage?.utilization,
+      tokensPerPct5h,
     }, "Usage data fetched");
 
     return attachLocal(cachedUsage);

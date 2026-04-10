@@ -189,39 +189,44 @@ export function Settings() {
         </div>
       </div>
 
-      {/* Budget Configuration */}
+      {/* Usage Limits */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
         <h2 className="flex items-center gap-2 text-lg font-medium text-gray-200 mb-4">
           <DollarSign size={20} />
-          Budget Configuration
+          Usage Limits
         </h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Set the % of your Anthropic plan utilization at which agents will be paused. Predicted from cached OAuth data + local token tracking.
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Daily Budget (USD)</label>
+            <label className="block text-sm text-gray-400 mb-2">5-hour limit (%)</label>
             <input
               type="number"
-              step="0.01"
+              step="1"
               min="0"
+              max="100"
               value={dailyBudget}
               onChange={(e) => setDailyBudget(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 focus:outline-none focus:border-blue-500"
             />
             <div className="text-xs text-gray-600 mt-1">
-              Current spend: ${budget.daily_spend_usd.toFixed(2)} ({budget.daily_percent.toFixed(1)}%)
+              Current 5h utilization: {budget.daily_spend_usd.toFixed(0)}%
             </div>
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-2">Monthly Budget (USD)</label>
+            <label className="block text-sm text-gray-400 mb-2">Weekly limit (%)</label>
             <input
               type="number"
-              step="0.01"
+              step="1"
               min="0"
+              max="100"
               value={monthlyBudget}
               onChange={(e) => setMonthlyBudget(e.target.value)}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 focus:outline-none focus:border-blue-500"
             />
             <div className="text-xs text-gray-600 mt-1">
-              Current spend: ${budget.monthly_spend_usd.toFixed(2)} ({budget.monthly_percent.toFixed(1)}%)
+              Current weekly utilization: {budget.monthly_spend_usd.toFixed(0)}%
             </div>
           </div>
         </div>

@@ -115,6 +115,8 @@ export class AgentRunner {
     // Budget check
     const canAllocate = this.budgetManager.canAllocate(agent.priority);
     if (!canAllocate.allowed) {
+      // Surface the budget block as an error event so the user sees it
+      this.handleError(`Budget blocked: ${canAllocate.reason}`, agent.sdk_session_id);
       throw new Error(`Budget denied: ${canAllocate.reason}`);
     }
 

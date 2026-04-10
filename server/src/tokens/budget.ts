@@ -3,6 +3,7 @@ import * as queries from "../db/queries.js";
 import type { BudgetStatus } from "../types/token.js";
 import type { PriorityTier } from "../types/agent.js";
 import type { ServerEvent } from "../types/events.js";
+import { getEffectiveUtilization, recordTokensConsumed } from "../api/usage.js";
 import { logger } from "../utils/logger.js";
 
 export class TokenBudgetManager {
@@ -25,6 +26,9 @@ export class TokenBudgetManager {
       costUsd
     );
 
+    // Feed predictive utilization tracking
+    recordTokensConsumed(inputTokens + outputTokens);
+
     const agentTotal = queries.getAgentTotalCost(agentId);
 
     const event: ServerEvent = {
@@ -43,30 +47,17 @@ export class TokenBudgetManager {
   canAllocate(priority: PriorityTier): { allowed: boolean; reason?: string } {
     const status = this.getStatus();
 
-    // Emergency: over 110% daily
-    if (status.daily_percent >= 110) {
-      return { allowed: false, reason: "Daily budget exceeded (emergency)" };
+    // 5-hour window (treated as "daily" in the legacy field name)
+    if (status.daily_percent >= 100) {
+      return { allowed: false, reason: `5-hour usage at ${status.daily_percent.toFixed(0)}% of your ${status.config.daily_budget_usd}% threshold` };
     }
-
-    // Over 100%: only high priority
-    if (status.daily_percent >= 100 && priority !== "high") {
-      return {
-        allowed: false,
-        reason: "Daily budget reached, only high priority agents allowed",
-      };
-    }
-
-    // Over 90%: only high and medium
     if (status.daily_percent >= 90 && priority === "low") {
-      return {
-        allowed: false,
-        reason: "Approaching daily budget limit, low priority agents paused",
-      };
+      return { allowed: false, reason: `5-hour usage at ${status.daily_percent.toFixed(0)}%, low priority agents paused` };
     }
 
-    // Monthly check
+    // 7-day window (treated as "monthly" in the legacy field name)
     if (status.monthly_percent >= 100) {
-      return { allowed: false, reason: "Monthly budget exceeded" };
+      return { allowed: false, reason: `Weekly usage at ${status.monthly_percent.toFixed(0)}% of your ${status.config.monthly_budget_usd}% threshold` };
     }
 
     return { allowed: true };
@@ -101,29 +92,25 @@ export class TokenBudgetManager {
 
   getStatus(): BudgetStatus {
     const budgetConfig = queries.getBudgetConfig();
-    const dailySpend = queries.getDailySpend();
-    const monthlySpend = queries.getMonthlySpend();
+    // Reinterpret budget config as percentage thresholds.
+    // daily_budget_usd  = 5-hour utilization threshold (default 80)
+    // monthly_budget_usd = weekly utilization threshold (default 80)
+    const util = getEffectiveUtilization();
+    const fiveHourThreshold = budgetConfig.daily_budget_usd;
+    const sevenDayThreshold = budgetConfig.monthly_budget_usd;
+
+    // daily_percent = how close we are to the threshold (5h util / threshold * 100)
+    const dailyPercent = fiveHourThreshold > 0 ? (util.fivehour / fiveHourThreshold) * 100 : 0;
+    const monthlyPercent = sevenDayThreshold > 0 ? (util.sevenday / sevenDayThreshold) * 100 : 0;
 
     return {
       config: budgetConfig,
-      daily_spend_usd: dailySpend,
-      monthly_spend_usd: monthlySpend,
-      daily_remaining_usd: Math.max(
-        0,
-        budgetConfig.daily_budget_usd - dailySpend
-      ),
-      monthly_remaining_usd: Math.max(
-        0,
-        budgetConfig.monthly_budget_usd - monthlySpend
-      ),
-      daily_percent:
-        budgetConfig.daily_budget_usd > 0
-          ? (dailySpend / budgetConfig.daily_budget_usd) * 100
-          : 0,
-      monthly_percent:
-        budgetConfig.monthly_budget_usd > 0
-          ? (monthlySpend / budgetConfig.monthly_budget_usd) * 100
-          : 0,
+      daily_spend_usd: util.fivehour,
+      monthly_spend_usd: util.sevenday,
+      daily_remaining_usd: Math.max(0, fiveHourThreshold - util.fivehour),
+      monthly_remaining_usd: Math.max(0, sevenDayThreshold - util.sevenday),
+      daily_percent: dailyPercent,
+      monthly_percent: monthlyPercent,
     };
   }
 

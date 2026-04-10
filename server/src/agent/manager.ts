@@ -134,7 +134,8 @@ export class AgentManager {
 
     // Just mark as waiting_input — no process starts until user sends a message.
     // This matches terminal behavior: resume loads the session, shows the prompt.
-    queries.updateAgentState(agentId, "waiting_input");
+    // Clear any stale error_message from the previous interruption.
+    queries.updateAgentState(agentId, "waiting_input", { error_message: null });
     this.eventBus.emit("server-event", {
       type: "agent:state_changed",
       agentId,
@@ -202,8 +203,19 @@ export class AgentManager {
 
   /** Process queued messages one at a time. Only runs if agent is ready. */
   private drainQueue(agentId: string): void {
-    // Already draining — the current turn's finally will call us again
-    if (this.draining.has(agentId)) return;
+    // Already draining — the current turn's finally will call us again.
+    // Self-heal: if the draining flag is set but no runner is actually running,
+    // it's stuck from a prior crashed drain. Clear it.
+    if (this.draining.has(agentId)) {
+      const runner = this.runners.get(agentId);
+      if (!runner || !runner.running) {
+        logger.warn({ agentId }, "drainQueue: stuck draining flag with no active runner, clearing");
+        this.draining.delete(agentId);
+      } else {
+        logger.info({ agentId }, "drainQueue: already draining, bailing");
+        return;
+      }
+    }
 
     const queue = this.inputQueues.get(agentId);
     if (!queue || queue.length === 0) return;
@@ -377,10 +389,12 @@ export class AgentManager {
    * Also kill any orphaned claude processes from the previous run.
    */
   async restoreAgents(): Promise<void> {
+    // Only `running` and `waiting_permission` agents had active work that got
+    // interrupted. `waiting_input` agents weren't doing anything — leave them
+    // alone so they're immediately ready to receive the next message.
     const interrupted = queries.getAgentsByState(
       "running",
-      "waiting_permission",
-      "waiting_input"
+      "waiting_permission"
     );
     for (const agent of interrupted) {
       logger.info(
