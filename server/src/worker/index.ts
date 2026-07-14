@@ -639,12 +639,23 @@ async function main(): Promise<void> {
   // those commits — but pushing them would relaunder the reviewed (possibly
   // untrusted, fork) code onto origin under the reviewer's name. Reviews are read-only.
   const isReviewAgent = !!agent.review_of_agent_id;
-  if (agent.repo_url && !hadError && !scripted && !isReviewAgent) {
+  // A DEPLOY-MANAGER agent (linked to a pipeline_run) runs a command — it is NOT a
+  // code change. It must never push, open a PR, or be treated as a reviewable
+  // change: its run is tracked by the deploy's exit code (recorder sidecar), not a
+  // branch. It also writes /work/.daboss/{log,exit} into the repo tree, which a
+  // push would turn into a junk PR (the orphan-review bug).
+  const isDeployAgent = !!agent.pipeline_run_id;
+  if (agent.repo_url && !hadError && !scripted && !isReviewAgent && !isDeployAgent) {
     const branch = agent.branch || `daboss/${AGENT_ID}`;
     // Only push if the branch has commits beyond its base. A deploy/no-op agent
     // that changed nothing shouldn't litter the remote with an empty branch.
     let shouldPush = true;
     try {
+      // The pipeline recorder writes /work/.daboss/{log,exit,artifact} INSIDE the
+      // repo tree at runtime. Never let `git add -A` stage those pod-local
+      // artifacts into a commit/PR. Repo-local exclude — leaves tracked files
+      // (e.g. the committed .daboss/pipeline.yaml) untouched.
+      await writeFile(`${WORK_DIR}/.git/info/exclude`, "\n.daboss/log\n.daboss/exit\n.daboss/artifact\n", { flag: "a" }).catch(() => {});
       await execFileAsync("git", ["-C", WORK_DIR, "add", "-A"], { timeout: 60_000 });
       const { stdout: status } = await execFileAsync("git", ["-C", WORK_DIR, "status", "--porcelain"], { timeout: 30_000 });
       if (status.trim()) {

@@ -10,6 +10,7 @@ import type { EventEmitter } from "node:events";
 import * as queries from "../db/queries.js";
 import { maybeAutoTest } from "../pipeline/autochain.js";
 import { applyReviewResult } from "../pipeline/review-agent.js";
+import { reconcileDeployRun } from "../pipeline/deploy-agent.js";
 import { logger } from "../utils/logger.js";
 
 const TERMINAL_STATES = new Set(["completed", "verified", "failed", "aborted"]);
@@ -69,6 +70,9 @@ export function startLiveRelay(eventBus: EventEmitter): void {
         if (toState === "completed") void maybeAutoTest(ev.agent_id);
         // If a REVIEW agent just finished, parse its recommendation onto the PR.
         if (TERMINAL_STATES.has(toState)) void applyReviewResult(ev.agent_id).catch(() => {});
+        // If a DEPLOY-MANAGER agent finished, make sure its deploy run is
+        // reconciled (recorder normally does this; catches a pod that died).
+        if (TERMINAL_STATES.has(toState)) void reconcileDeployRun(ev.agent_id).catch(() => {});
       } else if (ev.type === "error") {
         eventBus.emit("server-event", { type: "agent:error", agentId: ev.agent_id, error: data.error });
       }
