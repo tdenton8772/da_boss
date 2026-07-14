@@ -6,12 +6,38 @@ import type {
   CreateAgentRequest,
 } from "../types/agent.js";
 import { AgentRunner } from "./runner.js";
+import { createAgentPod, deleteAgentPod, deleteAgentRemoteBranch, deleteUserWorkspacePvc } from "./pod-dispatcher.js";
 import { resolvePermissionRequest } from "./permissions.js";
 import { TokenBudgetManager } from "../tokens/budget.js";
 import { TaskMonitor } from "./task-monitor.js";
 import * as queries from "../db/queries.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
+
+function slugify(s: string, max = 40): string {
+  return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, max);
+}
+
+/** Reduce to a valid git ref: allowed chars, no // or leading/trailing junk. */
+function sanitizeBranch(b: string): string {
+  return (
+    b
+      .replace(/[^a-zA-Z0-9._/-]/g, "-")
+      .replace(/\.{2,}/g, ".")
+      .replace(/\/{2,}/g, "/")
+      .replace(/^[-/.]+|[-/.]+$/g, "") || "work"
+  );
+}
+
+/** Branch belongs to the work: type/username/issue-id-description (your convention).
+ *  issue_id keeps hyphens (Jira keys like PROJ-1234). */
+function buildBranchName(req: CreateAgentRequest, username?: string | null): string {
+  const type = (req.branch_type || "feat").toLowerCase().replace(/[^a-z]/g, "") || "feat";
+  const user = (username || "agent").replace(/[^a-zA-Z0-9._-]/g, "").toLowerCase() || "agent";
+  const issue = req.issue_id ? `${req.issue_id.trim().replace(/[^a-zA-Z0-9._-]/g, "")}-` : "";
+  const desc = slugify(req.name) || "task";
+  return sanitizeBranch(`${type}/${user}/${issue}${desc}`);
+}
 
 export class AgentManager {
   private runners = new Map<string, AgentRunner>();
@@ -42,7 +68,7 @@ export class AgentManager {
       queries.insertAgentEvent(agentId, "message", {
         role: "system",
         content: `Background task completed: ${outputFile}`,
-      });
+      }).catch((err) => logger.error({ agentId, error: err.message }, "Failed to log task-completed event"));
 
       // Resume the agent with the full notification (agent needs the details)
       this.resumeWithNotification(agentId, notification).catch((err) => {
@@ -51,9 +77,14 @@ export class AgentManager {
     });
   }
 
-  async createAgent(req: CreateAgentRequest): Promise<AgentRecord> {
+  async createAgent(
+    req: CreateAgentRequest,
+    createdByUserId?: string | null,
+    username?: string | null
+  ): Promise<AgentRecord> {
     const id = `ag_${nanoid(8)}`;
-    const agent = queries.insertAgent({
+    const branch = req.branch?.trim() ? sanitizeBranch(req.branch.trim()) : buildBranchName(req, username);
+    const agent = await queries.insertAgent({
       id,
       name: req.name,
       prompt: req.prompt,
@@ -62,15 +93,23 @@ export class AgentManager {
       priority: req.priority || "medium",
       permission_mode: req.permission_mode || "default",
       sdk_session_id: null,
-      model: req.model || "claude-sonnet-4-6",
+      model: req.model || "claude-sonnet-5",
       max_turns: req.max_turns || null,
       max_budget_usd: req.max_budget_usd || null,
       error_message: null,
       supervisor_instructions: req.supervisor_instructions || "",
       permission_policy: req.permission_policy || "auto",
+      created_by_user_id: createdByUserId ?? null,
+      repo_url: req.repo_url?.trim() || null,
+      repo_ref: req.repo_ref?.trim() || null,
+      branch,
+      service_account: req.service_account?.trim() || null,
+      worker_image: req.worker_image?.trim() || null,
+      // only mark adoption when a branch override was actually given
+      adopted_ref: req.branch?.trim() ? (req.adopted_ref?.trim() || branch) : null,
     });
 
-    queries.insertAgentEvent(id, "state_change", {
+    await queries.insertAgentEvent(id, "state_change", {
       from: null,
       to: "pending",
     });
@@ -80,8 +119,27 @@ export class AgentManager {
   }
 
   async startAgent(agentId: string): Promise<void> {
-    const agent = queries.getAgent(agentId);
+    const agent = await queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
+
+    // Pod mode: dispatch the agent to its own k8s pod (the worker takes over
+    // state/events from there). The boss holds no runner for it.
+    if (config.agentExecution === "pod") {
+      try {
+        await createAgentPod(agentId);
+        await queries.insertAgentEvent(agentId, "message", {
+          role: "system",
+          content: "Dispatched to its own pod (running on your Claude credential)…",
+        });
+        logger.info({ agentId }, "Dispatched agent to pod");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await queries.updateAgentState(agentId, "failed", { error_message: msg });
+        await queries.insertAgentEvent(agentId, "error", { error: msg });
+        throw err;
+      }
+      return;
+    }
 
     // Check concurrency limit
     const activeCount = this.getActiveCount();
@@ -118,15 +176,15 @@ export class AgentManager {
       await runner.pause();
     } else {
       // No runner but agent might be in a pausable state in DB
-      const agent = queries.getAgent(agentId);
+      const agent = await queries.getAgent(agentId);
       if (agent) {
-        queries.updateAgentState(agentId, "paused");
+        await queries.updateAgentState(agentId, "paused");
       }
     }
   }
 
   async resumeAgent(agentId: string): Promise<void> {
-    const agent = queries.getAgent(agentId);
+    const agent = await queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
     if (!agent.sdk_session_id) {
       throw new Error("Cannot resume agent without a session ID");
@@ -134,37 +192,61 @@ export class AgentManager {
 
     // Just mark as waiting_input — no process starts until user sends a message.
     // This matches terminal behavior: resume loads the session, shows the prompt.
-    queries.updateAgentState(agentId, "waiting_input");
+    await queries.updateAgentState(agentId, "waiting_input");
     this.eventBus.emit("server-event", {
       type: "agent:state_changed",
       agentId,
       state: "waiting_input",
       previousState: agent.state,
     });
-    queries.insertAgentEvent(agentId, "state_change", {
+    await queries.insertAgentEvent(agentId, "state_change", {
       from: agent.state,
       to: "waiting_input",
     });
     logger.info({ agentId }, "Agent resumed — waiting for input");
 
     // Drain any queued messages now that agent is ready
-    this.drainQueue(agentId);
+    await this.drainQueue(agentId);
   }
 
   async killAgent(agentId: string): Promise<void> {
+    // Pod mode: kill = delete the pod (the pod boundary IS the process tree).
+    if (config.agentExecution === "pod") {
+      await deleteAgentPod(agentId);
+      const agent = await queries.getAgent(agentId);
+      if (agent && !["completed", "failed", "aborted"].includes(agent.state)) {
+        await queries.updateAgentState(agentId, "aborted");
+        await queries.insertAgentEvent(agentId, "state_change", { from: agent.state, to: "aborted" });
+      }
+      return;
+    }
+
     const runner = this.runners.get(agentId);
     if (runner) {
       await runner.kill();
       this.runners.delete(agentId);
     } else {
-      const agent = queries.getAgent(agentId);
+      const agent = await queries.getAgent(agentId);
       if (agent) {
-        queries.updateAgentState(agentId, "aborted");
+        await queries.updateAgentState(agentId, "aborted");
       }
     }
   }
 
   async sendUrgent(agentId: string, message: string): Promise<boolean> {
+    // Pod mode: a running agent is steered mid-turn via the command bus — the
+    // worker interrupts its current turn and resumes the same session with this
+    // message (no pod kill). A non-running agent falls back to a fresh resume pod.
+    if (config.agentExecution === "pod") {
+      const agent = await queries.getAgent(agentId);
+      if (agent && ["running", "waiting_permission"].includes(agent.state)) {
+        await queries.insertAgentCommand(agentId, "steer", { message });
+        return true;
+      }
+      await this.sendInput(agentId, message);
+      return false;
+    }
+
     const runner = this.runners.get(agentId);
     if (!runner || !runner.running) {
       // Not running — fall back to queue
@@ -182,8 +264,23 @@ export class AgentManager {
   }
 
   async sendInput(agentId: string, message: string): Promise<void> {
-    const agent = queries.getAgent(agentId);
+    const agent = await queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
+
+    // Pod mode: a follow-up message = dispatch a fresh pod that resumes the
+    // session (restored from the shard) with this message as the turn prompt.
+    if (config.agentExecution === "pod") {
+      await queries.insertAgentEvent(agentId, "message", { role: "user", content: message });
+      try {
+        await createAgentPod(agentId, message);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await queries.updateAgentState(agentId, "failed", { error_message: msg });
+        await queries.insertAgentEvent(agentId, "error", { error: msg });
+        throw err;
+      }
+      return;
+    }
 
     if (!agent.sdk_session_id) {
       throw new Error("Cannot send input to agent without a session");
@@ -197,11 +294,13 @@ export class AgentManager {
     logger.info({ agentId, queueSize: this.inputQueues.get(agentId)!.length }, "Message queued");
 
     // Try to drain
-    this.drainQueue(agentId);
+    await this.drainQueue(agentId);
   }
 
   /** Process queued messages one at a time. Only runs if agent is ready. */
-  private drainQueue(agentId: string): void {
+  private async drainQueue(agentId: string): Promise<void> {
+    // Pod mode never runs agents in-process — input is dispatched via sendInput → pod.
+    if (config.agentExecution === "pod") return;
     // Already draining — the current turn's finally will call us again
     if (this.draining.has(agentId)) return;
 
@@ -209,7 +308,7 @@ export class AgentManager {
     if (!queue || queue.length === 0) return;
 
     // Check agent is ready for input
-    const agent = queries.getAgent(agentId);
+    const agent = await queries.getAgent(agentId);
     if (!agent) return;
     if (!agent.sdk_session_id) return;
 
@@ -221,7 +320,7 @@ export class AgentManager {
 
     // Transition failed/paused agents to waiting_input so runTurn can proceed
     if (agent.state === "failed" || agent.state === "paused") {
-      queries.updateAgentState(agentId, "waiting_input");
+      await queries.updateAgentState(agentId, "waiting_input");
     }
 
     // Check if a runner already exists (shouldn't, but guard against it)
@@ -255,14 +354,20 @@ export class AgentManager {
       }
       this.draining.delete(agentId);
       // Drain next message if any
-      this.drainQueue(agentId);
+      void this.drainQueue(agentId).catch(() => {});
     });
   }
 
   /** Resume an agent with a system notification (no user message emitted to UI). */
   private async resumeWithNotification(agentId: string, notification: string): Promise<void> {
-    const agent = queries.getAgent(agentId);
+    const agent = await queries.getAgent(agentId);
     if (!agent) return;
+
+    // Pod mode: resume by dispatching a fresh pod with the notification as input.
+    if (config.agentExecution === "pod") {
+      if (agent.sdk_session_id) await createAgentPod(agentId, notification).catch(() => {});
+      return;
+    }
     if (!agent.sdk_session_id) return;
     if (agent.state !== "waiting_input") return;
 
@@ -292,16 +397,69 @@ export class AgentManager {
         this.runners.delete(agentId);
       }
       this.draining.delete(agentId);
-      this.drainQueue(agentId);
+      void this.drainQueue(agentId).catch(() => {});
     });
   }
 
-  resolvePermission(
+  async resolvePermission(
     requestId: number,
     decision: "approved" | "denied",
     answer?: string
-  ): boolean {
+  ): Promise<boolean> {
     return resolvePermissionRequest(requestId, decision, this.eventBus, answer);
+  }
+
+  /**
+   * Offboard a user: tear down all of their agents (kill pod, delete remote
+   * branch, drop DB rows), reclaim their workspace shard, wipe their credential
+   * vault, and delete the user. Ordered so branch cleanup still has the user's
+   * git token, and the shard PVC delete removes every session at once (no
+   * per-agent cleanup pods needed). Best-effort per step — one failure doesn't
+   * strand the rest.
+   */
+  async offboardUser(
+    userId: string,
+    offboardedBy?: string
+  ): Promise<{ agentsRemoved: number; branchesDeleted: number }> {
+    const user = await queries.getUserById(userId);
+    const agents = await queries.getAgentsByUser(userId);
+    let branchesDeleted = 0;
+
+    for (const agent of agents) {
+      if (["running", "waiting_permission", "waiting_input"].includes(agent.state)) {
+        await this.killAgent(agent.id).catch((err) =>
+          logger.warn({ agentId: agent.id, err: String(err) }, "Offboard: kill failed")
+        );
+      }
+      const bc = await deleteAgentRemoteBranch(agent).catch(() => ({ deleted: false }));
+      if (bc.deleted) branchesDeleted++;
+      await queries.deleteAgent(agent.id);
+    }
+
+    // Reclaim the whole shard — takes all persisted sessions/mirrors with it.
+    if (config.agentExecution === "pod") {
+      await deleteUserWorkspacePvc(userId).catch((err) =>
+        logger.warn({ userId, err: String(err) }, "Offboard: PVC delete failed")
+      );
+    }
+
+    await queries.deleteUserCredential(userId);
+    await queries.deleteUserGitCredential(userId);
+
+    // Tombstone the identity so neither auth provider re-admits it (OIDC would
+    // otherwise re-provision on the next valid IdP token; local would allow
+    // re-registration). Recorded BEFORE the row is deleted so we have the keys.
+    if (user) {
+      await queries.recordOffboardedIdentity({
+        externalId: user.external_id,
+        email: user.email,
+        offboardedBy,
+      });
+    }
+    await queries.deleteUser(userId);
+
+    logger.info({ userId, agentsRemoved: agents.length, branchesDeleted }, "User offboarded");
+    return { agentsRemoved: agents.length, branchesDeleted };
   }
 
   getActiveCount(): number {
@@ -349,11 +507,11 @@ export class AgentManager {
     return info;
   }
 
-  getAllAgents(): AgentRecord[] {
+  async getAllAgents(): Promise<AgentRecord[]> {
     return queries.getAllAgents();
   }
 
-  getAgent(agentId: string): AgentRecord | undefined {
+  async getAgent(agentId: string): Promise<AgentRecord | undefined> {
     return queries.getAgent(agentId);
   }
 
@@ -363,7 +521,7 @@ export class AgentManager {
    * Also kill any orphaned claude processes from the previous run.
    */
   async restoreAgents(): Promise<void> {
-    const interrupted = queries.getAgentsByState(
+    const interrupted = await queries.getAgentsByState(
       "running",
       "waiting_permission",
       "waiting_input"
@@ -373,13 +531,21 @@ export class AgentManager {
         { agentId: agent.id, state: agent.state },
         "Marking interrupted agent as paused"
       );
-      queries.updateAgentState(agent.id, "paused", {
+      await queries.updateAgentState(agent.id, "paused", {
         error_message: "Server restarted - agent paused, resume manually",
       });
     }
 
-    // Kill orphaned claude processes from previous server run
-    await this.killOrphanedProcesses();
+    // Kill orphaned claude processes from a previous server run — but ONLY if the
+    // DB shows agents that were mid-flight. The sweep greps for ALL `claude`
+    // processes system-wide (it can't attribute PIDs across restarts), so on a
+    // fresh/empty DB there is nothing we could have orphaned and running it would
+    // SIGTERM unrelated interactive `claude` sessions and other da_boss instances.
+    if (interrupted.length > 0) {
+      await this.killOrphanedProcesses();
+    } else {
+      logger.info("No interrupted agents in DB — skipping orphan process sweep");
+    }
   }
 
   /**

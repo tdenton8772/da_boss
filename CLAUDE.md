@@ -5,21 +5,39 @@ A web-based manager for spawning, monitoring, and controlling multiple Claude Co
 ## Quick Start
 
 ```bash
-nvm use 22
-npm run dev          # starts server (:3847) + vite UI (:3848)
-npm run test         # 67 tests
-npm run build        # production build
-npm run install-service  # install as macOS launchd service
+npm run test         # 70 tests (offline, pg-mem)
+npm run build        # production build (server tsc + ui vite)
+npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
 
 Password is in `.env` (`AUTH_PASSWORD`).
+
+### Run in the local kind cluster (preferred — see "k8s-only" below)
+
+```bash
+# Postgres (once): applied to docker-desktop cluster, then port-forward for dev
+kubectl --context docker-desktop apply -f k8s/postgres.yaml
+kubectl --context docker-desktop -n daboss port-forward svc/postgres 5432:5432 &
+
+# control plane: build image (docker-desktop kind shares the local image store),
+# deploy, and reach the UI on :8080
+docker build -t da-boss:local .
+kubectl --context docker-desktop apply -f k8s/daboss.yaml
+kubectl --context docker-desktop -n daboss rollout restart deploy/daboss   # :latest-style tag
+kubectl --context docker-desktop -n daboss port-forward svc/daboss 8080:3847 &
+```
+
+**k8s-only:** don't run agent execution on the host — the runner's process
+management scans the host process table and can kill unrelated `claude` sessions.
+Inside a pod's PID namespace it can't. Run da_boss in kind. (Full agent-in-pod
+isolation is Phase 1.)
 
 ## Architecture
 
 ```
 UI (React/Vite :3848) → WebSocket + REST → Server (Express :3847) → Claude Agent SDK
                                               ↓
-                                           SQLite (da_boss.db)
+                                    Postgres (via node-pg, async)
                                               ↓
                                         Supervisor (cron 5min)
 ```
@@ -41,8 +59,9 @@ UI (React/Vite :3848) → WebSocket + REST → Server (Express :3847) → Claude
 | `api/discovery.ts` | Session discovery — scans `~/.claude/projects/`, lists sessions, imports into da_boss |
 | `api/websocket.ts` | WebSocket server — subscription-based event broadcasting to UI |
 | `api/auth.ts` | Session-based password auth |
-| `db/migrations.ts` | SQLite schema (2 migrations) |
-| `db/queries.ts` | All DB operations — typed, no raw SQL elsewhere |
+| `db/index.ts` | Postgres pool (node-pg) — `getPool()`, async `initDb()`, `withTx()`, `resetDb()` for tests |
+| `db/migrations.ts` | Postgres schema (3 migrations), async runner |
+| `db/queries.ts` | All DB operations — **async**, typed, parameterized (`$1`), no raw SQL elsewhere |
 | `utils/state-machine.ts` | Agent state transitions: pending→running→completed/failed/paused/waiting_* |
 | `utils/session-trim.ts` | Trims large session JSONL files for resumability |
 
@@ -65,7 +84,7 @@ UI (React/Vite :3848) → WebSocket + REST → Server (Express :3847) → Claude
 | `api.ts` | REST client + all TypeScript types |
 | `ws.ts` | WebSocket hook with auto-reconnect, queued sends |
 
-### Database Schema (SQLite)
+### Database Schema (Postgres)
 
 - `agents` — id, name, prompt, cwd, state, priority, permission_mode/policy, sdk_session_id, model, max_turns, max_budget_usd, supervisor_instructions, error_message, timestamps
 - `agent_events` — append-only event log per agent (state_change, message, tool_use, error)
@@ -110,13 +129,14 @@ Sessions live at `~/.claude/projects/{project-key}/{session-uuid}.jsonl`. The di
 
 ## Development Patterns
 
-- **Node 22 required** — `nvm use 22`
+- **Node 22 preferred** (Node 20 also works — the dev machine currently runs Homebrew Node 20)
 - **npm workspaces** — `server/` and `ui/` are workspace packages
 - **ESM throughout** — all imports use `.js` extensions
 - **TypeScript strict mode** — both server and UI
 - **Express 5** — uses `/{*splat}` for wildcards (not `*`)
 - **Vite proxies** `/api` and `/ws` to server in dev mode
-- **Tests**: `vitest` with in-memory SQLite per test via `resetDb()`
+- **Postgres** — `DATABASE_URL` env. Locally: PG runs in the docker-desktop k8s cluster (`k8s/postgres.yaml`, namespace `daboss`); `kubectl --context docker-desktop -n daboss port-forward svc/postgres 5432:5432`
+- **Tests**: `vitest` with **pg-mem** (in-memory Postgres) per test via `resetDb()` — offline, no live DB needed
 - **Tailwind v4** — CSS-first config, dark theme (gray-950/900/800)
 - **react-router v7** — `useParams()` returns `Record<string, string | undefined>`, no generic
 
@@ -125,6 +145,7 @@ Sessions live at `~/.claude/projects/{project-key}/{session-uuid}.jsonl`. The di
 ```
 AUTH_PASSWORD=...        # login password
 SESSION_SECRET=...       # express-session secret
+DATABASE_URL=            # postgres://daboss:...@localhost:5432/daboss (required)
 NTFY_TOPIC=              # ntfy.sh topic for push notifications (optional)
 PORT=3847                # server port
 ANTHROPIC_ADMIN_API_KEY= # for org-level usage tracking (optional)

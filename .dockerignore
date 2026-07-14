@@ -1,0 +1,17 @@
+# never copy host node_modules (mac-native binaries) — image runs npm ci itself
+node_modules
+**/node_modules
+# build outputs (rebuilt in the image)
+server/dist
+ui/dist
+**/*.tsbuildinfo
+# vcs / local / secrets
+.git
+.gitignore
+.env
+*.log
+claude_err.log
+# docs / scratch not needed at runtime
+*.md
+k8s
+scripts

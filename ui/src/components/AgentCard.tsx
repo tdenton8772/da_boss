@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { AgentWithTokens } from "../api";
+import { deriveStatus } from "../agentStatus";
 import {
   Play,
   Pause,
@@ -10,6 +11,8 @@ import {
   AlertTriangle,
   Loader,
   ShieldQuestion,
+  Rocket,
+  GitMerge,
 } from "lucide-react";
 
 const STATE_CONFIG: Record<
@@ -69,8 +72,28 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "bg-gray-800 text-gray-400",
 };
 
+const ICON_BY_KEY: Record<string, React.ReactNode> = {
+  pending: <Clock size={14} />,
+  running: <Loader size={14} className="animate-spin" />,
+  testing: <Loader size={14} className="animate-spin" />,
+  reviewing: <Loader size={14} className="animate-spin" />,
+  waiting_permission: <ShieldQuestion size={14} />,
+  waiting_input: <AlertTriangle size={14} />,
+  paused: <Pause size={14} />,
+  failed: <XCircle size={14} />,
+  aborted: <XCircle size={14} />,
+  verified: <CheckCircle size={14} />,
+  deployed: <Rocket size={14} />,
+  merged: <GitMerge size={14} />,
+  ready: <CheckCircle size={14} />,
+  done: <CheckCircle size={14} />,
+  fix: <AlertTriangle size={14} />,
+  hold: <AlertTriangle size={14} />,
+};
+
 export function AgentCard({ agent, processCount, queuedCount }: { agent: AgentWithTokens; processCount?: number; queuedCount?: number }) {
-  const stateInfo = STATE_CONFIG[agent.state] || STATE_CONFIG.pending;
+  const status = deriveStatus(agent);
+  const stateInfo = { label: status.label, color: status.color, icon: ICON_BY_KEY[status.key] || <Clock size={14} /> };
   const cost = agent.tokens.total_cost_usd;
 
   return (
@@ -80,7 +103,12 @@ export function AgentCard({ agent, processCount, queuedCount }: { agent: AgentWi
     >
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0">
-          <h3 className="text-gray-100 font-medium truncate">{agent.name}</h3>
+          <h3 className="text-gray-100 font-medium truncate">
+            {agent.name}
+            {agent.created_by_user_id === "usr_test_harness" && (
+              <span className="ml-2 text-[10px] uppercase text-amber-400 border border-amber-700/50 rounded px-1 py-0.5">test</span>
+            )}
+          </h3>
           <p className="text-gray-500 text-sm truncate">{agent.cwd}</p>
         </div>
         <span

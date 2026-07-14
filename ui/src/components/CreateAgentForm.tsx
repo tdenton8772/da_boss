@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
-import { api, type CreateAgentData, type AgentTemplate } from "../api";
-import { X, FolderOpen, LayoutTemplate } from "lucide-react";
-import { DirPicker } from "./DirPicker";
+import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef } from "../api";
+import { X, GitBranch, Loader, CheckCircle } from "lucide-react";
 
 export function CreateAgentForm({
   onCreated,
@@ -15,17 +14,56 @@ export function CreateAgentForm({
     prompt: "",
     cwd: "",
     priority: "medium",
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5",
+    repo_url: "",
+    repo_ref: "",
+    branch_type: "feat",
+    issue_id: "",
   });
   const [autoStart, setAutoStart] = useState(true);
-  const [showDirPicker, setShowDirPicker] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplate | null>(null);
+  // "Adopt an existing PR/branch": raw input, the resolved head branch, and status.
+  const [adopt, setAdopt] = useState("");
+  const [resolved, setResolved] = useState<ResolvedRef | null>(null);
+  const [adoptError, setAdoptError] = useState("");
+  const [resolving, setResolving] = useState(false);
+
+  // Resolve the typed PR/branch reference against the remote. Returns the resolved
+  // ref, or null (with adoptError set) if it doesn't validate. No-op when blank.
+  const resolveAdopt = async (): Promise<ResolvedRef | null> => {
+    const ref = adopt.trim();
+    if (!ref) { setResolved(null); setAdoptError(""); return null; }
+    if (!form.repo_url?.trim()) { setAdoptError("Enter a Repo URL first."); setResolved(null); return null; }
+    setResolving(true);
+    setAdoptError("");
+    try {
+      const r = await api.resolveRef(form.repo_url.trim(), ref);
+      setResolved(r);
+      return r;
+    } catch (err) {
+      setResolved(null);
+      setAdoptError(err instanceof Error ? err.message : "Couldn't resolve that reference.");
+      return null;
+    } finally {
+      setResolving(false);
+    }
+  };
 
   useEffect(() => {
     api.getTemplates().then(setTemplates).catch(() => {});
+    // Prefill repo from the admin-configured default (only if the user hasn't typed one).
+    api.getSettings().then((s) => {
+      if (s.default_repo_url || s.default_repo_ref) {
+        setForm((f) => ({
+          ...f,
+          repo_url: f.repo_url || s.default_repo_url || "",
+          repo_ref: f.repo_ref || s.default_repo_ref || "",
+        }));
+      }
+    }).catch(() => {});
   }, []);
 
   const applyTemplate = (template: AgentTemplate) => {
@@ -43,9 +81,19 @@ export function CreateAgentForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    // If an adopt reference was typed, it must resolve before we can submit —
+    // re-resolve if the input changed since the last check (resolved cleared).
+    let adoption = resolved;
+    if (adopt.trim() && !adoption) {
+      adoption = await resolveAdopt();
+      if (!adoption) { setError("Fix the 'Adopt existing PR or branch' field before creating."); return; }
+    }
     setSubmitting(true);
     try {
-      const agent = (await api.createAgent(form)) as { id: string };
+      const payload: CreateAgentData = adoption
+        ? { ...form, branch: adoption.branch, adopted_ref: adoption.adoptedRef }
+        : form;
+      const agent = (await api.createAgent(payload)) as { id: string };
       if (autoStart) {
         await api.startAgent(agent.id);
       }
@@ -97,7 +145,7 @@ export function CreateAgentForm({
                   type="button"
                   onClick={() => {
                     setSelectedTemplate(null);
-                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: "claude-sonnet-4-6" });
+                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: "claude-sonnet-5" });
                   }}
                   className="text-xs text-gray-500 hover:text-gray-400"
                 >
@@ -126,34 +174,93 @@ export function CreateAgentForm({
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Working Directory</label>
-            <div className="flex gap-2">
+            <label className="block text-sm text-gray-400 mb-1">
+              Repo URL <span className="text-gray-600">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={form.repo_url}
+              onChange={(e) => setForm((f) => ({ ...f, repo_url: e.target.value }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
+              placeholder="https://github.com/org/repo.git"
+            />
+            <div className="flex gap-2 mt-2">
               <input
                 type="text"
-                value={form.cwd}
-                onChange={(e) => setForm((f) => ({ ...f, cwd: e.target.value }))}
-                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
-                placeholder="/path/to/repo"
-                required
+                value={form.repo_ref}
+                onChange={(e) => setForm((f) => ({ ...f, repo_ref: e.target.value }))}
+                className="w-40 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
+                placeholder="base ref (main)"
               />
-              <button
-                type="button"
-                onClick={() => setShowDirPicker(!showDirPicker)}
-                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
-                title="Browse"
+              <select
+                value={form.branch_type}
+                onChange={(e) => setForm((f) => ({ ...f, branch_type: e.target.value }))}
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-2 text-gray-100 text-sm focus:outline-none focus:border-blue-500"
               >
-                <FolderOpen size={16} />
-              </button>
+                {["feat", "fix", "chore", "docs", "refactor", "test"].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={form.issue_id}
+                onChange={(e) => setForm((f) => ({ ...f, issue_id: e.target.value }))}
+                className="w-28 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
+                placeholder="issue #"
+              />
             </div>
-            {showDirPicker && (
-              <div className="mt-2">
-                <DirPicker
-                  value={form.cwd}
-                  onChange={(path) => setForm((f) => ({ ...f, cwd: path }))}
-                  onClose={() => setShowDirPicker(false)}
+            <p className="text-xs text-gray-600 mt-1">
+              {resolved ? (
+                <>
+                  Branch: <code className="text-amber-300">{resolved.branch}</code>{" "}
+                  — <span className="text-amber-300">adopted</span>, overrides the computed name above.
+                </>
+              ) : (
+                <>
+                  Branch: <code className="text-gray-400">{form.branch_type}/&lt;you&gt;/{form.issue_id ? `${form.issue_id}-` : ""}&lt;name&gt;</code>{" "}
+                  — belongs to the work, continued across runs.
+                </>
+              )}
+            </p>
+
+            {/* Adopt an existing PR/branch — a full branch override + findOpenPr */}
+            <div className="mt-3 border-t border-gray-800 pt-3">
+              <label className="block text-sm text-gray-400 mb-1">
+                <GitBranch size={13} className="inline mr-1 -mt-0.5" />
+                Adopt existing PR or branch <span className="text-gray-600">(optional)</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={adopt}
+                  onChange={(e) => { setAdopt(e.target.value); setResolved(null); setAdoptError(""); }}
+                  onBlur={resolveAdopt}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
+                  placeholder="PR #17, a PR URL, or fix/audit-alerts"
                 />
+                <button
+                  type="button"
+                  onClick={resolveAdopt}
+                  disabled={resolving || !adopt.trim()}
+                  className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 border border-gray-700 rounded text-gray-300 text-sm whitespace-nowrap"
+                >
+                  {resolving ? <Loader size={14} className="animate-spin" /> : "Check"}
+                </button>
               </div>
-            )}
+              {resolved && (
+                <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
+                  <CheckCircle size={12} />
+                  {resolved.kind === "pr"
+                    ? <>Adopting <span className="font-medium">PR #{resolved.prNumber}</span> → branch <code className="text-green-300">{resolved.branch}</code>{resolved.prTitle ? ` — ${resolved.prTitle}` : ""}</>
+                    : <>Adopting branch <code className="text-green-300">{resolved.branch}</code></>}
+                </p>
+              )}
+              {adoptError && <p className="text-xs text-red-400 mt-1">{adoptError}</p>}
+              <p className="text-xs text-gray-600 mt-1">
+                The agent pushes onto this existing branch instead of creating one. It must push at
+                least one commit for PR adoption to take effect (the PR is picked up on push).
+              </p>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -182,8 +289,8 @@ export function CreateAgentForm({
                 }
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm"
               >
-                <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                <option value="claude-opus-4-6">Opus 4.6</option>
+                <option value="claude-sonnet-5">Sonnet 5</option>
+                <option value="claude-opus-4-8">Opus 4.8</option>
                 <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
               </select>
             </div>

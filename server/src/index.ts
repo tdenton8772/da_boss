@@ -7,18 +7,21 @@ import express from "express";
 import session from "express-session";
 import helmet from "helmet";
 import { config } from "./config.js";
-import { getDb, closeDb } from "./db/index.js";
+import { initDb, closeDb } from "./db/index.js";
 import { AgentManager } from "./agent/manager.js";
 import { createRouter } from "./api/router.js";
 import { createDiscoveryRouter } from "./api/discovery.js";
 import { createUsageRouter } from "./api/usage.js";
 import { setupWebSocket } from "./api/websocket.js";
 import { startSupervisor, stopSupervisor, runSupervisorOnce } from "./supervisor/index.js";
+import { reapFinishedAgentPods } from "./agent/pod-dispatcher.js";
+import { startLiveRelay } from "./api/live-relay.js";
+import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
   // Initialize database
-  getDb();
+  await initDb();
   logger.info("Database initialized");
 
   // Event bus for WebSocket broadcasting
@@ -31,6 +34,13 @@ async function main() {
 
   // Express app
   const app = express();
+
+  // Behind the GKE ingress + nginx (TLS terminated upstream): trust the proxy
+  // chain so req.ip is the real client (correct login rate-limiting + audit IPs)
+  // and req.secure reflects the original HTTPS. TRUST_PROXY hop count is
+  // configurable (GCE LB + nginx = 2); default off for local/direct.
+  const trustProxy = process.env.TRUST_PROXY;
+  if (trustProxy) app.set("trust proxy", /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy === "true" ? true : trustProxy);
 
   // Security headers
   app.use(
@@ -92,8 +102,20 @@ async function main() {
   // WebSocket
   setupWebSocket(server, eventBus);
 
-  // Start supervisor cron
-  startSupervisor(manager);
+  // Live relay: rebroadcast agent events written by worker pods to the UI
+  startLiveRelay(eventBus);
+
+  // Pipeline completion → gate the linked agent's PR (comment + ready-on-green)
+  startPipelineCompletionListener(manager);
+
+  // Supervisor: in pod mode the orchestrator pod owns the monitoring loop;
+  // otherwise (host/dev) run it in-process.
+  if (config.agentExecution === "pod") {
+    logger.info("Agent execution: pod mode — supervisor runs in the orchestrator pod; starting agent-pod reaper");
+    setInterval(() => { void reapFinishedAgentPods(); }, 10_000);
+  } else {
+    startSupervisor(manager);
+  }
 
   // Start server
   server.listen(config.port, () => {

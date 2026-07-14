@@ -6,7 +6,7 @@ import { AgentCard } from "../components/AgentCard";
 import { TokenBudgetBar } from "../components/TokenBudgetBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { CreateAgentForm } from "../components/CreateAgentForm";
-import { Plus, Wifi, WifiOff, Settings, Search, Filter, Skull } from "lucide-react";
+import { Plus, Wifi, WifiOff, Settings, Search, Filter, Skull, ClipboardCheck } from "lucide-react";
 import { UsageWidget } from "../components/UsageWidget";
 
 export function Dashboard() {
@@ -19,13 +19,22 @@ export function Dashboard() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [processInfo, setProcessInfo] = useState<Record<string, { pids: number[]; descendants: number[] }>>({});
   const [queueInfo, setQueueInfo] = useState<Record<string, number>>({});
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [reviewCount, setReviewCount] = useState(0);
+  const [showTest, setShowTest] = useState(false);
+  const [showSubagents, setShowSubagents] = useState(false);
 
   const refresh = useCallback(() => {
-    api.getAgents().then(setAgents).catch(() => {});
+    api.getAgents(showTest, showSubagents).then(setAgents).catch(() => {});
     api.getBudget().then(setBudget).catch(() => {});
     api.getPendingPermissions().then(setPermissions).catch(() => {});
     api.getProcesses().then(setProcessInfo).catch(() => {});
     api.getQueue().then(setQueueInfo).catch(() => {});
+    api.getReviews().then((r) => setReviewCount(r.changes.length + r.deploys.length)).catch(() => {});
+  }, [showTest, showSubagents]);
+
+  useEffect(() => {
+    api.me().then((r) => setIsAdmin(r.user?.role === "admin")).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -33,6 +42,11 @@ export function Dashboard() {
     const interval = setInterval(refresh, 10_000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const pruneTest = () => {
+    if (!confirm("Prune ALL test-harness agents? Deletes their branches, session storage, and rows.")) return;
+    api.pruneTestAgents().then((r) => { alert(`Pruned ${r.pruned} test agent(s).`); refresh(); }).catch(() => alert("Prune failed"));
+  };
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
@@ -99,6 +113,17 @@ export function Dashboard() {
           </span>
         </div>
         <div className="flex gap-2">
+          <Link
+            to="/reviews"
+            className="relative flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
+            title="Reviews — changes & deploys awaiting a decision"
+          >
+            <ClipboardCheck size={16} />
+            Reviews
+            {reviewCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-gray-950 text-[10px] font-bold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{reviewCount}</span>
+            )}
+          </Link>
           <Link
             to="/settings"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded"
@@ -186,6 +211,21 @@ export function Dashboard() {
             <option value="failed">Failed</option>
             <option value="paused">Paused</option>
           </select>
+          <label className="flex items-center gap-2 text-sm text-gray-400 whitespace-nowrap px-2" title="Review + deploy agents are nested under the change they belong to — reachable from the change's page. Toggle to list them here too.">
+            <input type="checkbox" checked={showSubagents} onChange={(e) => setShowSubagents(e.target.checked)} className="rounded bg-gray-800 border-gray-700" />
+            Show review/deploy agents
+          </label>
+          {isAdmin && (
+            <label className="flex items-center gap-2 text-sm text-gray-400 whitespace-nowrap px-2">
+              <input type="checkbox" checked={showTest} onChange={(e) => setShowTest(e.target.checked)} className="rounded bg-gray-800 border-gray-700" />
+              Show test agents
+            </label>
+          )}
+          {isAdmin && showTest && (
+            <button onClick={pruneTest} className="px-3 py-2 bg-gray-800 hover:bg-red-700 border border-gray-700 rounded text-gray-300 text-sm whitespace-nowrap">
+              Prune test agents
+            </button>
+          )}
         </div>
         {(searchTerm || filterStatus !== "all") && (
           <div className="mt-3 text-sm text-gray-400">

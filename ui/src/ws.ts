@@ -31,7 +31,8 @@ export function useWebSocket(onEvent: EventHandler) {
     function connect() {
       if (closed) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      const prefix = import.meta.env.BASE_URL.replace(/\/$/, ""); // "" or "/daboss"
+      ws = new WebSocket(`${protocol}//${window.location.host}${prefix}/ws`);
       wsRef.current = ws;
 
       ws.onopen = () => setConnected(true);
