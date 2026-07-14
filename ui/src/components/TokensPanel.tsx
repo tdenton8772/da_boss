@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Key, Copy, Check, Trash2, Plus } from "lucide-react";
 import { api, type ApiTokenSummary } from "../api";
 
-const ALL_SCOPES = ["mcp", "agent:create", "review:create", "review:read"] as const;
+const ALL_SCOPES = ["mcp", "agent:create", "agent:read", "agent:control", "review:create", "review:read"] as const;
 
 export function TokensPanel() {
   const [tokens, setTokens] = useState<ApiTokenSummary[]>([]);
