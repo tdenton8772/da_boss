@@ -218,7 +218,7 @@ export const api = {
       changes: Array<{
         id: string; name: string; owner_email: string | null; repo_url: string | null;
         pr_number: number | null; pr_url: string | null; branch: string | null;
-        recommendation: string | null; review: string | null; state: string;
+        recommendation: string | null; review: string | null; state: string; landing: boolean;
       }>;
       deploys: Array<{
         id: string; phase: string; repo_url: string | null; git_ref: string | null;
@@ -325,6 +325,7 @@ export interface AgentWithTokens {
   pr_number: number | null;
   recommendation: string | null;
   testing?: boolean;
+  landing?: boolean;
   deployed_by_agent_id?: string | null;
   review_of_agent_id?: string | null;
   adopted_ref?: string | null;

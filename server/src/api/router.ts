@@ -480,11 +480,13 @@ export function createRouter(manager: AgentManager): Router {
     }
     const cost = await queries.getAgentTotalCost(agent.id);
     const testing = await queries.hasActiveTestRuns(agent.id);
+    // A land in flight (rebase+retest after a Merge click) → keep Merge disabled.
+    const landing = await queries.hasLandInFlight(agent.id);
     // Link to the review agent (its live trace) so the UI can offer "watch the review".
     const review_agent_id = await queries.getReviewAgentIdFor(agent.id);
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, review_agent_id, shipped });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, review_agent_id, shipped });
   });
 
   // Queue the standard review agent on demand (not just auto-after-tests). Same

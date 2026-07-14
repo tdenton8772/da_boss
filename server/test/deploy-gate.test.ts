@@ -75,3 +75,33 @@ describe("getDeployGateTests — pre-deploy test runs tagged to a deploy", () =>
     expect(await queries.getDeployGateTests("run_none")).toEqual([]);
   });
 });
+
+describe("hasLandInFlight — keeps the Merge button disabled during a land", () => {
+  it("is true while a land_on_pass run is non-terminal, false once it's terminal", async () => {
+    await queries.insertAgent({ ...baseAgent, id: "ag_land", state: "completed" });
+    await queries.setAgentPullRequest("ag_land", `${REPO}/pull/5`, 5);
+    expect(await queries.hasLandInFlight("ag_land")).toBe(false);
+
+    await queries.insertPipelineRun({ id: "run_land", repoUrl: REPO, ref: "feat/x", phase: "test", status: "running", agentId: "ag_land", landOnPass: true });
+    expect(await queries.hasLandInFlight("ag_land")).toBe(true);
+
+    await queries.updatePipelineRun("run_land", { status: "failed", completed: true });
+    expect(await queries.hasLandInFlight("ag_land")).toBe(false);
+  });
+
+  it("a normal (non-land) test run does NOT count as a land in flight", async () => {
+    await queries.insertAgent({ ...baseAgent, id: "ag_pr", state: "completed" });
+    await queries.insertPipelineRun({ id: "run_prtest", repoUrl: REPO, ref: "feat/x", phase: "test", status: "running", agentId: "ag_pr", landOnPass: false });
+    expect(await queries.hasLandInFlight("ag_pr")).toBe(false);
+  });
+
+  it("getReviewQueueChanges surfaces the landing flag per change", async () => {
+    await queries.insertAgent({ ...baseAgent, id: "ag_q", state: "completed" });
+    await queries.setAgentPullRequest("ag_q", `${REPO}/pull/8`, 8);
+    await queries.setAgentReview("ag_q", "ok", "merge");
+    await queries.insertPipelineRun({ id: "run_qland", repoUrl: REPO, ref: "feat/x", phase: "test", status: "pending", agentId: "ag_q", landOnPass: true });
+
+    const row = (await queries.getReviewQueueChanges()).find((c) => c.id === "ag_q");
+    expect(row?.landing).toBe(true);
+  });
+});
