@@ -11,7 +11,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { deleteRemoteBranch, normalizeGitUrl, authedUrl } from "../utils/git.js";
 import type { AgentRecord } from "../types/agent.js";
 import { config } from "../config.js";
-import { resolvePreset } from "./sizing.js";
+import { resolvePresetConfigured } from "./sizing.js";
 import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
@@ -149,8 +149,8 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
   if (!agent.created_by_user_id) {
     throw new Error("Agent has no owner — cannot resolve a Claude credential");
   }
-  // T-shirt size → pod resources (defaults to M when unset).
-  const agentPreset = resolvePreset(agent.size);
+  // T-shirt size → pod resources (admin-configured presets; defaults to M when unset).
+  const agentPreset = await resolvePresetConfigured(agent.size);
   const cred = await queries.getUserCredential(agent.created_by_user_id);
   if (!cred) {
     throw new Error("No Claude credential on file for you — add one in Settings before running an agent");

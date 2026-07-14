@@ -6,6 +6,7 @@ import { CredentialPanel } from "../components/CredentialPanel";
 import { GitCredentialPanel } from "../components/GitCredentialPanel";
 import { SecretsPanel } from "../components/SecretsPanel";
 import { AdminUsersPanel } from "../components/AdminUsersPanel";
+import { SizePresetsPanel } from "../components/SizePresetsPanel";
 import { SupervisorCredentialPanel } from "../components/SupervisorCredentialPanel";
 import { DefaultRepoPanel } from "../components/DefaultRepoPanel";
 import { ScenarioPanel } from "../components/ScenarioPanel";
@@ -178,6 +179,9 @@ export function Settings() {
         <AdminUsersPanel />
         <DefaultRepoPanel />
       </div>
+
+      {/* Admin: pod t-shirt size presets (self-gates via the admin-only endpoint) */}
+      <SizePresetsPanel />
 
       {/* Pipeline builder + runs/approval gate */}
       <div className="mb-6 space-y-6">
