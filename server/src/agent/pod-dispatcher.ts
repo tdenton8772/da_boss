@@ -96,7 +96,12 @@ async function upsertAgentCredSecret(name: string, data: Record<string, string>)
   } catch (err: unknown) {
     const e = err as { code?: number; statusCode?: number };
     if (e.code === 409 || e.statusCode === 409) {
-      await api().replaceNamespacedSecret({ name, namespace: NAMESPACE, body });
+      // Already exists (a re-dispatch). We hold only get/create/delete on secrets
+      // — NOT update/patch — so replace() 403s. Delete + recreate instead: it works
+      // within minimal RBAC AND guarantees a fresh credential (replace would have
+      // risked leaving a stale secret in place if the token had rotated).
+      await api().deleteNamespacedSecret({ name, namespace: NAMESPACE });
+      await api().createNamespacedSecret({ namespace: NAMESPACE, body });
     } else {
       throw err;
     }
