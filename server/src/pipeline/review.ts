@@ -10,7 +10,8 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
-import { getDiffSummary } from "../forge/github.js";
+import { getDiffSummary, getFileContents } from "../forge/github.js";
+import { parsePipeline, PIPELINE_PATH } from "./config.js";
 import { resolveSupervisorCredentialEnv } from "../supervisor/credential.js";
 import { sendNotification } from "../notifications/ntfy.js";
 import { withClaudeLock } from "../utils/claude-lock.js";
@@ -109,41 +110,50 @@ export async function produceReview(runId: string): Promise<void> {
     return;
   }
 
-  let task = `Deploy phase '${run.phase}' on ${run.git_ref ?? "the target ref"}.`;
   let diff = "";
-  let testInfo = "";
+  let deployCommand = "";
 
-  if (run.agent_id) {
+  // A git token from the run's owner (or the linked agent's owner).
+  const ownerId = run.created_by_user_id || (run.agent_id ? (await queries.getAgent(run.agent_id))?.created_by_user_id : null) || null;
+  let token: string | null = null;
+  if (ownerId) {
+    const gc = await queries.getUserGitCredential(ownerId);
+    if (gc) token = await getCipher().decrypt({ ciphertext: gc.ciphertext, nonce: gc.nonce, keyRef: gc.key_ref });
+  }
+
+  // THE DEPLOY COMMAND — what the deploy actually does. This is the axis the review
+  // must reason on: a changed file the command doesn't build/apply/run is inert.
+  if (token && run.repo_url && run.git_ref) {
+    try {
+      const yaml = await getFileContents(run.repo_url, PIPELINE_PATH, run.git_ref, token);
+      if (yaml) deployCommand = parsePipeline(yaml).phases[run.phase]?.command || "";
+    } catch { /* command unknown → the prompt handles it */ }
+  }
+
+  // The changes being shipped (the linked change's diff vs its base).
+  if (run.agent_id && token) {
     const agent = await queries.getAgent(run.agent_id);
-    if (agent) {
-      task = agent.prompt;
-      if (agent.repo_url && agent.branch && agent.created_by_user_id) {
-        const gc = await queries.getUserGitCredential(agent.created_by_user_id);
-        if (gc) {
-          const token = await getCipher().decrypt({ ciphertext: gc.ciphertext, nonce: gc.nonce, keyRef: gc.key_ref });
-          diff = (await getDiffSummary(agent.repo_url, agent.repo_ref || "main", agent.branch, token).catch(() => null)) || "";
-        }
-      }
-      const t = await queries.getLatestTestRunForAgent(run.agent_id);
-      if (t) testInfo = `Test phase '${t.phase}': ${t.status}${t.exit_code !== null ? ` (exit ${t.exit_code})` : ""}.\n${(t.artifact || "").slice(0, 3000)}`;
+    if (agent?.repo_url && agent.branch) {
+      diff = (await getDiffSummary(agent.repo_url, agent.repo_ref || "main", agent.branch, token).catch(() => null)) || "";
     }
   }
 
-  const prompt = `You are a senior engineer gating a deploy. Decide whether this change is safe to ship, and give a clear recommendation.
+  const prompt = `You are gating a PRODUCTION DEPLOY. Your ONLY job is to catch what will ACTUALLY BREAK — not code style, not test coverage, not speculative "this wasn't verified" worries.
 
-ORIGINAL TASK:
-${task.slice(0, 2000)}
+THE DEPLOY COMMAND (this is ALL the deploy does):
+${deployCommand || "(command unknown — assume it applies k8s manifests and rolls deployments using already-built images)"}
 
-TEST RESULTS:
-${testInfo || "(no test-agent results found for this change)"}
+Reason strictly from that command. Ask: which of the changed files does this command actually build, apply, run, or reference? A change to a file the command does NOT touch — e.g. a Dockerfile that isn't built by this deploy, application code not exercised by it, a lockfile no build here consumes — is INERT and CANNOT break this deploy. Do NOT hold on inert changes; call them out as inert and move on.
 
-DIFF:
-${diff.slice(0, 30_000) || "(diff unavailable)"}
+Recommend HOLD/REJECT ONLY for a KNOWN break in the deploy's execution path: a malformed manifest it applies, a missing image/secret/env it needs, a broken DB migration it runs, a Service/Ingress/port/exposure change it ships, or a command/script it invokes that will fail. If nothing in the changes is in the deploy's execution path, APPROVE.
+
+CHANGES BEING SHIPPED (diff):
+${diff.slice(0, 30_000) || "(diff unavailable — flag that you couldn't see the changes)"}
 
 Respond EXACTLY in this format:
 RECOMMENDATION: <approve|hold|reject>
-ASSESSMENT: <2-4 sentences: what the change does and its risk>
-CONCERNS: <bullet list of specific issues to check, or "none">`;
+ASSESSMENT: <what the deploy command does, and which (if any) changed files are actually in its path>
+CONCERNS: <specific KNOWN breaks in the deploy path, or "none — remaining changes are inert for this deploy">`;
 
   try {
     const result = await withClaudeLock(async () => {
