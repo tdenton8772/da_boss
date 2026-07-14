@@ -75,11 +75,26 @@ export async function maybeProposeDeploy(agent: { id: string; repo_url: string |
  *  terminal, run the deploy review with the results in hand. Idempotent —
  *  produceReview only acts while the deploy run is pending_review. */
 async function maybeGateDeployReview(deployRunId: string): Promise<void> {
+  const run = await queries.getPipelineRun(deployRunId);
+  if (!run || run.status !== "pending_review") return; // not awaiting the gate (or already reviewed)
   const tests = await queries.getDeployGateTests(deployRunId);
   if (tests.length === 0) return;
   if (tests.some((t) => t.status !== "passed" && t.status !== "failed")) return; // still running
   await produceReview(deployRunId).catch((e) =>
     logger.warn({ deployRunId, err: e instanceof Error ? e.message : String(e) }, "Deploy review after gate tests failed"));
+  // Close the loop in the trace: the "running tests on main first" message had no
+  // follow-up, so the deploy card just appeared with no explanation.
+  if (run.agent_id) {
+    const reviewed = await queries.getPipelineRun(deployRunId);
+    const anyFailed = tests.some((t) => t.status === "failed");
+    const summary = tests.map((t) => `${t.status === "passed" ? "✅" : "❌"} \`${t.phase}\``).join("  ");
+    await queries.insertAgentEvent(run.agent_id, "message", {
+      role: "system",
+      content: anyFailed
+        ? `⛔ Pre-deploy tests on \`main\` FAILED (${summary}) — deploy blocked; the review is REJECT. See the deploy card in Reviews.`
+        : `✅ Pre-deploy tests on \`main\` passed (${summary}) — deploy review: **${(reviewed?.recommendation || "hold").toUpperCase()}**. It's now in Reviews for your approval.`,
+    }).catch(() => {});
+  }
 }
 
 async function gatePr(runId: string): Promise<void> {

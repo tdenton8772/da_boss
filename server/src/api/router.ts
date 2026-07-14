@@ -482,11 +482,16 @@ export function createRouter(manager: AgentManager): Router {
     const testing = await queries.hasActiveTestRuns(agent.id);
     // A land in flight (rebase+retest after a Merge click) → keep Merge disabled.
     const landing = await queries.hasLandInFlight(agent.id);
+    // A deploy already in flight for this repo+ref (proposed → gate tests → review →
+    // awaiting approval) → keep the Deploy button disabled so it isn't re-proposed.
+    const deploy_pending = agent.repo_url
+      ? !!(await queries.getActiveDeployRun(agent.repo_url, agent.repo_ref || "main"))
+      : false;
     // Link to the review agent (its live trace) so the UI can offer "watch the review".
     const review_agent_id = await queries.getReviewAgentIdFor(agent.id);
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, review_agent_id, shipped });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, review_agent_id, shipped });
   });
 
   // Queue the standard review agent on demand (not just auto-after-tests). Same
