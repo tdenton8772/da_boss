@@ -130,7 +130,23 @@ export async function produceReview(runId: string): Promise<void> {
     } catch { /* command unknown → the prompt handles it */ }
   }
 
-  // The changes being shipped (the linked change's diff vs its base).
+  // PRE-DEPLOY TEST GATE — the repo's tests run on `main` itself (the merged
+  // result). A red here is a hard block (enforced below), not just advice.
+  const gateTests = await queries.getDeployGateTests(runId);
+  const anyTestFailed = gateTests.some((t) => t.status === "failed");
+  const testSummary = gateTests.length
+    ? gateTests.map((t) => `${t.status === "passed" ? "✅" : "❌"} ${t.phase} (exit ${t.exit_code ?? "?"})${t.status === "failed" ? `\n${(t.artifact || t.log || "").slice(-1500)}` : ""}`).join("\n")
+    : "(the repo declares no test phase — no automated test ran on main)";
+
+  // THE CHANGES THIS DEPLOY SHIPS — each with its original task + prior review, so
+  // the gate can validate intent and confirm earlier concerns, not just the diff.
+  const changes = run.repo_url ? await queries.getPendingDeployChanges(run.repo_url) : [];
+  const changeSummary = changes.length
+    ? changes.map((c) => `• ${c.pr_number ? `PR #${c.pr_number}` : c.name} — "${c.name}"\n  Task: ${(c.prompt || "").slice(0, 600)}\n  Prior review: ${c.recommendation ? c.recommendation.toUpperCase() : "n/a"}${c.review ? ` — ${c.review.replace(/\n+/g, " ").slice(0, 700)}` : ""}`).join("\n\n")
+    : "(no linked change manifest — judge from the diff alone)";
+
+  // The diff of the change that triggered this deploy (vs its base). Other shipped
+  // changes are summarised above via their prior reviews.
   if (run.agent_id && token) {
     const agent = await queries.getAgent(run.agent_id);
     if (agent?.repo_url && agent.branch) {
@@ -138,22 +154,30 @@ export async function produceReview(runId: string): Promise<void> {
     }
   }
 
-  const prompt = `You are gating a PRODUCTION DEPLOY. Your ONLY job is to catch what will ACTUALLY BREAK — not code style, not test coverage, not speculative "this wasn't verified" worries.
+  const prompt = `You are the FINAL GATE before a PRODUCTION DEPLOY. A human approves next — give them a clear-eyed verdict. Judge THREE things:
+
+1) WILL IT BREAK THE DEPLOY? Reason strictly from the deploy command below. A changed file the command does NOT build/apply/run/reference is INERT and cannot break this deploy — call it out as inert, don't hold on it. HOLD/REJECT only for a real break in the execution path: a malformed manifest it applies, a missing image/secret/env it needs, a broken DB migration it runs, a Service/Ingress/port/exposure change it ships, or a script it invokes that will fail.
+
+2) DOES THE CODE DO WHAT IT'S SUPPOSED TO? For each shipped change, check the diff against its stated Task and its prior review. Flag intent drift (it does something other than its task) or prior-review concerns that look unaddressed.
+
+3) ANY OTHER MAJOR PROBLEM in the changed code? Correctness bugs, security issues (exposure, auth, injection, secrets), or breaking changes to shared behaviour. Ignore style/nits.
 
 THE DEPLOY COMMAND (this is ALL the deploy does):
 ${deployCommand || "(command unknown — assume it applies k8s manifests and rolls deployments using already-built images)"}
 
-Reason strictly from that command. Ask: which of the changed files does this command actually build, apply, run, or reference? A change to a file the command does NOT touch — e.g. a Dockerfile that isn't built by this deploy, application code not exercised by it, a lockfile no build here consumes — is INERT and CANNOT break this deploy. Do NOT hold on inert changes; call them out as inert and move on.
+PRE-DEPLOY TESTS (run on \`main\` itself — the merged result):
+${testSummary}
 
-Recommend HOLD/REJECT ONLY for a KNOWN break in the deploy's execution path: a malformed manifest it applies, a missing image/secret/env it needs, a broken DB migration it runs, a Service/Ingress/port/exposure change it ships, or a command/script it invokes that will fail. If nothing in the changes is in the deploy's execution path, APPROVE.
+CHANGES BEING SHIPPED (task + prior review):
+${changeSummary}
 
-CHANGES BEING SHIPPED (diff — generated lockfiles/hashes are noise; judge by which FILES changed and how the deploy uses them):
-${diff.slice(0, 18_000) || "(diff unavailable — flag that you couldn't see the changes)"}
+DIFF of the triggering change (generated lockfiles/hashes are noise; judge by which FILES changed and how):
+${diff.slice(0, 16_000) || "(diff unavailable — flag that you couldn't see the changes)"}
 
 Respond EXACTLY in this format:
 RECOMMENDATION: <approve|hold|reject>
-ASSESSMENT: <what the deploy command does, and which (if any) changed files are actually in its path>
-CONCERNS: <specific KNOWN breaks in the deploy path, or "none — remaining changes are inert for this deploy">`;
+ASSESSMENT: <what ships, whether it matches intent, and whether the deploy path is safe>
+CONCERNS: <specific breaks / intent drift / major code problems, or "none">`;
 
   try {
     const result = await withClaudeLock(async () => {
@@ -161,9 +185,9 @@ CONCERNS: <specific KNOWN breaks in the deploy path, or "none — remaining chan
       let meta: { subtype?: string; is_error?: boolean; total_cost_usd?: number } | null = null;
       for await (const msg of sdkQuery({
         prompt,
-        // No tools: the review is a pure text verdict from the prompt (the diff is
-        // in it). With tools available the model tries to explore + hits maxTurns
-        // (there's no repo checkout in the boss pod) → error_max_turns → empty.
+        // No tools: the review is a pure text verdict from the prompt (diff +
+        // tests + prior reviews are in it). With tools the model tries to explore +
+        // hits maxTurns (no repo checkout in the boss pod) → error_max_turns → empty.
         options: { maxTurns: 6, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, model: REVIEW_MODEL, env: cred.env },
       })) {
         if ("type" in msg && msg.type === "result") { meta = msg as typeof meta; if ("result" in msg) r = (msg as { result: string }).result || ""; }
@@ -171,9 +195,16 @@ CONCERNS: <specific KNOWN breaks in the deploy path, or "none — remaining chan
       if (!r.trim()) logger.warn({ runId, subtype: meta?.subtype, isError: meta?.is_error, costUsd: meta?.total_cost_usd }, "Deploy review call empty");
       return r;
     });
-    const rec = (result.match(/RECOMMENDATION:\s*(approve|hold|reject)/i)?.[1] || "hold").toLowerCase();
-    await queries.setPipelineReview(runId, result.trim().slice(0, 20_000) || "⚠️ The reviewer returned no output (model/credential/budget issue) — approve on your own judgment.", rec);
-    logger.info({ runId, recommendation: rec }, "Produced deploy review");
+    let rec = (result.match(/RECOMMENDATION:\s*(approve|hold|reject)/i)?.[1] || "hold").toLowerCase();
+    let text = result.trim() || "⚠️ The reviewer returned no output (model/credential/budget issue) — decide on your own judgment.";
+    // Hard rule: a failing test on main is a block. Never let the deploy show
+    // APPROVE past a red pre-deploy test — override to reject with the reason.
+    if (anyTestFailed) {
+      rec = "reject";
+      text = `⛔ A pre-deploy test FAILED on \`main\` — do not deploy until it's green.\n\n${text}`;
+    }
+    await queries.setPipelineReview(runId, text.slice(0, 20_000), rec);
+    logger.info({ runId, recommendation: rec, anyTestFailed, changes: changes.length }, "Produced deploy review");
   } catch (err) {
     logger.warn({ runId, err: err instanceof Error ? err.message : String(err) }, "Review failed");
     await queries.setPipelineReview(runId, `Review failed: ${err instanceof Error ? err.message : String(err)}. Approve on your own judgment.`, "hold");

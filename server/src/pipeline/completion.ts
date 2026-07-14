@@ -11,7 +11,8 @@ import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
 import { postPrComment, markReadyForReview, mergePr } from "../forge/github.js";
 import { dispatchReviewAgent } from "./review-agent.js";
-import { runPhase, listTestPhases } from "./service.js";
+import { runPhase, listTestPhases, runDeployGateTests } from "./service.js";
+import { produceReview } from "./review.js";
 import { isTestPhase } from "./config.js";
 import type { PipelineRun } from "../db/queries.js";
 import type { AgentManager } from "../agent/manager.js";
@@ -39,17 +40,30 @@ export async function maybeProposeDeploy(agent: { id: string; repo_url: string |
     }
     // runPhase resolves the repo's pipeline config; it throws {status:404} when
     // there's no deploy phase and {status:400} when only_ref doesn't match this
-    // ref — both mean "nothing to propose", so we just skip.
+    // ref — both mean "nothing to propose", so we just skip. Defer the review:
+    // first run the repo's tests on `main` (the pre-deploy gate), then the deploy
+    // review runs with those results in hand (see maybeGateDeployReview).
     const { runId, gated } = await runPhase({
       userId: agent.created_by_user_id, repoUrl: agent.repo_url, ref, phaseName: DEPLOY_PHASE, agentId: agent.id,
+      deferReview: true,
     });
-    await queries.insertAgentEvent(agent.id, "message", {
-      role: "system",
-      content: gated
-        ? `🚀 Deploy proposed for \`${ref}\` — awaiting approval in Reviews.`
-        : `🚀 Deploy started for \`${ref}\`.`,
-    });
-    logger.info({ runId, repo: agent.repo_url, ref, gated }, "Auto-proposed deploy after land");
+    if (!gated) {
+      await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `🚀 Deploy started for \`${ref}\`.` });
+      logger.info({ runId, repo: agent.repo_url, ref, gated }, "Auto-proposed deploy after land");
+      return;
+    }
+    const gateTests = await runDeployGateTests(agent.created_by_user_id, agent.repo_url, runId).catch(() => [] as string[]);
+    if (gateTests.length === 0) {
+      // No test phase to gate on → review immediately (prior behaviour).
+      await produceReview(runId).catch(() => {});
+      await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `🚀 Deploy proposed for \`${ref}\` — awaiting approval in Reviews.` });
+    } else {
+      await queries.insertAgentEvent(agent.id, "message", {
+        role: "system",
+        content: `🚀 Deploy proposed for \`${ref}\` — running ${gateTests.map((p) => `\`${p}\``).join(", ")} on \`main\` first; the deploy review runs once they're green.`,
+      });
+    }
+    logger.info({ runId, repo: agent.repo_url, ref, gated, gateTests }, "Auto-proposed deploy after land (pre-deploy test gate)");
   } catch (err) {
     const e = err as { status?: number; message?: string };
     if (e.status) logger.info({ agentId: agent.id, reason: e.message }, "No deploy to propose after land");
@@ -57,8 +71,22 @@ export async function maybeProposeDeploy(agent: { id: string; repo_url: string |
   }
 }
 
+/** A pre-deploy gate test finished. Once EVERY gate test for the deploy is
+ *  terminal, run the deploy review with the results in hand. Idempotent —
+ *  produceReview only acts while the deploy run is pending_review. */
+async function maybeGateDeployReview(deployRunId: string): Promise<void> {
+  const tests = await queries.getDeployGateTests(deployRunId);
+  if (tests.length === 0) return;
+  if (tests.some((t) => t.status !== "passed" && t.status !== "failed")) return; // still running
+  await produceReview(deployRunId).catch((e) =>
+    logger.warn({ deployRunId, err: e instanceof Error ? e.message : String(e) }, "Deploy review after gate tests failed"));
+}
+
 async function gatePr(runId: string): Promise<void> {
   const run = await queries.getPipelineRun(runId);
+  // A pre-deploy gate test (run on `main`, not tied to a PR): when the batch is
+  // done, it triggers the deploy review — never a PR gate.
+  if (run?.deploy_gate_run_id) { await maybeGateDeployReview(run.deploy_gate_run_id); return; }
   if (!run || !run.agent_id) return;
   // A deploy run may be linked to an agent for review context, but it must never
   // comment on / gate that agent's (already-merged) PR.

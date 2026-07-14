@@ -975,6 +975,7 @@ export interface PipelineRun {
   review: string | null;
   recommendation: string | null;
   land_on_pass: boolean;
+  deploy_gate_run_id: string | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -995,12 +996,41 @@ export async function insertPipelineRun(run: {
   createdByUserId?: string | null;
   agentId?: string | null;
   landOnPass?: boolean;
+  deployGateRunId?: string | null;
 }): Promise<void> {
   await getPool().query(
-    `INSERT INTO pipeline_runs (id, repo_url, git_ref, phase, status, created_by_user_id, agent_id, land_on_pass)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [run.id, run.repoUrl, run.ref, run.phase, run.status ?? "pending", run.createdByUserId ?? null, run.agentId ?? null, run.landOnPass ?? false]
+    `INSERT INTO pipeline_runs (id, repo_url, git_ref, phase, status, created_by_user_id, agent_id, land_on_pass, deploy_gate_run_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [run.id, run.repoUrl, run.ref, run.phase, run.status ?? "pending", run.createdByUserId ?? null, run.agentId ?? null, run.landOnPass ?? false, run.deployGateRunId ?? null]
   );
+}
+
+/** The pre-deploy test runs launched on `main` for a given deploy run (its gate
+ *  batch). Newest first. Empty if the repo has no test phase. */
+export async function getDeployGateTests(deployRunId: string): Promise<PipelineRun[]> {
+  const res = await getPool().query<PipelineRun>(
+    "SELECT * FROM pipeline_runs WHERE deploy_gate_run_id = $1 ORDER BY created_at DESC",
+    [deployRunId]
+  );
+  return res.rows;
+}
+
+/** Read-only view of the changes a proposed deploy will ship (merged, not yet
+ *  deployed) WITH each one's prior report-back review — so the deploy review can
+ *  validate intent + confirm the earlier concerns, not just the deploy path.
+ *  Mirrors claimDeployManifest's WHERE, but claims nothing. */
+export async function getPendingDeployChanges(repoUrl: string): Promise<Array<{ id: string; pr_number: number | null; name: string; prompt: string; review: string | null; recommendation: string | null }>> {
+  const bare = repoUrl.replace(/\.git$/, "");
+  const res = await getPool().query<{ id: string; pr_number: number | null; name: string; prompt: string; review: string | null; recommendation: string | null }>(
+    `SELECT id, pr_number, name, prompt, review, recommendation FROM agents
+      WHERE (repo_url = $1 OR repo_url = $2)
+        AND state = 'verified' AND pr_number IS NOT NULL
+        AND deployed_by_agent_id IS NULL
+        AND review_of_agent_id IS NULL
+      ORDER BY pr_number`,
+    [bare, `${bare}.git`]
+  );
+  return res.rows;
 }
 
 export async function markPipelineRunPrPosted(id: string): Promise<void> {

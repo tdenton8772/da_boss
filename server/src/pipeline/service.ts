@@ -74,6 +74,9 @@ export async function runPhase(opts: {
   phaseName: string;
   agentId?: string | null;
   landOnPass?: boolean;
+  /** For a gated (deploy) run: skip the immediate review. The caller runs the
+   *  pre-deploy test gate first and triggers produceReview when it's done. */
+  deferReview?: boolean;
 }): Promise<{ runId: string; gated: boolean }> {
   const r = await resolvePhase(opts.userId, opts.repoUrl, opts.ref, opts.phaseName);
   const gated = r.ph.gate === "human";
@@ -90,9 +93,30 @@ export async function runPhase(opts: {
     status: gated ? "pending_review" : "pending", createdByUserId: opts.userId, agentId: opts.agentId ?? null,
     landOnPass: opts.landOnPass ?? false,
   });
-  if (gated) void produceReview(runId).catch(() => {});
+  if (gated) { if (!opts.deferReview) void produceReview(runId).catch(() => {}); }
   else await launchResolved(runId, opts.repoUrl, opts.ref, r);
   return { runId, gated };
+}
+
+/** Pre-deploy test gate: run the repo's test phase(s) on `main` itself, each tagged
+ *  with the deploy run id, so the completion listener triggers the deploy review
+ *  once they all finish (with the results in hand). This catches breakage from
+ *  interactions with anything merged since a change's land retest. Returns the
+ *  phases started — empty if the repo declares no test phase (review runs now). */
+export async function runDeployGateTests(userId: string, repoUrl: string, deployRunId: string): Promise<string[]> {
+  const phases = await listTestPhases(userId, repoUrl, "main");
+  const started: string[] = [];
+  for (const phase of phases) {
+    const r = await resolvePhase(userId, repoUrl, "main", phase);
+    const runId = `run_${nanoid(12)}`;
+    await queries.insertPipelineRun({
+      id: runId, repoUrl, ref: "main", phase, status: "pending",
+      createdByUserId: userId, agentId: null, deployGateRunId: deployRunId,
+    });
+    await launchResolved(runId, repoUrl, "main", r);
+    started.push(phase);
+  }
+  return started;
 }
 
 /** Run a repo phase (default 'test') for an agent's branch, linked to it so the
