@@ -28,6 +28,7 @@ import { functionsAtEdits, functionsInFile } from "../leasing/freeze-set.js";
 import { normalizeGitUrl, authedUrl as authedUrlWithToken } from "../utils/git.js";
 import { config } from "../config.js";
 import { ensurePullRequest } from "../forge/github.js";
+import { loadProjectContext } from "./project-context.js";
 import type { AgentRecord } from "../types/agent.js";
 import { logger } from "../utils/logger.js";
 
@@ -510,6 +511,17 @@ async function main(): Promise<void> {
     }
   } else try {
     let turnPrompt = TURN_PROMPT || agent.prompt;
+    // The SDK's settingSources:["project"] is SUPPOSED to load the repo's CLAUDE.md,
+    // but CLI 2.0.77 does NOT honor it in print/stream mode — verified in-pod, the
+    // repo's project context never reaches the model. So load it ourselves and inject
+    // it into the system prompt, so the agent actually adopts the repo's conventions.
+    const projectContext = await loadProjectContext(WORK_DIR);
+    await queries.insertAgentEvent(AGENT_ID, "message", {
+      role: "system",
+      content: projectContext
+        ? `📖 Loaded the repo's CLAUDE.md${existsSync(`${WORK_DIR}/.claude`) ? " + .claude/ conventions" : ""} into context (${projectContext.length} chars).`
+        : `ℹ️ No CLAUDE.md at the repo root — running without project-specific instructions.`,
+    }).catch(() => {});
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const q = sdkQuery({
@@ -517,8 +529,8 @@ async function main(): Promise<void> {
         options: {
           cwd: WORK_DIR,
           canUseTool,
-          // load the repo's CLAUDE.md + .claude (conventions, project hooks) — without
-          // this the SDK runs in isolation mode and ignores the repo's own instructions
+          // Keep settingSources for .claude/settings.json (permissions/hooks); the
+          // CLAUDE.md itself is injected via the append below since the CLI ignores it.
           settingSources: ["project"],
           ...(agent.model ? { model: agent.model } : {}),
           systemPrompt: {
@@ -527,7 +539,8 @@ async function main(): Promise<void> {
             append:
               `You are a da_boss agent running inside a Kubernetes pod. Your working directory is ${WORK_DIR}. ` +
               `When you finish, da_boss automatically commits any uncommitted changes, pushes your branch, and opens or updates the pull request. ` +
-              `So do NOT run \`git push\` and do NOT try to create a PR yourself — the \`gh\` CLI is not installed and no PR token is in your shell, and da_boss handles all of that for you. Just make the changes (committing locally is fine but optional) and stop.`,
+              `So do NOT run \`git push\` and do NOT try to create a PR yourself — the \`gh\` CLI is not installed and no PR token is in your shell, and da_boss handles all of that for you. Just make the changes (committing locally is fine but optional) and stop.` +
+              projectContext,
           },
           ...(agent.max_turns ? { maxTurns: agent.max_turns } : {}),
           ...(sessionId ? { resume: sessionId } : {}),
