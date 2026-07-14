@@ -74,6 +74,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 const ICON_BY_KEY: Record<string, React.ReactNode> = {
   pending: <Clock size={14} />,
+  queued: <Clock size={14} />,
   running: <Loader size={14} className="animate-spin" />,
   testing: <Loader size={14} className="animate-spin" />,
   reviewing: <Loader size={14} className="animate-spin" />,

@@ -124,22 +124,17 @@ export class AgentManager {
     const agent = await queries.getAgent(agentId);
     if (!agent) throw new Error(`Agent ${agentId} not found`);
 
-    // Pod mode: dispatch the agent to its own k8s pod (the worker takes over
-    // state/events from there). The boss holds no runner for it.
+    // Pod mode: the SUPERVISOR owns pod-building. Queue the agent + notify; the
+    // supervisor's queue processor sizes it (if no explicit size) and builds the
+    // pod. One control loop — so the supervisor can later assess more than size.
     if (config.agentExecution === "pod") {
-      try {
-        await createAgentPod(agentId);
-        await queries.insertAgentEvent(agentId, "message", {
-          role: "system",
-          content: "Dispatched to its own pod (running on your Claude credential)…",
-        });
-        logger.info({ agentId }, "Dispatched agent to pod");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await queries.updateAgentState(agentId, "failed", { error_message: msg });
-        await queries.insertAgentEvent(agentId, "error", { error: msg });
-        throw err;
-      }
+      await queries.updateAgentState(agentId, "queued", {});
+      await queries.insertAgentEvent(agentId, "message", {
+        role: "system",
+        content: "Queued — the supervisor will size and dispatch it.",
+      });
+      await queries.notifyAgentQueued(agentId);
+      logger.info({ agentId }, "Queued agent for supervisor dispatch");
       return;
     }
 

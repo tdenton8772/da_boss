@@ -75,6 +75,7 @@ export async function dispatchDeployAgent(
       permission_policy: "auto",
       service_account: phase.service_account || undefined,
       worker_image: config.deployAgentImage,
+      size: "m", // deploy runs a command — fixed size, no assessment
     },
     run.created_by_user_id,
     null

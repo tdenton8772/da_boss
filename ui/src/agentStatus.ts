@@ -20,6 +20,7 @@ export function deriveStatus(agent: {
 }): StatusView {
   switch (agent.state) {
     case "pending": return { key: "pending", label: "Pending", color: "text-gray-400" };
+    case "queued": return { key: "queued", label: "Queued — sizing", color: "text-sky-400", spin: true };
     case "running": return { key: "running", label: "Running", color: "text-green-400", spin: true };
     case "waiting_permission": return { key: "waiting_permission", label: "Needs Approval", color: "text-amber-400" };
     case "waiting_input": return { key: "waiting_input", label: "Needs Input", color: "text-amber-400" };

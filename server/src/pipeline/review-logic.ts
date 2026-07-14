@@ -72,6 +72,7 @@ export function buildReviewConfig(reviewed: AgentRecord, testInfo: string): Crea
     // so an injected push/curl pauses for a human instead of running silently.
     permission_mode: untrusted ? "default" : "bypassPermissions",
     permission_policy: "auto",
+    size: "s", // reviews are read-only + light — no assessment needed
   };
 }
 
