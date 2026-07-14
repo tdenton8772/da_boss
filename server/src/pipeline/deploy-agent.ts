@@ -99,3 +99,27 @@ export async function dispatchDeployAgent(
   await manager.startAgent(agent.id);
   return agent.id;
 }
+
+/** Safety net for the deploy-agent-tracking gap: when a deploy-manager agent
+ *  reaches a terminal state, make sure its linked deploy run is terminal too. The
+ *  recorder sidecar normally sets the run from the deploy's exit code; this covers
+ *  the case where the agent's pod died before the recorder wrote, leaving the run
+ *  stuck `running`. No-op unless the run is a still-in-flight deploy. */
+export async function reconcileDeployRun(agentId: string): Promise<void> {
+  const agent = await queries.getAgent(agentId);
+  if (!agent?.pipeline_run_id) return;
+  const run = await queries.getPipelineRun(agent.pipeline_run_id);
+  if (!run || run.phase !== "deploy" || run.status !== "running") return;
+  if (run.exit_code !== null && run.exit_code !== undefined) {
+    // Recorder wrote an exit code but the status wasn't flipped — derive it.
+    await queries.updatePipelineRun(run.id, { status: run.exit_code === 0 ? "passed" : "failed", completed: true });
+  } else {
+    // Agent ended with no recorded exit → outcome unknown; fail safe so the run
+    // doesn't sit `running` forever (a human should verify the cluster state).
+    await queries.updatePipelineRun(run.id, {
+      status: "failed",
+      log: `Deploy-manager agent ${agentId} ended (${agent.state}) with no recorded exit code — marked failed; verify the cluster state.`,
+      completed: true,
+    });
+  }
+}
