@@ -34,6 +34,7 @@ interface AgentData {
   total_cost_usd?: number;
   testing?: boolean;
   landing?: boolean;
+  deploy_pending?: boolean;
   review_agent_id?: string | null;
   review_of_agent_id?: string | null;
   deployed_by_agent_id?: string | null;
@@ -361,18 +362,20 @@ export function AgentDetail() {
               </div>
             ) : agent.repo_url && (
               <button
-                disabled={actionBusy}
-                title={`Deploy ${agent.repo_ref || "main"} — proposes a gated deploy you approve in Reviews`}
+                disabled={actionBusy || agent.deploy_pending}
+                title={agent.deploy_pending
+                  ? "A deploy is already in progress for this ref — running tests on main / awaiting your approval in Reviews."
+                  : `Deploy ${agent.repo_ref || "main"} — proposes a gated deploy you approve in Reviews`}
                 onClick={() => {
                   if (!confirm(`Deploy \`${agent.repo_ref || "main"}\`?\n\nThis proposes the repo's deploy phase. It's gated — you'll still approve it in Reviews before anything ships.`)) return;
                   setActionBusy(true);
                   api.runPipeline(agent.repo_url!, "deploy", agent.repo_ref || "main")
-                    .then(() => toast.success("Deploy proposed — approve it in Reviews"))
+                    .then(() => { toast.success("Deploy proposed — approve it in Reviews"); refresh(); })
                     .catch((e) => toast.error(e instanceof Error ? e.message : "Deploy failed"))
                     .finally(() => setActionBusy(false));
                 }}
                 className="text-sm bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white rounded px-3 py-1.5"
-              >{actionBusy ? "Proposing…" : `Deploy ${agent.repo_ref || "main"}`}</button>
+              >{agent.deploy_pending ? "Deploy in progress…" : actionBusy ? "Proposing…" : `Deploy ${agent.repo_ref || "main"}`}</button>
             )}
           </div>
           {agent.review && (
