@@ -50,6 +50,7 @@ export interface AgentRecord {
   review_of_agent_id: string | null;
   deployed_by_agent_id: string | null;
   adopted_ref: string | null; // display marker when adopting an existing PR/branch
+  size: string | null; // t-shirt pod size (s|m|l|xl); null until set by caller or supervisor
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -71,6 +72,7 @@ export interface CreateAgentRequest {
   repo_ref?: string;
   branch?: string; // full override; else computed from the pieces below
   adopted_ref?: string; // display marker: the user's PR/branch reference when adopting
+  size?: string; // explicit t-shirt pod size (s|m|l|xl) — skips supervisor assessment
   branch_type?: string; // feat | fix | chore | docs | refactor | test
   issue_id?: string;
   service_account?: string; // k8s SA the agent pod runs as (e.g. the deploy identity)

@@ -354,6 +354,7 @@ export interface CreateAgentData {
   issue_id?: string;
   branch?: string; // full override — set when adopting an existing PR/branch
   adopted_ref?: string; // display marker (e.g. "PR #17") shown on the agent
+  size?: string; // pod t-shirt size (s|m|l|xl); omit for supervisor auto-sizing
 }
 
 export interface ApiTokenSummary {

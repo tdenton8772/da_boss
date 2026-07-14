@@ -297,6 +297,23 @@ export function CreateAgentForm({
             </div>
           </div>
 
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">
+              Pod size <span className="text-gray-600">(resources)</span>
+            </label>
+            <select
+              value={form.size || ""}
+              onChange={(e) => setForm((f) => ({ ...f, size: e.target.value || undefined }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm"
+            >
+              <option value="">Auto — supervisor sizes it</option>
+              <option value="s">S — review, docs, small edits</option>
+              <option value="m">M — normal change + tests</option>
+              <option value="l">L — builds, dep compiles, apt</option>
+              <option value="xl">XL — heavy builds / big suites</option>
+            </select>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <Field
               label="Max Turns"

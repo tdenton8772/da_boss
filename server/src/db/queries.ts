@@ -32,8 +32,8 @@ export async function insertAgent(
   >
 ): Promise<AgentRecord> {
   await getPool().query(
-    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref, size)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
     [
       agent.id,
       agent.name,
@@ -56,6 +56,7 @@ export async function insertAgent(
       agent.service_account,
       agent.worker_image,
       agent.adopted_ref,
+      agent.size,
     ]
   );
   return (await getAgent(agent.id))!;
@@ -1058,6 +1059,11 @@ export async function setPipelineRunAgent(runId: string, agentId: string): Promi
  *  recorder sidecar tied to that run. */
 export async function setAgentPipelineRun(agentId: string, runId: string): Promise<void> {
   await getPool().query("UPDATE agents SET pipeline_run_id = $2 WHERE id = $1", [agentId, runId]);
+}
+
+/** Set an agent's t-shirt pod size (the supervisor's assessment, or a bump). */
+export async function setAgentSize(agentId: string, size: string | null): Promise<void> {
+  await getPool().query("UPDATE agents SET size = $2 WHERE id = $1", [agentId, size]);
 }
 
 /** Mark an agent as the reviewer of another agent's change. */

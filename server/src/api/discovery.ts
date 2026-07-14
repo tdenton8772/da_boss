@@ -552,6 +552,7 @@ export function createDiscoveryRouter(): Router {
         service_account: null,
         worker_image: null,
         adopted_ref: null,
+        size: null,
       });
 
       logger.info(
