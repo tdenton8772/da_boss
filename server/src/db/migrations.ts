@@ -548,6 +548,16 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
     `,
   },
+  {
+    // T-shirt pod sizing. size is null until set — either by the caller (fast
+    // path) or by the supervisor's assessment. The dispatcher maps it to a
+    // resource preset (agent/sizing.ts). No cluster specifics here.
+    version: 29,
+    name: "agent_size",
+    up: `
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS size TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

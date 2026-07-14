@@ -79,6 +79,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
         branch_type: z.string().optional().describe("feat | fix | chore | docs | refactor | test (default feat)"),
         model: z.string().optional().describe("Defaults to claude-opus-4-8 (code work). Options: claude-opus-4-8 | claude-fable-5 | claude-sonnet-5 | claude-haiku-4-5-20251001"),
         max_budget_usd: z.number().optional().describe("Optional spend cap in USD."),
+        size: z.enum(["s", "m", "l", "xl"]).optional().describe("Pod t-shirt size — s/m/l/xl. Omit to let the supervisor assess the task and size it."),
       },
     },
     async (args) => {
@@ -97,6 +98,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
             branch_type: args.branch_type ?? "feat",
             model: args.model,
             max_budget_usd: args.max_budget_usd,
+            size: args.size,
           },
           principal.userId,
           principal.email?.split("@")[0] ?? null

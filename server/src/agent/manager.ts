@@ -10,6 +10,7 @@ import { createAgentPod, deleteAgentPod, deleteAgentRemoteBranch, deleteUserWork
 import { resolvePermissionRequest } from "./permissions.js";
 import { TokenBudgetManager } from "../tokens/budget.js";
 import { TaskMonitor } from "./task-monitor.js";
+import { normalizeSize } from "./sizing.js";
 import * as queries from "../db/queries.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
@@ -107,6 +108,7 @@ export class AgentManager {
       worker_image: req.worker_image?.trim() || null,
       // only mark adoption when a branch override was actually given
       adopted_ref: req.branch?.trim() ? (req.adopted_ref?.trim() || branch) : null,
+      size: normalizeSize(req.size), // explicit t-shirt size (else null → supervisor sizes it)
     });
 
     await queries.insertAgentEvent(id, "state_change", {

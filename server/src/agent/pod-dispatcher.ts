@@ -11,6 +11,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { deleteRemoteBranch, normalizeGitUrl, authedUrl } from "../utils/git.js";
 import type { AgentRecord } from "../types/agent.js";
 import { config } from "../config.js";
+import { resolvePreset } from "./sizing.js";
 import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
@@ -148,6 +149,8 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
   if (!agent.created_by_user_id) {
     throw new Error("Agent has no owner — cannot resolve a Claude credential");
   }
+  // T-shirt size → pod resources (defaults to M when unset).
+  const agentPreset = resolvePreset(agent.size);
   const cred = await queries.getUserCredential(agent.created_by_user_id);
   if (!cred) {
     throw new Error("No Claude credential on file for you — add one in Settings before running an agent");
@@ -267,7 +270,7 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
             { name: "work", mountPath: "/work" },
             { name: "workspace", mountPath: "/ws" },
           ],
-          resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "1Gi" } },
+          resources: { requests: agentPreset.requests, limits: agentPreset.limits },
         },
         // Deploy-manager agents execute a pipeline_run: a recorder co-container
         // watches /work/.daboss/exit (the deploy's real exit code, written by the
