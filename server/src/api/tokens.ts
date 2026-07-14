@@ -34,7 +34,7 @@ const TOKEN_ROUTES: Array<{ method: string; re: RegExp; scope: string }> = [
   { method: "GET", re: /^\/api\/agents$/, scope: "review:read" },
 ];
 
-export const KNOWN_SCOPES = ["agent:create", "review:create", "review:read", "mcp", "*"] as const;
+export const KNOWN_SCOPES = ["agent:create", "agent:read", "agent:control", "review:create", "review:read", "mcp", "*"] as const;
 
 export function tokenRouteAllowed(method: string, path: string, scopes: string[]): boolean {
   const match = TOKEN_ROUTES.find((r) => r.method === method && r.re.test(path));

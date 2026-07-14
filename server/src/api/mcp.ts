@@ -131,6 +131,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
       inputSchema: { agent_id: z.string().describe("The id of the agent whose change to review") },
     },
     async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "review:create"); if (deny) return deny;
       const agent = await queries.getAgent(agent_id);
       if (!agent) return asError(`No agent ${agent_id}`);
       if (await queries.hasActiveReviewAgent(agent.id)) return asError("A review is already in progress for this change.");
