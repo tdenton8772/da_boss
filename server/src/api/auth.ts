@@ -229,7 +229,22 @@ class OidcAuthProvider implements AuthProvider {
     // record also counts. Nothing here auto-REVOKES — an admin does that.
     const accessApproved = isAdmin || qualifies || (user?.access_approved ?? false);
     if (!accessApproved) {
-      logger.warn({ sub, idpRole }, "Denied OIDC login — not approved for da_boss access");
+      // Provision a PENDING row (access_approved defaults false) for a new identity
+      // so an admin can approve them with one toggle in Admin → Users — instead of a
+      // DB command. This is the point of the access_approved allowlist: a user in
+      // multiple IdP groups (e.g. SA + manager) whose lossy role fails the gate is
+      // still visible + one click from access. Then deny THIS login (not yet approved).
+      if (!user) {
+        user = await queries.createUser({
+          id: `usr_${nanoid(8)}`,
+          email: email ?? sub,
+          display_name: name ?? email ?? sub,
+          role: dabossRole,
+          external_id: sub,
+        });
+        logger.info({ userId: user.id, sub }, "Provisioned PENDING user — awaiting admin access approval");
+      }
+      logger.warn({ sub, idpRole }, "Denied OIDC login — pending access approval");
       return null;
     }
 
