@@ -234,7 +234,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     "get_verdict",
     {
       description:
-        "Get the current review status + verdict for an agent's change. status is running|done|error; recommendation is merge|fix|hold; rationale is the reviewer's assessment once available.",
+        "Get the CODE-REVIEW verdict for an agent's change (from request_review). status is running|done|error; recommendation is merge|fix|hold; rationale is the reviewer's assessment once available. For the PRE-DEPLOY review of a deploy, use get_deploy_verdict instead.",
       inputSchema: { agent_id: z.string().describe("The reviewed agent's id") },
     },
     async ({ agent_id }) => {
@@ -242,6 +242,50 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
       if (!reviews.length) return asText("No review found for this agent. Call request_review first.");
       const r = reviews[0];
       return asText({ status: r.status, recommendation: r.recommendation, rationale: r.rationale, review_agent_id: r.review_agent_id, requested_by: r.requested_by });
+    }
+  );
+
+  server.registerTool(
+    "list_deploys",
+    {
+      description:
+        "List deploys awaiting a human decision (the deploy review has run → pending_approval). Returns each deploy run's id, repo, ref, the pre-deploy review recommendation (approve|hold|reject) and a snippet of its assessment. Use get_deploy_verdict for the full review + the main-test results.",
+      inputSchema: {},
+    },
+    async () => {
+      const deny = denyIfMissing(principal, "review:read"); if (deny) return deny;
+      const deploys = await queries.getReviewQueueDeploys();
+      return asText(deploys.map((d) => ({
+        run_id: d.id, repo_url: d.repo_url, git_ref: d.git_ref, status: d.status,
+        recommendation: d.recommendation, assessment: (d.review || "").slice(0, 400), owner_email: d.owner_email,
+      })));
+    }
+  );
+
+  server.registerTool(
+    "get_deploy_verdict",
+    {
+      description:
+        "Get the PRE-DEPLOY review verdict for a deploy. Give run_id (from list_deploys) OR repo_url (+ ref, default main) to find the in-flight deploy. Returns status (pending_review = tests still running on main, pending_approval = reviewed & awaiting a human, passed/failed = done), recommendation (approve|hold|reject), the full review, and the main-test gate results.",
+      inputSchema: {
+        run_id: z.string().optional().describe("The deploy run id (from list_deploys)"),
+        repo_url: z.string().optional().describe("Repo URL — used with ref to find the in-flight deploy if run_id is omitted"),
+        ref: z.string().optional().describe("Git ref (default 'main'), used with repo_url"),
+      },
+    },
+    async ({ run_id, repo_url, ref }) => {
+      const deny = denyIfMissing(principal, "review:read"); if (deny) return deny;
+      const run = run_id
+        ? await queries.getPipelineRun(run_id)
+        : repo_url ? await queries.getActiveDeployRun(repo_url, ref || "main") : undefined;
+      if (!run) return asError(run_id ? "No deploy run with that id." : repo_url ? "No in-flight deploy for that repo/ref." : "Provide run_id, or repo_url (+ ref).");
+      if (run.phase !== "deploy") return asError(`Run ${run.id} is a '${run.phase}' run, not a deploy. Use get_verdict for code reviews.`);
+      const gate = await queries.getDeployGateTests(run.id);
+      return asText({
+        run_id: run.id, repo_url: run.repo_url, git_ref: run.git_ref, status: run.status,
+        recommendation: run.recommendation, review: run.review,
+        main_tests: gate.map((t) => ({ phase: t.phase, status: t.status, exit_code: t.exit_code })),
+      });
     }
   );
 
