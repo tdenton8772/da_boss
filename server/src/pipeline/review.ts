@@ -147,8 +147,8 @@ Reason strictly from that command. Ask: which of the changed files does this com
 
 Recommend HOLD/REJECT ONLY for a KNOWN break in the deploy's execution path: a malformed manifest it applies, a missing image/secret/env it needs, a broken DB migration it runs, a Service/Ingress/port/exposure change it ships, or a command/script it invokes that will fail. If nothing in the changes is in the deploy's execution path, APPROVE.
 
-CHANGES BEING SHIPPED (diff):
-${diff.slice(0, 30_000) || "(diff unavailable — flag that you couldn't see the changes)"}
+CHANGES BEING SHIPPED (diff — generated lockfiles/hashes are noise; judge by which FILES changed and how the deploy uses them):
+${diff.slice(0, 18_000) || "(diff unavailable — flag that you couldn't see the changes)"}
 
 Respond EXACTLY in this format:
 RECOMMENDATION: <approve|hold|reject>
@@ -164,7 +164,7 @@ CONCERNS: <specific KNOWN breaks in the deploy path, or "none — remaining chan
         // No tools: the review is a pure text verdict from the prompt (the diff is
         // in it). With tools available the model tries to explore + hits maxTurns
         // (there's no repo checkout in the boss pod) → error_max_turns → empty.
-        options: { maxTurns: 2, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, model: REVIEW_MODEL, env: cred.env },
+        options: { maxTurns: 6, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, model: REVIEW_MODEL, env: cred.env },
       })) {
         if ("type" in msg && msg.type === "result") { meta = msg as typeof meta; if ("result" in msg) r = (msg as { result: string }).result || ""; }
       }
