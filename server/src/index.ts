@@ -17,6 +17,7 @@ import { startSupervisor, stopSupervisor, runSupervisorOnce } from "./supervisor
 import { reapFinishedAgentPods } from "./agent/pod-dispatcher.js";
 import { startLiveRelay } from "./api/live-relay.js";
 import { startPipelineCompletionListener } from "./pipeline/completion.js";
+import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
@@ -107,6 +108,11 @@ async function main() {
 
   // Pipeline completion → gate the linked agent's PR (comment + ready-on-green)
   startPipelineCompletionListener(manager);
+
+  // Supervisor dispatch loop — the control plane owns pod-building. Reacts to
+  // queued agents via NOTIFY (+ a periodic fallback sweep for any missed one).
+  startQueueListener();
+  setInterval(() => { void processQueue(); }, 30_000);
 
   // Supervisor: in pod mode the orchestrator pod owns the monitoring loop;
   // otherwise (host/dev) run it in-process.

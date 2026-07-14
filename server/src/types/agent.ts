@@ -1,5 +1,6 @@
 export type AgentState =
   | "pending"
+  | "queued"
   | "running"
   | "waiting_permission"
   | "waiting_input"

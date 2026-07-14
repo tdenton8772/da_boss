@@ -1,7 +1,9 @@
 import type { AgentState } from "../types/agent.js";
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
-  pending: ["running"],
+  // "queued" = created/started, awaiting the supervisor to size + build the pod.
+  pending: ["queued", "running"],
+  queued: ["running", "failed", "aborted"],
   running: [
     "waiting_permission",
     "waiting_input",
@@ -12,10 +14,10 @@ const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   ],
   waiting_permission: ["running", "aborted"],
   waiting_input: ["running", "paused", "completed", "aborted"],
-  completed: ["verified", "running", "waiting_input"],
+  completed: ["queued", "verified", "running", "waiting_input"],
   verified: [],
-  failed: ["running", "waiting_input", "aborted"],
-  paused: ["running", "waiting_input", "aborted"],
+  failed: ["queued", "running", "waiting_input", "aborted"],
+  paused: ["queued", "running", "waiting_input", "aborted"],
   aborted: [],
 };
 

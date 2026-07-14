@@ -336,6 +336,12 @@ async function main(): Promise<void> {
         }
         await execFileAsync("git", ["-C", WORK_DIR, "checkout", "-b", branch], { timeout: 30_000 });
       }
+      // Configure a git identity so the AGENT can commit locally (the system prompt
+      // says committing is optional-but-fine). Without this, `git commit` fails with
+      // "Committer identity unknown" and the agent gets stuck. Same identity the
+      // worker uses for its own end-of-run commit.
+      await execFileAsync("git", ["-C", WORK_DIR, "config", "user.email", "agent@daboss.local"], { timeout: 15_000 }).catch(() => {});
+      await execFileAsync("git", ["-C", WORK_DIR, "config", "user.name", "da_boss agent"], { timeout: 15_000 }).catch(() => {});
       await queries.insertAgentEvent(AGENT_ID, "message", {
         role: "system",
         content: `Cloned${WORKSPACE_DIR ? " from your workspace shard" : ""}; ${branchExists ? "continuing" : "on new"} branch \`${branch}\`.`,
@@ -460,6 +466,10 @@ async function main(): Promise<void> {
       role: "system",
       content: `▶ ${toolName} ${decision === "approved" ? "approved" : "denied"}${answer ? `: ${answer}` : ""}`,
     });
+    // The agent is about to continue working — flip the state back to running so the
+    // UI stops showing "Needs Approval/Input" while it's actively producing. (The
+    // boss set the waiting state when the request was raised; nothing reset it.)
+    await queries.updateAgentState(AGENT_ID!, "running", {}).catch(() => {});
     return mapPermissionDecision(toolName, toolInput, decision, answer);
   };
 
@@ -556,8 +566,18 @@ async function main(): Promise<void> {
             const r = msg as { session_id?: string; is_error?: boolean; errors?: string[]; subtype?: string; result?: string };
             if (r.session_id) sessionId = r.session_id;
             if (r.is_error) {
-              hadError = true;
-              errorMsg = (r.errors || []).join("; ") || r.subtype || "Unknown error";
+              const emsg = (r.errors || []).join("; ") || r.subtype || "Unknown error";
+              // Same principle as the outer catch (line ~594): a trailing SDK/API
+              // error AFTER the agent already produced its work is a cleanup crash,
+              // not a task failure. The SDK's streaming "only prompt commands" guard
+              // and a mid-stream 403 land HERE as an is_error result even though the
+              // change is already made — don't mark a working agent failed.
+              if (producedOutput && /only prompt commands|streaming mode|status code 403|exited with code|process exited|exit code/i.test(emsg)) {
+                logger.warn({ agentId: AGENT_ID, err: emsg }, "Trailing SDK error after producing output — completing, not failing");
+              } else {
+                hadError = true;
+                errorMsg = emsg;
+              }
             } else if (r.result) {
               finalSummary = String(r.result);
               producedOutput = true;

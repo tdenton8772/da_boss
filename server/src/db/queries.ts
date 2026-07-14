@@ -1066,6 +1066,11 @@ export async function setAgentSize(agentId: string, size: string | null): Promis
   await getPool().query("UPDATE agents SET size = $2 WHERE id = $1", [agentId, size]);
 }
 
+/** Nudge the supervisor's queue listener that an agent is ready to dispatch. */
+export async function notifyAgentQueued(agentId: string): Promise<void> {
+  await getPool().query("SELECT pg_notify('daboss_agent_queued', $1)", [agentId]);
+}
+
 /** Mark an agent as the reviewer of another agent's change. */
 export async function setAgentReviewOf(agentId: string, reviewedAgentId: string): Promise<void> {
   await getPool().query("UPDATE agents SET review_of_agent_id = $2 WHERE id = $1", [agentId, reviewedAgentId]);
