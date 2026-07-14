@@ -33,6 +33,7 @@ interface AgentData {
   recommendation?: string | null;
   total_cost_usd?: number;
   testing?: boolean;
+  landing?: boolean;
   review_agent_id?: string | null;
   review_of_agent_id?: string | null;
   deployed_by_agent_id?: string | null;
@@ -330,7 +331,8 @@ export function AgentDetail() {
             {agent.state !== "verified" ? (
               <div className="flex gap-2">
                 <button
-                  disabled={actionBusy}
+                  disabled={actionBusy || agent.landing}
+                  title={agent.landing ? "A land is already in progress — rebasing on main + retesting before merge." : undefined}
                   onClick={() => {
                     // HOLD-merge guard: the reviewer flagged this — make the human pause.
                     const flagged = agent.recommendation === "hold" || agent.recommendation === "fix";
@@ -347,7 +349,7 @@ export function AgentDetail() {
                     agent.recommendation === "hold" || agent.recommendation === "fix"
                       ? "bg-amber-700 hover:bg-amber-600" : "bg-green-700 hover:bg-green-600"
                   }`}
-                >{actionBusy ? "Landing…" : (agent.recommendation === "hold" || agent.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
+                >{(actionBusy || agent.landing) ? "Landing…" : (agent.recommendation === "hold" || agent.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
                 <button
                   disabled={actionBusy}
                   onClick={() => {

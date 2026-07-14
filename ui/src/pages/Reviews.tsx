@@ -108,12 +108,14 @@ export function Reviews() {
                     </div>
                   </div>
                   <div className="flex gap-2 shrink-0">
-                    <button disabled={busy === c.id} onClick={() => merge(c.id, c.recommendation)}
+                    <button disabled={busy === c.id || c.landing}
+                      title={c.landing ? "A land is already in progress — rebasing on main + retesting before merge." : undefined}
+                      onClick={() => merge(c.id, c.recommendation)}
                       className={`text-sm disabled:opacity-50 text-white rounded px-3 py-1.5 ${
                         c.recommendation === "hold" || c.recommendation === "fix"
                           ? "bg-amber-700 hover:bg-amber-600" : "bg-green-700 hover:bg-green-600"
-                      }`}>{c.recommendation === "hold" || c.recommendation === "fix" ? "Merge anyway" : "Merge PR"}</button>
-                    <button disabled={busy === c.id} onClick={() => requestChanges(c.id)}
+                      }`}>{c.landing ? "Landing…" : (c.recommendation === "hold" || c.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
+                    <button disabled={busy === c.id || c.landing} onClick={() => requestChanges(c.id)}
                       className="text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded px-3 py-1.5">Request changes</button>
                   </div>
                 </div>

@@ -76,7 +76,7 @@ export async function getAllAgents(): Promise<AgentRecord[]> {
  *  been reviewed (recommendation set) but not yet merged (verified). Across ALL
  *  users — the review surface is repo-scoped, not owner-scoped. Owner email joined
  *  in so a reviewer knows whose change it is. Hides the hidden test-harness user. */
-export async function getReviewQueueChanges(): Promise<Array<AgentRecord & { owner_email: string | null }>> {
+export async function getReviewQueueChanges(): Promise<Array<AgentRecord & { owner_email: string | null; landing: boolean }>> {
   const res = await getPool().query<AgentRecord & { owner_email: string | null }>(
     `SELECT a.*, u.email AS owner_email
        FROM agents a LEFT JOIN users u ON u.id = a.created_by_user_id
@@ -86,7 +86,17 @@ export async function getReviewQueueChanges(): Promise<Array<AgentRecord & { own
         AND (a.created_by_user_id IS NULL OR a.created_by_user_id <> 'usr_test_harness')
       ORDER BY a.updated_at DESC`
   );
-  return res.rows;
+  if (res.rows.length === 0) return [];
+  // Flag which of these have a land in flight (Merge already clicked → disable the
+  // button). One flat query keyed by id — correlated subqueries don't run on pg-mem.
+  const landing = await getPool().query<{ agent_id: string }>(
+    `SELECT DISTINCT agent_id FROM pipeline_runs
+      WHERE agent_id = ANY($1) AND land_on_pass = true
+        AND status IN ('pending','pending_review','pending_approval','running')`,
+    [res.rows.map((r) => r.id)]
+  );
+  const landingSet = new Set(landing.rows.map((r) => r.agent_id));
+  return res.rows.map((r) => ({ ...r, landing: landingSet.has(r.id) }));
 }
 
 /** Gated pipeline runs awaiting approval (e.g. a deploy phase, pre-audited by the
@@ -1313,6 +1323,19 @@ export async function hasActiveTestRuns(agentId: string): Promise<boolean> {
     `SELECT 1 FROM pipeline_runs
       WHERE agent_id = $1 AND (phase = 'test' OR phase LIKE 'test-%')
         AND status IN ('pending','running') LIMIT 1`,
+    [agentId]
+  );
+  return res.rows.length > 0;
+}
+
+/** True while a land is in flight for this agent (Merge clicked → rebase on main +
+ *  retest, merging on green). Used to keep the Merge button disabled until it
+ *  finishes, so a second click can't stack another land. */
+export async function hasLandInFlight(agentId: string): Promise<boolean> {
+  const res = await getPool().query(
+    `SELECT 1 FROM pipeline_runs
+      WHERE agent_id = $1 AND land_on_pass = true
+        AND status IN ('pending','pending_review','pending_approval','running') LIMIT 1`,
     [agentId]
   );
   return res.rows.length > 0;
