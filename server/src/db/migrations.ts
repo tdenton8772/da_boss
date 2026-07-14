@@ -558,6 +558,17 @@ const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS size TEXT;
     `,
   },
+  {
+    // Pre-deploy test gate: test-phase runs launched on `main` when a deploy is
+    // proposed carry the deploy run's id here, so the completion listener knows
+    // when the whole gate batch is done and can trigger the deploy review with
+    // the results in hand. Null for every other run.
+    version: 30,
+    name: "deploy_gate_run_id",
+    up: `
+      ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS deploy_gate_run_id TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {
