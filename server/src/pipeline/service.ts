@@ -76,8 +76,15 @@ export async function runPhase(opts: {
   landOnPass?: boolean;
 }): Promise<{ runId: string; gated: boolean }> {
   const r = await resolvePhase(opts.userId, opts.repoUrl, opts.ref, opts.phaseName);
-  const runId = `run_${nanoid(12)}`;
   const gated = r.ph.gate === "human";
+  // Dedup a human-gated deploy: if one is already open for this repo+ref, return
+  // it instead of stacking a second card (only the auto-propose path guarded before,
+  // so a manual trigger could create a duplicate). Idempotent for all callers.
+  if (gated) {
+    const existing = await queries.getActiveDeployRun(opts.repoUrl, opts.ref || "main");
+    if (existing) return { runId: existing.id, gated: true };
+  }
+  const runId = `run_${nanoid(12)}`;
   await queries.insertPipelineRun({
     id: runId, repoUrl: opts.repoUrl, ref: opts.ref || null, phase: opts.phaseName,
     status: gated ? "pending_review" : "pending", createdByUserId: opts.userId, agentId: opts.agentId ?? null,
