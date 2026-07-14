@@ -1,0 +1,104 @@
+/**
+ * Orchestrator — runs the supervisor/monitoring loop in its OWN pod, separate
+ * from the boss. Watches the fleet via shared Postgres: budget enforcement
+ * (pod-aware pause), stuck/idle/stale-permission detection, notifications,
+ * supervisor_runs. Claude-powered evaluation runs on a DESIGNATED admin's vault
+ * credential (loaded fresh each cycle); if none is configured it degrades to
+ * rules + "notify a human" and says so, rather than failing silently.
+ *
+ * Entrypoint: `node dist/orchestrator/index.js` (same image as the boss).
+ */
+import { EventEmitter } from "node:events";
+import { initDb, closeDb } from "../db/index.js";
+import * as queries from "../db/queries.js";
+import { runChecks, type SupervisorDeps } from "../supervisor/checks.js";
+import { loadSupervisorCredentialIntoEnv } from "../supervisor/credential.js";
+import { TokenBudgetManager } from "../tokens/budget.js";
+import { createAgentPod, deleteAgentPod } from "../agent/pod-dispatcher.js";
+import { config } from "../config.js";
+import { logger } from "../utils/logger.js";
+
+async function runOnce(deps: SupervisorDeps): Promise<void> {
+  // Borrow the designated admin's Claude credential for this cycle (fresh, so
+  // rotation/offboarding take effect). Loud, not silent, when it's missing.
+  const cred = await loadSupervisorCredentialIntoEnv();
+  if (!cred.ok) {
+    logger.warn({ reason: cred.reason }, "Supervisor running WITHOUT a Claude credential — rules only, no auto-evaluation");
+  }
+
+  const runId = await queries.insertSupervisorRun();
+  try {
+    const { findings, actions } = await runChecks(deps);
+    await queries.completeSupervisorRun(runId, findings, actions);
+    if (findings.length > 0 || actions.length > 0) {
+      logger.info({ findings: findings.length, actions: actions.length }, "Orchestrator run: findings/actions");
+    }
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, "Orchestrator run failed");
+    await queries.completeSupervisorRun(runId, [], [{ error: String(err) }]);
+  }
+}
+
+async function main(): Promise<void> {
+  await initDb();
+
+  const budget = new TokenBudgetManager(new EventEmitter());
+  const deps: SupervisorDeps = {
+    getAgentsToPause: () => budget.getAgentsToPause(),
+    // pod-aware pause: stop the agent's pod (+ its cred secret) and mark it paused
+    pauseAgent: async (agentId) => {
+      await deleteAgentPod(agentId);
+      await queries.updateAgentState(agentId, "paused", {
+        error_message: "Paused by orchestrator (budget threshold)",
+      });
+    },
+    // Supervisor "continue" → resume the agent with the next instruction. In pod
+    // mode that's a fresh pod carrying the message as its turn prompt (the same
+    // path the boss uses for user input). Only fires when a credential loaded and
+    // the agent has supervisor_instructions.
+    sendInput: async (agentId, message) => {
+      if (config.agentExecution === "pod") {
+        await createAgentPod(agentId, message);
+      }
+    },
+    // resolvePermission intentionally omitted — permission round-trips stay a
+    // human decision; those surface as "needs attention" findings instead.
+
+    // Block a misbehaving agent: stop its pod and mark it paused (recoverable) so
+    // a human can review. Same pod-delete authority as the budget pause.
+    blockAgent: async (agentId, reason) => {
+      await deleteAgentPod(agentId);
+      await queries.updateAgentState(agentId, "paused", { error_message: reason });
+      await queries.insertAgentEvent(agentId, "state_change", { from: "running", to: "paused" });
+      await queries.insertAgentEvent(agentId, "message", { role: "system", content: `⛔ ${reason}` });
+    },
+
+    // Redirect a running agent mid-turn (the worker interrupts + resumes the same
+    // session with this message) — course-correct without killing the work.
+    steerAgent: async (agentId, message) => {
+      await queries.insertAgentCommand(agentId, "steer", { message });
+    },
+  };
+
+  const intervalMs = Math.max(1, config.supervisorIntervalMinutes) * 60_000;
+  logger.info(
+    { pod: process.env.HOSTNAME, intervalMinutes: config.supervisorIntervalMinutes },
+    "Orchestrator started"
+  );
+
+  await runOnce(deps); // run once immediately on boot
+  const timer = setInterval(() => void runOnce(deps), intervalMs);
+
+  const shutdown = async () => {
+    clearInterval(timer);
+    await closeDb();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+main().catch((err) => {
+  logger.error({ err: err instanceof Error ? err.message : String(err) }, "Orchestrator fatal error");
+  process.exit(1);
+});

@@ -3,9 +3,10 @@ import express from "express";
 import session from "express-session";
 import request from "supertest";
 import { EventEmitter } from "node:events";
+import { randomBytes } from "node:crypto";
 import { AgentManager } from "../src/agent/manager.js";
 import { createRouter } from "../src/api/router.js";
-import { config } from "../src/config.js";
+import { setCipher, LocalAesCipher } from "../src/crypto/cipher.js";
 
 function createTestApp() {
   const eventBus = new EventEmitter();
@@ -25,13 +26,16 @@ function createTestApp() {
   return { app, manager, eventBus };
 }
 
-// Helper to get an authenticated agent (session cookie)
+// Helper to get an authenticated agent (registers a fresh per-user account).
+// DB is reset per test, so a unique email per call avoids collisions.
+let userSeq = 0;
 async function authAgent(app: express.Express) {
   const agent = request.agent(app);
+  userSeq++;
   await agent
-    .post("/api/auth/login")
-    .send({ password: config.authPassword })
-    .expect(200);
+    .post("/api/auth/register")
+    .send({ email: `user${userSeq}@test.co`, password: "password123", displayName: `User ${userSeq}` })
+    .expect(201);
   return agent;
 }
 
@@ -50,18 +54,31 @@ describe("API routes", () => {
       await request(app).get("/api/agents").expect(401);
     });
 
-    it("logs in with correct password", async () => {
-      const res = await request(app)
+    it("registers a user and logs in with email+password", async () => {
+      const agent = request.agent(app);
+      const reg = await agent
+        .post("/api/auth/register")
+        .send({ email: "a@b.co", password: "password123", displayName: "A" })
+        .expect(201);
+      expect(reg.body.user.email).toBe("a@b.co");
+
+      await agent.post("/api/auth/logout").expect(200);
+      const login = await agent
         .post("/api/auth/login")
-        .send({ password: config.authPassword })
+        .send({ email: "a@b.co", password: "password123" })
         .expect(200);
-      expect(res.body.ok).toBe(true);
+      expect(login.body.user.email).toBe("a@b.co");
     });
 
     it("rejects wrong password", async () => {
+      const agent = request.agent(app);
+      await agent
+        .post("/api/auth/register")
+        .send({ email: "c@d.co", password: "password123" })
+        .expect(201);
       await request(app)
         .post("/api/auth/login")
-        .send({ password: "wrong" })
+        .send({ email: "c@d.co", password: "wrong" })
         .expect(401);
     });
 
@@ -71,13 +88,45 @@ describe("API routes", () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it("reports auth status via /me", async () => {
+    it("reports auth status + user via /me", async () => {
       const unauthed = await request(app).get("/api/auth/me").expect(200);
       expect(unauthed.body.authenticated).toBe(false);
 
       const agent = await authAgent(app);
       const authed = await agent.get("/api/auth/me").expect(200);
       expect(authed.body.authenticated).toBe(true);
+      expect(authed.body.user).toBeTruthy();
+    });
+  });
+
+  describe("credentials (write-only vault)", () => {
+    beforeEach(() => setCipher(new LocalAesCipher(randomBytes(32).toString("base64"))));
+
+    it("stores a credential and reports status without leaking the token", async () => {
+      const agent = await authAgent(app);
+      const before = await agent.get("/api/me/credential").expect(200);
+      expect(before.body.hasCredential).toBe(false);
+
+      const token = "test-oauth-token-value";
+      await agent
+        .post("/api/me/credential")
+        .send({ kind: "claude_oauth_token", token })
+        .expect(200);
+
+      const after = await agent.get("/api/me/credential").expect(200);
+      expect(after.body.hasCredential).toBe(true);
+      expect(after.body.kind).toBe("claude_oauth_token");
+      // the token itself is never returned
+      expect(JSON.stringify(after.body)).not.toContain(token);
+
+      await agent.delete("/api/me/credential").expect(200);
+      const gone = await agent.get("/api/me/credential").expect(200);
+      expect(gone.body.hasCredential).toBe(false);
+    });
+
+    it("rejects a too-short token", async () => {
+      const agent = await authAgent(app);
+      await agent.post("/api/me/credential").send({ token: "x" }).expect(400);
     });
   });
 
@@ -89,7 +138,7 @@ describe("API routes", () => {
         .send({
           name: "test-agent",
           prompt: "Do a thing",
-          cwd: "/tmp/test",
+          cwd: "/tmp",
           priority: "high",
         })
         .expect(201);

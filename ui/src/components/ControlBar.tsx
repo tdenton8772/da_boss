@@ -6,11 +6,13 @@ import { Play, Pause, Square, RotateCcw, Send, Trash2, Zap } from "lucide-react"
 export function ControlBar({
   agentId,
   state,
+  testing,
   onAction,
   onDelete,
 }: {
   agentId: string;
   state: string;
+  testing?: boolean;
   onAction: () => void;
   onDelete?: () => void;
 }) {
@@ -62,7 +64,10 @@ export function ControlBar({
   };
 
   const showStart = state === "pending";
-  const showResume = ["paused", "completed", "failed"].includes(state);
+  // While the agent's test phases run (in separate pods) it sits in `completed`,
+  // which would otherwise show a finished-looking Resume. Suppress Resume and show
+  // a Testing indicator instead so it doesn't read as done/idle.
+  const showResume = !testing && ["paused", "completed", "failed"].includes(state);
   const showPause = state === "running" || state === "waiting_input";
   const showKill = ["running", "paused", "waiting_permission", "waiting_input"].includes(state);
   const showInput = ["running", "waiting_input", "completed", "paused", "failed"].includes(state);
@@ -70,6 +75,11 @@ export function ControlBar({
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
+        {testing && (
+          <span className="flex items-center gap-2 bg-blue-900/40 border border-blue-700/50 text-blue-300 text-sm rounded px-3 py-1.5">
+            <RotateCcw size={14} className="animate-spin" /> Testing…
+          </span>
+        )}
         {showStart && (
           <ActionButton
             icon={<Play size={16} />}
@@ -111,9 +121,10 @@ export function ControlBar({
             icon={<Trash2 size={16} />}
             label="Remove"
             onClick={() => {
-              if (confirm("Remove this agent from da_boss? The original Claude session on disk is NOT deleted — you can reimport it later.")) {
-                api.deleteAgent(agentId).then(() => {
-                  toast.success("Agent removed");
+              if (confirm("Remove this agent from da_boss? Its remote branch is deleted too (unless another agent still uses it). The Claude session on disk is NOT deleted — you can reimport it later.")) {
+                api.deleteAgent(agentId).then((res) => {
+                  const bc = res?.branchCleanup;
+                  toast.success(bc?.deleted ? `Agent removed — deleted branch ${bc.branch}` : "Agent removed");
                   onDelete();
                 }).catch(() => toast.error("Remove failed"));
               }

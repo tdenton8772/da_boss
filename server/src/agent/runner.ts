@@ -109,11 +109,11 @@ export class AgentRunner {
    * The process exits after each turn — this matches terminal behavior.
    */
   async runTurn(prompt: string, isResume: boolean): Promise<void> {
-    const agent = queries.getAgent(this.agentId);
+    const agent = await queries.getAgent(this.agentId);
     if (!agent) throw new Error(`Agent ${this.agentId} not found`);
 
     // Budget check
-    const canAllocate = this.budgetManager.canAllocate(agent.priority);
+    const canAllocate = await this.budgetManager.canAllocate(agent.priority);
     if (!canAllocate.allowed) {
       throw new Error(`Budget denied: ${canAllocate.reason}`);
     }
@@ -126,11 +126,11 @@ export class AgentRunner {
 
     // Transition to running
     this.transitionState(agent, "running");
-    queries.updateAgentState(this.agentId, "running", {
+    await queries.updateAgentState(this.agentId, "running", {
       started_at: new Date().toISOString(),
     });
 
-    const permissionHandler = createPermissionHandler(
+    const permissionHandler = await createPermissionHandler(
       this.agentId,
       this.eventBus
     );
@@ -191,7 +191,7 @@ export class AgentRunner {
                 agentId: this.agentId,
                 subagent: info,
               });
-              queries.insertAgentEvent(this.agentId, "message", {
+              await queries.insertAgentEvent(this.agentId, "message", {
                 role: "system",
                 content: `Subagent started: **${info.agentType}** (${subId})`,
               });
@@ -214,7 +214,7 @@ export class AgentRunner {
                 subagentId: subId,
                 transcriptPath: hi.agent_transcript_path || "",
               });
-              queries.insertAgentEvent(this.agentId, "message", {
+              await queries.insertAgentEvent(this.agentId, "message", {
                 role: "system",
                 content: `Subagent finished: **${info?.agentType || "unknown"}** (${subId})`,
               });
@@ -230,6 +230,7 @@ export class AgentRunner {
       });
 
       let sessionId = agent.sdk_session_id;
+      let receivedResult = false;
 
       // Detect the new claude PID(s) spawned by the SDK
       setTimeout(() => {
@@ -262,7 +263,7 @@ export class AgentRunner {
         ) {
           sessionId = msg.session_id as string;
           this._sessionId = sessionId;
-          queries.updateAgentState(this.agentId, "running", {
+          await queries.updateAgentState(this.agentId, "running", {
             sdk_session_id: sessionId,
           });
         }
@@ -273,7 +274,7 @@ export class AgentRunner {
           if (content) {
             this.emitMessage("assistant", content);
             this.taskMonitor.detectFromContent(this.agentId, content);
-            queries.insertAgentEvent(this.agentId, "message", {
+            await queries.insertAgentEvent(this.agentId, "message", {
               role: "assistant",
               content: content.substring(0, 2000),
             });
@@ -284,7 +285,7 @@ export class AgentRunner {
           for (const tu of toolUses) {
             this.emitMessage("tool", tu);
             this.taskMonitor.detectFromContent(this.agentId, tu);
-            queries.insertAgentEvent(this.agentId, "message", {
+            await queries.insertAgentEvent(this.agentId, "message", {
               role: "tool",
               content: tu.substring(0, 4000),
             });
@@ -310,7 +311,7 @@ export class AgentRunner {
               const estimatedCost =
                 ((usage.input_tokens || 0) * 0.000003 +
                   (usage.output_tokens || 0) * 0.000015);
-              this.budgetManager.recordUsage(
+              await this.budgetManager.recordUsage(
                 this.agentId,
                 usage.input_tokens || 0,
                 usage.output_tokens || 0,
@@ -340,7 +341,7 @@ export class AgentRunner {
             if (resultText && resultText.length > 0) {
               const preview = resultText.length > 2000 ? resultText.substring(0, 2000) + "\n..." : resultText;
               this.emitMessage("tool", `**Result**:\n\`\`\`\n${preview}\n\`\`\``);
-              queries.insertAgentEvent(this.agentId, "message", {
+              await queries.insertAgentEvent(this.agentId, "message", {
                 role: "tool",
                 content: `Result: ${resultText.substring(0, 4000)}`,
               });
@@ -370,11 +371,13 @@ export class AgentRunner {
 
         // Handle result — turn completed
         if ("type" in msg && msg.type === "result") {
+          receivedResult = true;
           const result = msg as {
             result?: string;
+            subtype?: string;
             total_cost_usd?: number;
             is_error?: boolean;
-            error?: string;
+            errors?: string[];
             session_id?: string;
           };
 
@@ -384,14 +387,32 @@ export class AgentRunner {
           }
 
           if (result.is_error) {
-            const errMsg = result.error || result.result || "Unknown error";
-            if (errMsg.toLowerCase().includes("too long") || errMsg.toLowerCase().includes("too large")) {
-              this.handleError(
-                "Session too large to resume — use Compact & Resume or Fresh Start below.",
-                sessionId
-              );
+            const subtype = result.subtype || "";
+            // error_max_turns / error_max_budget_usd are natural stops, not failures —
+            // transition to waiting_input so the user can continue if they choose.
+            if (subtype === "error_max_turns" || subtype === "error_max_budget_usd") {
+              const notice = subtype === "error_max_turns"
+                ? "Agent reached its max turns limit."
+                : "Agent reached its max budget limit.";
+              this.emitMessage("system", notice);
+              await queries.updateAgentState(this.agentId, "waiting_input", {
+                sdk_session_id: sessionId,
+              });
+              this.emitStateChange("running", "waiting_input");
+              await queries.insertAgentEvent(this.agentId, "state_change", {
+                from: "running",
+                to: "waiting_input",
+              });
             } else {
-              this.handleError(errMsg, sessionId);
+              const errMsg = (result.errors || []).join("; ") || "Unknown error";
+              if (errMsg.toLowerCase().includes("too long") || errMsg.toLowerCase().includes("too large")) {
+                await this.handleError(
+                  "Session too large to resume — use Compact & Resume or Fresh Start below.",
+                  sessionId
+                );
+              } else {
+                await this.handleError(errMsg, sessionId);
+              }
             }
           } else {
             if (result.result) {
@@ -399,15 +420,29 @@ export class AgentRunner {
             }
             // Turn completed successfully. Save session, go to waiting_input.
             // Process will exit — next user message starts a new turn via resume.
-            queries.updateAgentState(this.agentId, "waiting_input", {
+            await queries.updateAgentState(this.agentId, "waiting_input", {
               sdk_session_id: sessionId,
             });
             this.emitStateChange("running", "waiting_input");
-            queries.insertAgentEvent(this.agentId, "state_change", {
+            await queries.insertAgentEvent(this.agentId, "state_change", {
               from: "running",
               to: "waiting_input",
             });
           }
+        }
+      }
+
+      // Guard: if the generator ended without emitting a result message and we
+      // weren't intentionally stopped (kill/pause set _running=false), the claude
+      // process exited silently — treat as a transient failure so the user can resume.
+      if (!receivedResult && this._running) {
+        const currentAgent = await queries.getAgent(this.agentId);
+        if (currentAgent?.state === "running") {
+          logger.warn({ agentId: this.agentId }, "Session exited without result message (silent exit)");
+          await this.handleError(
+            "Session exited unexpectedly — the Claude process may have crashed or been killed by the OS. Try resuming.",
+            this._sessionId || null
+          );
         }
       }
     } catch (err: unknown) {
@@ -415,17 +450,18 @@ export class AgentRunner {
       if (message.includes("aborted") || message.includes("abort")) {
         logger.info({ agentId: this.agentId }, "Agent aborted");
       } else if (message.includes("too long") || message.includes("too large") || message.includes("context")) {
-        this.handleError(
+        await this.handleError(
           "Session too large to resume. Use 'fresh start' to begin a new session with a summary of the previous work.",
           agent.sdk_session_id
         );
       } else {
-        // Don't treat process exit as error if we already transitioned to waiting_input
-        const currentAgent = queries.getAgent(this.agentId);
-        if (currentAgent?.state === "waiting_input") {
+        // Don't treat process exit as error if we already transitioned out of running
+        const currentAgent = await queries.getAgent(this.agentId);
+        const terminalOrWaiting = ["waiting_input", "completed", "paused", "aborted"];
+        if (terminalOrWaiting.includes(currentAgent?.state ?? "")) {
           logger.info({ agentId: this.agentId, error: message }, "Process exited after turn (expected)");
         } else {
-          this.handleError(message, this._sessionId || null);
+          await this.handleError(message, this._sessionId || null);
         }
       }
     } finally {
@@ -446,7 +482,7 @@ export class AgentRunner {
 
   /** Start a new agent (first turn). */
   async start(): Promise<void> {
-    const agent = queries.getAgent(this.agentId);
+    const agent = await queries.getAgent(this.agentId);
     if (!agent) throw new Error(`Agent ${this.agentId} not found`);
     await this.runTurn(agent.prompt, false);
   }
@@ -454,7 +490,7 @@ export class AgentRunner {
   /** Resume with a user message (subsequent turns). */
   async resumeWithInput(userMessage: string): Promise<void> {
     // Emit the user message to UI
-    queries.insertAgentEvent(this.agentId, "message", {
+    await queries.insertAgentEvent(this.agentId, "message", {
       role: "user",
       content: userMessage,
     });
@@ -470,7 +506,7 @@ export class AgentRunner {
   }
 
   async pause(): Promise<void> {
-    const agent = queries.getAgent(this.agentId);
+    const agent = await queries.getAgent(this.agentId);
     if (!agent) return;
 
     assertTransition(agent.state, "paused");
@@ -484,16 +520,16 @@ export class AgentRunner {
       }
     }
 
-    queries.updateAgentState(this.agentId, "paused");
+    await queries.updateAgentState(this.agentId, "paused");
     this.emitStateChange(agent.state, "paused");
-    queries.insertAgentEvent(this.agentId, "state_change", {
+    await queries.insertAgentEvent(this.agentId, "state_change", {
       from: agent.state,
       to: "paused",
     });
   }
 
   async kill(): Promise<void> {
-    const agent = queries.getAgent(this.agentId);
+    const agent = await queries.getAgent(this.agentId);
     if (!agent) return;
 
     this._running = false;
@@ -517,9 +553,9 @@ export class AgentRunner {
     this.currentQuery = null;
     this.abortController = null;
 
-    queries.updateAgentState(this.agentId, "aborted");
+    await queries.updateAgentState(this.agentId, "aborted");
     this.emitStateChange(agent.state, "aborted");
-    queries.insertAgentEvent(this.agentId, "state_change", {
+    await queries.insertAgentEvent(this.agentId, "state_change", {
       from: agent.state,
       to: "aborted",
     });
@@ -543,7 +579,7 @@ export class AgentRunner {
       logger.info({ agentId: this.agentId }, "Agent interrupted for urgent message");
 
       this.emitMessage("system", `Urgent: ${userMessage}`);
-      queries.insertAgentEvent(this.agentId, "message", {
+      await queries.insertAgentEvent(this.agentId, "message", {
         role: "user",
         content: `[URGENT] ${userMessage}`,
       });
@@ -556,14 +592,14 @@ export class AgentRunner {
     }
   }
 
-  private handleError(message: string, sessionId: string | null): void {
+  private async handleError(message: string, sessionId: string | null): Promise<void> {
     logger.error({ agentId: this.agentId, error: message }, "Agent error");
-    queries.updateAgentState(this.agentId, "failed", {
+    await queries.updateAgentState(this.agentId, "failed", {
       error_message: message,
       ...(sessionId && { sdk_session_id: sessionId }),
     });
     this.emitStateChange("running", "failed");
-    queries.insertAgentEvent(this.agentId, "error", { error: message });
+    await queries.insertAgentEvent(this.agentId, "error", { error: message });
 
     const errorEvent: ServerEvent = {
       type: "agent:error",

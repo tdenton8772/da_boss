@@ -6,3 +6,14 @@ dist/
 *.db-wal
 .env
 .DS_Store
+claude_err.log
+*.tsbuildinfo
+
+# ── Deployment-specific config (private — NOT part of the neutral framework) ──
+# Real cluster/project/registry values live here locally; never committed.
+/k8s/
+!/k8s/gke/RUNBOOK.md
+!/k8s/gke/deploy-manager-prompt.md
+/cloudbuild.daboss.yaml
+/INFRA_HANDOFF.md
+/deploy-local/

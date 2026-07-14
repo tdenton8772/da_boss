@@ -8,15 +8,15 @@ import { logger } from "../utils/logger.js";
 export class TokenBudgetManager {
   constructor(private eventBus: EventEmitter) {}
 
-  recordUsage(
+  async recordUsage(
     agentId: string,
     inputTokens: number,
     outputTokens: number,
     cacheReadInputTokens: number,
     cacheCreationInputTokens: number,
     costUsd: number
-  ): void {
-    queries.insertTokenUsage(
+  ): Promise<void> {
+    await queries.insertTokenUsage(
       agentId,
       inputTokens,
       outputTokens,
@@ -25,7 +25,7 @@ export class TokenBudgetManager {
       costUsd
     );
 
-    const agentTotal = queries.getAgentTotalCost(agentId);
+    const agentTotal = await queries.getAgentTotalCost(agentId);
 
     const event: ServerEvent = {
       type: "agent:token_usage",
@@ -37,11 +37,11 @@ export class TokenBudgetManager {
     };
     this.eventBus.emit("server-event", event);
 
-    this.broadcastBudgetStatus();
+    await this.broadcastBudgetStatus();
   }
 
-  canAllocate(priority: PriorityTier): { allowed: boolean; reason?: string } {
-    const status = this.getStatus();
+  async canAllocate(priority: PriorityTier): Promise<{ allowed: boolean; reason?: string }> {
+    const status = await this.getStatus();
 
     // Emergency: over 110% daily
     if (status.daily_percent >= 110) {
@@ -75,13 +75,13 @@ export class TokenBudgetManager {
   /**
    * Returns list of agent IDs that should be paused based on budget.
    */
-  getAgentsToPause(): string[] {
-    const status = this.getStatus();
+  async getAgentsToPause(): Promise<string[]> {
+    const status = await this.getStatus();
     const toPause: string[] = [];
 
     if (status.daily_percent < 90) return toPause;
 
-    const runningAgents = queries.getAgentsByState("running");
+    const runningAgents = await queries.getAgentsByState("running");
 
     for (const agent of runningAgents) {
       if (status.daily_percent >= 110) {
@@ -99,10 +99,12 @@ export class TokenBudgetManager {
     return toPause;
   }
 
-  getStatus(): BudgetStatus {
-    const budgetConfig = queries.getBudgetConfig();
-    const dailySpend = queries.getDailySpend();
-    const monthlySpend = queries.getMonthlySpend();
+  async getStatus(): Promise<BudgetStatus> {
+    const [budgetConfig, dailySpend, monthlySpend] = await Promise.all([
+      queries.getBudgetConfig(),
+      queries.getDailySpend(),
+      queries.getMonthlySpend(),
+    ]);
 
     return {
       config: budgetConfig,
@@ -127,8 +129,8 @@ export class TokenBudgetManager {
     };
   }
 
-  private broadcastBudgetStatus(): void {
-    const status = this.getStatus();
+  private async broadcastBudgetStatus(): Promise<void> {
+    const status = await this.getStatus();
     const event: ServerEvent = {
       type: "budget:updated",
       dailySpendUsd: status.daily_spend_usd,

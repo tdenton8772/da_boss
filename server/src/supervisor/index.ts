@@ -1,22 +1,32 @@
 import cron from "node-cron";
 import type { AgentManager } from "../agent/manager.js";
-import { runChecks } from "./checks.js";
+import { runChecks, type SupervisorDeps } from "./checks.js";
 import * as queries from "../db/queries.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 let task: cron.ScheduledTask | null = null;
 
+/** Full deps from the in-process boss manager (includes Claude-powered actions). */
+export function depsFromManager(manager: AgentManager): SupervisorDeps {
+  return {
+    getAgentsToPause: () => manager.budgetManager.getAgentsToPause(),
+    pauseAgent: (id) => manager.pauseAgent(id),
+    resolvePermission: (id, decision, answer) => manager.resolvePermission(id, decision, answer),
+    sendInput: (id, message) => manager.sendInput(id, message),
+  };
+}
+
 export function startSupervisor(manager: AgentManager): void {
   const schedule = `*/${config.supervisorIntervalMinutes} * * * *`;
 
   task = cron.schedule(schedule, async () => {
     logger.info("Supervisor run starting");
-    const runId = queries.insertSupervisorRun();
+    const runId = await queries.insertSupervisorRun();
 
     try {
-      const { findings, actions } = await runChecks(manager);
-      queries.completeSupervisorRun(runId, findings, actions);
+      const { findings, actions } = await runChecks(depsFromManager(manager));
+      await queries.completeSupervisorRun(runId, findings, actions);
 
       if (findings.length > 0 || actions.length > 0) {
         logger.info(
@@ -26,7 +36,7 @@ export function startSupervisor(manager: AgentManager): void {
       }
     } catch (err) {
       logger.error({ err }, "Supervisor run failed");
-      queries.completeSupervisorRun(runId, [], [{ error: String(err) }]);
+      await queries.completeSupervisorRun(runId, [], [{ error: String(err) }]);
     }
   });
 
@@ -47,8 +57,8 @@ export async function runSupervisorOnce(manager: AgentManager): Promise<{
   findings: unknown[];
   actions: unknown[];
 }> {
-  const runId = queries.insertSupervisorRun();
-  const { findings, actions } = await runChecks(manager);
-  queries.completeSupervisorRun(runId, findings, actions);
+  const runId = await queries.insertSupervisorRun();
+  const { findings, actions } = await runChecks(depsFromManager(manager));
+  await queries.completeSupervisorRun(runId, findings, actions);
   return { findings, actions };
 }

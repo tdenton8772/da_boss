@@ -530,7 +530,7 @@ export function createDiscoveryRouter(): Router {
 
       const agentId = nanoid();
 
-      const agent = queries.insertAgent({
+      const agent = await queries.insertAgent({
         id: agentId,
         name,
         prompt: firstPrompt || "(imported session - no prompt found)",
@@ -545,6 +545,13 @@ export function createDiscoveryRouter(): Router {
         error_message: null,
         supervisor_instructions: "",
         permission_policy: "auto",
+        created_by_user_id: req.user?.userId ?? null,
+        repo_url: null,
+        repo_ref: null,
+        branch: null,
+        service_account: null,
+        worker_image: null,
+        adopted_ref: null,
       });
 
       logger.info(

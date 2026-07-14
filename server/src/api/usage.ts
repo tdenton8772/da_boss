@@ -160,7 +160,7 @@ function getAccountInfo(creds: OAuthCreds): UsageData["account"] {
   };
 }
 
-// Cache the email so we don't call auth status every time
+// Email is cached alongside usage (same TTL — cleared on refresh)
 let cachedEmail: string | null = null;
 
 async function fetchUsage(): Promise<UsageData | null> {
@@ -193,17 +193,15 @@ async function fetchUsage(): Promise<UsageData | null> {
     const data = await res.json();
     const account = getAccountInfo(auth.creds);
 
-    // Get email once
-    if (!cachedEmail) {
-      try {
-        const authRaw = execSync(
-          `${process.env.CLAUDE_PATH || "claude"} auth status`,
-          { encoding: "utf-8", timeout: 5000 }
-        ).trim();
-        const authData = JSON.parse(authRaw);
-        cachedEmail = authData.email || null;
-      } catch { /* ignore */ }
-    }
+    // Re-fetch email on every usage refresh so account switches are reflected
+    try {
+      const authRaw = execSync(
+        `${process.env.CLAUDE_PATH || "claude"} auth status`,
+        { encoding: "utf-8", timeout: 5000 }
+      ).trim();
+      const authData = JSON.parse(authRaw);
+      cachedEmail = authData.email || null;
+    } catch { /* ignore */ }
     account.email = cachedEmail;
 
     cachedUsage = {
@@ -246,6 +244,7 @@ export function createUsageRouter(): Router {
   // Force refresh (bypasses cache)
   router.post("/api/usage/refresh", async (_req, res) => {
     lastFetchAt = 0;
+    cachedEmail = null;
     const usage = await fetchUsage();
     res.json(usage || { error: "Failed to fetch" });
   });

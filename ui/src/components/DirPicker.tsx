@@ -30,12 +30,14 @@ export function DirPicker({
     setLoading(true);
     fetch(`/api/browse?dir=${encodeURIComponent(dir)}`)
       .then((r) => r.json())
-      .then((data: BrowseResult) => {
-        setCurrent(data.current);
-        setDirs(data.dirs);
-        setParent(data.parent);
+      .then((data: Partial<BrowseResult>) => {
+        // in-cluster the boss pod has no browsable user filesystem; guard against
+        // an error/empty shape so the picker degrades instead of crashing
+        setCurrent(data.current ?? dir);
+        setDirs(Array.isArray(data.dirs) ? data.dirs : []);
+        setParent(data.parent ?? null);
       })
-      .catch(() => {})
+      .catch(() => setDirs([]))
       .finally(() => setLoading(false));
   };
 

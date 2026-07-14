@@ -7,7 +7,9 @@ import remarkGfm from "remark-gfm";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
+import { deriveStatus } from "../agentStatus";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { useToastHelpers } from "../components/Toast";
 import { ArrowLeft } from "lucide-react";
 import { FileBrowser } from "../components/FileBrowser";
 
@@ -23,13 +25,27 @@ interface AgentData {
   max_budget_usd: number | null;
   error_message: string | null;
   supervisor_instructions?: string;
+  pr_url?: string | null;
+  pr_number?: number | null;
+  repo_url?: string | null;
+  repo_ref?: string | null;
+  review?: string | null;
+  recommendation?: string | null;
   total_cost_usd?: number;
+  testing?: boolean;
+  review_agent_id?: string | null;
+  review_of_agent_id?: string | null;
+  deployed_by_agent_id?: string | null;
+  adopted_ref?: string | null;
+  branch?: string | null;
+  shipped?: Array<{ id: string; pr_number: number | null; name: string }>;
   tokens?: { total_cost_usd: number };
 }
 
 export function AgentDetail() {
   const params = useParams();
   const navigate = useNavigate();
+  const toast = useToastHelpers();
   const id = params.id;
   const [agent, setAgent] = useState<AgentData | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -41,6 +57,7 @@ export function AgentDetail() {
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
   const [queuedCount, setQueuedCount] = useState(0);
+  const [actionBusy, setActionBusy] = useState(false);
   const subscribedRef = useRef(false);
 
   const refresh = useCallback(() => {
@@ -107,6 +124,9 @@ export function AgentDetail() {
           ];
         });
         setStreamBuffer("");
+        // System messages can change the agent record (PR opened, review landed,
+        // gated) — refetch it so the verdict card / PR link reflect the change.
+        if (event.role === "system") refresh();
       }
 
       if (event.type === "agent:stream" && event.agentId === id) {
@@ -203,12 +223,161 @@ export function AgentDetail() {
         <div className="min-w-0 flex-1">
           <h1 className="text-lg md:text-xl font-bold text-gray-100 truncate">{agent.name}</h1>
           <p className="text-xs text-gray-500 truncate">{agent.cwd}</p>
+          {agent.pr_url && (
+            <a
+              href={agent.pr_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 mt-1 text-xs text-blue-400 hover:text-blue-300"
+            >
+              🔀 PR #{agent.pr_number}
+            </a>
+          )}
         </div>
-        <div className="text-right text-sm shrink-0">
-          <div className="text-gray-400">{agent.state}</div>
+        <div className="text-right text-sm shrink-0 flex flex-col items-end gap-1">
+          <div className={deriveStatus(agent).color}>{deriveStatus(agent).label}</div>
           <div className="text-gray-500 font-mono">${cost.toFixed(4)}</div>
+          <button
+            onClick={() => {
+              api.testAgent(agent.id)
+                .then((r) => toast.success(`Running ${r.phase} phase — will gate the PR`))
+                .catch((e) => toast.error(e instanceof Error ? e.message : "Test failed to start"));
+            }}
+            className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1"
+            title="Run the repo's test phase for this branch; result gates the PR"
+          >
+            🧪 Run tests
+          </button>
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+            <button
+              onClick={() => {
+                api.queueReview(agent.id)
+                  .then((r) => { toast.success("Review queued — reading the code in depth"); navigate(`/agent/${r.reviewAgentId}`); })
+                  .catch((e) => toast.error(e instanceof Error ? e.message : "Couldn't queue review"));
+              }}
+              className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1"
+              title="Queue the standard review agent for this branch — correctness + security/operational risk, ends with a recommendation"
+            >
+              🔍 Queue review
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Link to the review agent's live trace (watch it review, or read the full reasoning) */}
+      {agent.review_agent_id && (
+        <Link
+          to={`/agent/${agent.review_agent_id}`}
+          className="flex items-center gap-2 bg-blue-900/30 border border-blue-700/50 hover:border-blue-500 text-blue-300 rounded-lg px-4 py-2.5 mb-4 text-sm"
+        >
+          🔍 <span className="font-medium">Review agent</span>
+          <span className="text-blue-400/80">— {agent.recommendation ? "read the full in-depth review" : "watch it review the code live"} →</span>
+        </Link>
+      )}
+      {/* If THIS is a review agent, link back to what it's reviewing */}
+      {agent.review_of_agent_id && (
+        <Link
+          to={`/agent/${agent.review_of_agent_id}`}
+          className="flex items-center gap-2 bg-gray-800/60 border border-gray-700 hover:border-gray-500 text-gray-300 rounded-lg px-4 py-2.5 mb-4 text-sm"
+        >
+          ← <span className="font-medium">Reviewing another agent's change</span> — back to it
+        </Link>
+      )}
+      {/* Adopting an existing PR/branch — pushes onto it instead of creating one */}
+      {agent.adopted_ref && (
+        <div className="flex items-center gap-2 bg-amber-900/20 border border-amber-700/40 text-amber-300 rounded-lg px-4 py-2.5 mb-4 text-sm">
+          📎 <span className="font-medium">Adopting {agent.adopted_ref}</span>
+          {agent.branch && agent.branch !== agent.adopted_ref && (
+            <span className="text-amber-400/80">— branch <code>{agent.branch}</code></span>
+          )}
+          <span className="text-amber-400/70">· pushes onto this existing branch</span>
+        </div>
+      )}
+      {/* This change shipped in a deploy → link to it (one trace: work→review→deploy) */}
+      {agent.deployed_by_agent_id && (
+        <Link
+          to={`/agent/${agent.deployed_by_agent_id}`}
+          className="flex items-center gap-2 bg-emerald-900/30 border border-emerald-700/50 hover:border-emerald-500 text-emerald-300 rounded-lg px-4 py-2.5 mb-4 text-sm"
+        >
+          🚀 <span className="font-medium">Shipped in a deploy</span> — view it →
+        </Link>
+      )}
+      {/* If THIS is a deploy agent, show what it shipped */}
+      {agent.shipped && agent.shipped.length > 0 && (
+        <div className="bg-emerald-900/20 border border-emerald-700/40 rounded-lg px-4 py-3 mb-4 text-sm">
+          <div className="text-emerald-300 font-medium mb-1">📦 This deploy shipped {agent.shipped.length} change{agent.shipped.length === 1 ? "" : "s"}:</div>
+          <div className="flex flex-wrap gap-2">
+            {agent.shipped.map((s) => (
+              <Link key={s.id} to={`/agent/${s.id}`} className="text-emerald-400 hover:text-emerald-200 underline">
+                {s.pr_number ? `PR #${s.pr_number}` : s.name}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Verdict card — the report-back: reviewer recommendation + next steps */}
+      {agent.recommendation && (
+        <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 mb-4">
+          <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+            <div className="text-sm">
+              <span className="text-gray-400">Reviewer recommendation:</span>{" "}
+              <span className={`font-bold uppercase ${
+                agent.recommendation === "merge" ? "text-green-400"
+                : agent.recommendation === "fix" ? "text-amber-400" : "text-red-400"
+              }`}>{agent.recommendation}</span>
+            </div>
+            {agent.state !== "verified" ? (
+              <div className="flex gap-2">
+                <button
+                  disabled={actionBusy}
+                  onClick={() => {
+                    // HOLD-merge guard: the reviewer flagged this — make the human pause.
+                    const flagged = agent.recommendation === "hold" || agent.recommendation === "fix";
+                    if (flagged && !confirm(
+                      `⚠️ The review is ${agent.recommendation?.toUpperCase()} — the reviewer flagged this change (see the verdict below).\n\nMerge anyway? This will be recorded against you.`
+                    )) return;
+                    setActionBusy(true);
+                    api.mergeAgent(agent.id, flagged)
+                      .then((r) => { toast.success(r?.landing ? "Landing — rebasing on main + retesting before merge…" : "Merged"); refresh(); })
+                      .catch((e) => toast.error(e instanceof Error ? e.message : "Merge failed"))
+                      .finally(() => setActionBusy(false));
+                  }}
+                  className={`text-sm disabled:opacity-40 text-white rounded px-3 py-1.5 ${
+                    agent.recommendation === "hold" || agent.recommendation === "fix"
+                      ? "bg-amber-700 hover:bg-amber-600" : "bg-green-700 hover:bg-green-600"
+                  }`}
+                >{actionBusy ? "Landing…" : (agent.recommendation === "hold" || agent.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
+                <button
+                  disabled={actionBusy}
+                  onClick={() => {
+                    const fb = prompt("What changes should the agent make?");
+                    if (fb) api.requestChanges(agent.id, fb).then(() => { toast.success("Sent back to the agent"); refresh(); }).catch((e) => toast.error(e instanceof Error ? e.message : "Failed"));
+                  }}
+                  className="text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200 rounded px-3 py-1.5"
+                >Request changes</button>
+              </div>
+            ) : agent.repo_url && (
+              <button
+                disabled={actionBusy}
+                title={`Deploy ${agent.repo_ref || "main"} — proposes a gated deploy you approve in Reviews`}
+                onClick={() => {
+                  if (!confirm(`Deploy \`${agent.repo_ref || "main"}\`?\n\nThis proposes the repo's deploy phase. It's gated — you'll still approve it in Reviews before anything ships.`)) return;
+                  setActionBusy(true);
+                  api.runPipeline(agent.repo_url!, "deploy", agent.repo_ref || "main")
+                    .then(() => toast.success("Deploy proposed — approve it in Reviews"))
+                    .catch((e) => toast.error(e instanceof Error ? e.message : "Deploy failed"))
+                    .finally(() => setActionBusy(false));
+                }}
+                className="text-sm bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white rounded px-3 py-1.5"
+              >{actionBusy ? "Proposing…" : `Deploy ${agent.repo_ref || "main"}`}</button>
+            )}
+          </div>
+          {agent.review && (
+            <pre className="text-xs text-gray-400 whitespace-pre-wrap font-sans max-h-56 overflow-y-auto">{agent.review}</pre>
+          )}
+        </div>
+      )}
 
       {/* Info */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 text-sm text-gray-400 overflow-hidden">
@@ -280,7 +449,7 @@ export function AgentDetail() {
 
       {/* Controls */}
       <div className="mb-4">
-        <ControlBar agentId={agent.id} state={agent.state} onAction={refresh} onDelete={() => navigate("/")} />
+        <ControlBar agentId={agent.id} state={agent.state} testing={agent.testing} onAction={refresh} onDelete={() => navigate("/")} />
         {queuedCount > 0 && (
           <div className="mt-2 px-3 py-1.5 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-amber-300">
             {queuedCount} message{queuedCount !== 1 ? "s" : ""} queued — waiting for agent to be ready

@@ -2,6 +2,16 @@ import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router";
 import { api, type BudgetStatus } from "../api";
 import { useToastHelpers } from "../components/Toast";
+import { CredentialPanel } from "../components/CredentialPanel";
+import { GitCredentialPanel } from "../components/GitCredentialPanel";
+import { SecretsPanel } from "../components/SecretsPanel";
+import { AdminUsersPanel } from "../components/AdminUsersPanel";
+import { SupervisorCredentialPanel } from "../components/SupervisorCredentialPanel";
+import { DefaultRepoPanel } from "../components/DefaultRepoPanel";
+import { ScenarioPanel } from "../components/ScenarioPanel";
+import { TokensPanel } from "../components/TokensPanel";
+import { PipelinePanel } from "../components/PipelinePanel";
+import { PipelineBuilder } from "../components/PipelineBuilder";
 import {
   ArrowLeft,
   LogOut,
@@ -154,6 +164,34 @@ export function Settings() {
       </div>
 
       <h1 className="text-2xl font-bold text-gray-100 mb-8">Settings</h1>
+
+      {/* Per-user credentials */}
+      <div className="mb-6 grid gap-6 md:grid-cols-2">
+        <CredentialPanel />
+        <GitCredentialPanel />
+        <SecretsPanel />
+      </div>
+
+      {/* Admin: supervisor credential + user roster + default repo (admins only) */}
+      <div className="mb-6 grid gap-6 md:grid-cols-2">
+        <SupervisorCredentialPanel />
+        <AdminUsersPanel />
+        <DefaultRepoPanel />
+      </div>
+
+      {/* Pipeline builder + runs/approval gate */}
+      <div className="mb-6 space-y-6">
+        <PipelineBuilder />
+        <PipelinePanel />
+      </div>
+
+      {/* Admin: live test scenarios */}
+      <div className="mb-6">
+        <ScenarioPanel />
+      </div>
+
+      {/* API Tokens */}
+      <TokensPanel />
 
       {/* Server Info */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">

@@ -35,6 +35,21 @@ export interface AgentRecord {
   error_message: string | null;
   supervisor_instructions: string;
   permission_policy: PermissionPolicy;
+  created_by_user_id: string | null;
+  repo_url: string | null;
+  repo_ref: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
+  advisory_strikes: number;
+  review: string | null;
+  recommendation: string | null;
+  service_account: string | null;
+  worker_image: string | null;
+  pipeline_run_id: string | null;
+  review_of_agent_id: string | null;
+  deployed_by_agent_id: string | null;
+  adopted_ref: string | null; // display marker when adopting an existing PR/branch
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -52,6 +67,30 @@ export interface CreateAgentRequest {
   max_budget_usd?: number;
   supervisor_instructions?: string;
   permission_policy?: PermissionPolicy;
+  repo_url?: string;
+  repo_ref?: string;
+  branch?: string; // full override; else computed from the pieces below
+  adopted_ref?: string; // display marker: the user's PR/branch reference when adopting
+  branch_type?: string; // feat | fix | chore | docs | refactor | test
+  issue_id?: string;
+  service_account?: string; // k8s SA the agent pod runs as (e.g. the deploy identity)
+  worker_image?: string; // image override for the agent container (e.g. a gcloud/kubectl image)
+}
+
+/** A review as a first-class entity (review-platform plan §3.1). Additive to the
+ *  legacy agents.review_of_agent_id linkage. `reviewed_agent_id` is today's delta
+ *  handle; no forge/PR vocabulary, per the neutrality check (§8). */
+export interface Review {
+  id: string;
+  reviewed_agent_id: string;
+  review_agent_id: string | null;
+  requested_by: string | null;
+  runner: string;
+  status: "pending" | "running" | "done" | "error";
+  recommendation: "merge" | "fix" | "hold" | null;
+  rationale: string | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface PermissionRequest {
@@ -61,6 +100,7 @@ export interface PermissionRequest {
   tool_input: string;
   tool_use_id: string;
   status: "pending" | "approved" | "denied";
+  resolution_answer: string | null;
   resolved_at: string | null;
   created_at: string;
 }
