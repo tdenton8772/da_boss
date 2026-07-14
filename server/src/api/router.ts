@@ -8,7 +8,7 @@ import * as pipelineService from "../pipeline/service.js";
 import { maybeProposeDeploy } from "../pipeline/completion.js";
 import { dispatchDeployAgent } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
-import { mergePr, updateBranch, getPullRequest, getBranchHead } from "../forge/github.js";
+import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview } from "../forge/github.js";
 import { nanoid } from "nanoid";
 import { SUPERVISOR_CRED_SETTING } from "../supervisor/credential.js";
 import { scenarios } from "../testing/scenarios.js";
@@ -970,6 +970,7 @@ export function createRouter(manager: AgentManager): Router {
       } catch (err) {
         const e = err as { status?: number };
         if (e.status !== 404) throw err; // 404 = no test phase → fall through to direct merge
+        await markReadyForReview(agent.repo_url, agent.pr_number, token).catch(() => {}); // un-draft — can't merge a draft
         const result = await mergePr(agent.repo_url, agent.pr_number, token);
         if (!result.merged) { res.status(400).json({ error: `Merge failed: ${result.message}` }); return; }
         await queries.updateAgentState(agent.id, "verified");

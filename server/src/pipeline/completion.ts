@@ -117,6 +117,10 @@ async function gateTestBatch(run: PipelineRun): Promise<void> {
       return;
     }
     try {
+      // GitHub refuses to merge a DRAFT PR (405). A PR that went straight to land
+      // (never through the on-green PR-gate that marks it ready) is still a draft,
+      // so un-draft it here before merging.
+      await markReadyForReview(agent.repo_url, agent.pr_number, token).catch(() => {});
       const m = await mergePr(agent.repo_url, agent.pr_number, token);
       if (m.merged) {
         await queries.updateAgentState(agent.id, "verified");
