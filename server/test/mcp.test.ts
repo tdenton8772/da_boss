@@ -55,7 +55,35 @@ describe("MCP surface", () => {
       "start_agent", "pause_agent", "resume_agent", "kill_agent", "send_input",
       "list_pending_permissions", "resolve_permission",
       "list_reviewable_changes", "request_review", "get_verdict",
+      "list_deploys", "get_deploy_verdict",
     ]) expect(tools.has(t)).toBe(true);
+    await client.close();
+  });
+
+  it("list_deploys + get_deploy_verdict return the PRE-DEPLOY review (not just code review)", async () => {
+    const repo = "https://github.com/o/r.git";
+    await queries.insertPipelineRun({ id: "run_dep", repoUrl: repo, ref: "main", phase: "deploy", status: "pending_review" });
+    await queries.setPipelineReview("run_dep", "RECOMMENDATION: hold\nASSESSMENT: worker image build is uncertain.", "hold");
+    await queries.insertPipelineRun({ id: "run_gt", repoUrl: repo, ref: "main", phase: "test", status: "passed", deployGateRunId: "run_dep" });
+
+    const client = await connect(port, await mintMcpToken());
+
+    const list = await client.callTool({ name: "list_deploys", arguments: {} });
+    expect(JSON.stringify(list.content)).toContain("run_dep");
+    expect(JSON.stringify(list.content)).toContain("hold");
+
+    // by run_id
+    const byId = await client.callTool({ name: "get_deploy_verdict", arguments: { run_id: "run_dep" } });
+    const s = JSON.stringify(byId.content);
+    expect(s).toContain("hold");
+    expect(s).toContain("worker image build is uncertain");
+    expect(s).toContain("main_tests"); // includes the gate results
+    expect(s).toContain("passed");
+
+    // by repo/ref (finds the in-flight deploy)
+    const byRepo = await client.callTool({ name: "get_deploy_verdict", arguments: { repo_url: repo, ref: "main" } });
+    expect(JSON.stringify(byRepo.content)).toContain("hold");
+
     await client.close();
   });
 
