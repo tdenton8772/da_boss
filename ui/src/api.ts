@@ -186,6 +186,11 @@ export const api = {
     }),
   revokeToken: (id: string) => request<{ ok: boolean }>(`/tokens/${id}`, { method: "DELETE" }),
 
+  // Pod t-shirt size presets (admin)
+  getSizePresets: () => request<Record<string, SizePreset>>("/admin/size-presets"),
+  saveSizePresets: (presets: Record<string, SizePreset>) =>
+    request<{ ok: boolean }>("/admin/size-presets", { method: "PUT", body: JSON.stringify(presets) }),
+
   // Pipeline builder
   validatePipeline: (yaml: string) =>
     request<{ ok: boolean; error?: string; phases?: Array<{ name: string; image: string; gate: string; requires: string[]; only_ref: string | null }> }>(
@@ -355,6 +360,11 @@ export interface CreateAgentData {
   branch?: string; // full override — set when adopting an existing PR/branch
   adopted_ref?: string; // display marker (e.g. "PR #17") shown on the agent
   size?: string; // pod t-shirt size (s|m|l|xl); omit for supervisor auto-sizing
+}
+
+export interface SizePreset {
+  requests: { cpu: string; memory: string; "ephemeral-storage": string };
+  limits: { memory: string; "ephemeral-storage": string };
 }
 
 export interface ApiTokenSummary {

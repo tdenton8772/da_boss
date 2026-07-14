@@ -48,3 +48,22 @@ export function nextSizeUp(size: string | null | undefined): TShirtSize {
   const i = SIZES.indexOf(normalizeSize(size) ?? DEFAULT_SIZE);
   return SIZES[Math.min(i + 1, SIZES.length - 1)];
 }
+
+// ── Admin-configurable presets (app_settings "size_presets" JSON) ──────
+const SETTING_KEY = "size_presets";
+
+/** Presets an admin configured in the UI, merged over the code/env defaults. */
+export async function getConfiguredPresets(): Promise<Record<TShirtSize, SizePreset>> {
+  const base = loadPresets();
+  try {
+    const { getAppSetting } = await import("../db/queries.js");
+    const raw = await getAppSetting(SETTING_KEY);
+    if (raw) return { ...base, ...(JSON.parse(raw) as Partial<Record<TShirtSize, SizePreset>>) };
+  } catch { /* bad/absent config → defaults */ }
+  return base;
+}
+
+/** Resolve a size to its resources using the admin-configured presets. */
+export async function resolvePresetConfigured(size: string | null | undefined): Promise<SizePreset> {
+  return (await getConfiguredPresets())[normalizeSize(size) ?? DEFAULT_SIZE];
+}

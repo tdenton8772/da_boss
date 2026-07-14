@@ -21,6 +21,7 @@ import * as queries from "../db/queries.js";
 import { requireAuth, requireAdmin, handleRegister, handleLogin, handleLogout, handleMe } from "./auth.js";
 import { handleCreateToken, handleListTokens, handleRevokeToken } from "./tokens.js";
 import { requireMcpAuth, mcpHandler } from "./mcp.js";
+import { getConfiguredPresets } from "../agent/sizing.js";
 import { getCipher } from "../crypto/cipher.js";
 import { config } from "../config.js";
 import { AGENT_TEMPLATES } from "../agent/templates.js";
@@ -55,6 +56,25 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/tokens", handleCreateToken);
   router.get("/api/tokens", handleListTokens);
   router.delete("/api/tokens/:id", handleRevokeToken);
+
+  // ── Pod t-shirt size presets (admin-configurable resource map) ──
+  router.get("/api/admin/size-presets", requireAdmin, async (_req, res) => {
+    res.json(await getConfiguredPresets());
+  });
+  router.put("/api/admin/size-presets", requireAdmin, async (req, res) => {
+    const presets = req.body as Record<string, unknown>;
+    // Minimal shape check: each size must have requests + limits objects.
+    for (const s of ["s", "m", "l", "xl"]) {
+      const p = presets?.[s] as { requests?: unknown; limits?: unknown } | undefined;
+      if (!p || typeof p.requests !== "object" || typeof p.limits !== "object") {
+        res.status(400).json({ error: `size '${s}' must have { requests, limits }` });
+        return;
+      }
+    }
+    await queries.setAppSetting("size_presets", JSON.stringify(presets));
+    await queries.insertAuditLog(req.ip || null, "size_presets.update", "settings", "size_presets", null, req.user?.userId);
+    res.json({ ok: true });
+  });
 
   // ── Per-user Claude credential (write-only vault) ─────
   router.get("/api/me/credential", async (req, res) => {
