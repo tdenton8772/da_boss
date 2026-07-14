@@ -77,7 +77,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
         repo_url: z.string().optional().describe("Git repo URL. Defaults to the server's configured default repo."),
         repo_ref: z.string().optional().describe("Base ref to branch from (default: main / the default repo ref)."),
         branch_type: z.string().optional().describe("feat | fix | chore | docs | refactor | test (default feat)"),
-        model: z.string().optional().describe("claude-sonnet-5 | claude-opus-4-8 | claude-haiku-4-5-20251001"),
+        model: z.string().optional().describe("Defaults to claude-opus-4-8 (code work). Options: claude-opus-4-8 | claude-fable-5 | claude-sonnet-5 | claude-haiku-4-5-20251001"),
         max_budget_usd: z.number().optional().describe("Optional spend cap in USD."),
       },
     },

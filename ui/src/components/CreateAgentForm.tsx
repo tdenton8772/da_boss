@@ -14,7 +14,7 @@ export function CreateAgentForm({
     prompt: "",
     cwd: "",
     priority: "medium",
-    model: "claude-sonnet-5",
+    model: "claude-opus-4-8",
     repo_url: "",
     repo_ref: "",
     branch_type: "feat",
@@ -145,7 +145,7 @@ export function CreateAgentForm({
                   type="button"
                   onClick={() => {
                     setSelectedTemplate(null);
-                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: "claude-sonnet-5" });
+                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: "claude-opus-4-8" });
                   }}
                   className="text-xs text-gray-500 hover:text-gray-400"
                 >
@@ -289,8 +289,9 @@ export function CreateAgentForm({
                 }
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm"
               >
+                <option value="claude-opus-4-8">Opus 4.8 (default — code work)</option>
+                <option value="claude-fable-5">Fable 5</option>
                 <option value="claude-sonnet-5">Sonnet 5</option>
-                <option value="claude-opus-4-8">Opus 4.8</option>
                 <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
               </select>
             </div>
