@@ -100,10 +100,11 @@ describe("OidcAuthProvider", () => {
     const provider = makeOidcProvider({
       publicKey: pem, claims: CLAIMS, allowedRoles: ["write_all", "admin"], adminEmails: [],
     });
-    // read_own (not an allowed group) → denied, not provisioned
+    // read_own (not an allowed group) → denied, but provisioned as a PENDING row
+    // (access_approved=false) so an admin can approve them with one toggle.
     const outsider = await mint(privateKey, { sub: "okta|out", email: "out@x.io", role: "read_own" });
     expect(await provider.authenticate(req(outsider))).toBeNull();
-    expect(await queries.getUserByExternalId("okta|out")).toBeUndefined();
+    expect((await queries.getUserByExternalId("okta|out"))?.access_approved).toBe(false);
     // write_all (SA) → allowed
     const sa = await mint(privateKey, { sub: "okta|sa2", email: "sa2@x.io", role: "write_all" });
     expect((await provider.authenticate(req(sa)))?.role).toBe("developer");
@@ -120,10 +121,14 @@ describe("OidcAuthProvider", () => {
     expect(await provider.authenticate(req(sa))).not.toBeNull();
     expect((await queries.getUserByExternalId("okta|sa3"))?.access_approved).toBe(true);
 
-    // A manager (role 'admin', no longer an allowed role) is denied by default...
+    // A manager (role 'admin', no longer an allowed role) is denied by default,
+    // but provisioned PENDING so an admin can flip access_approved to let them in.
     const mgr = await mint(privateKey, { sub: "okta|mgr", email: "mgr@x.io", role: "admin" });
     expect(await provider.authenticate(req(mgr))).toBeNull();
-    expect(await queries.getUserByExternalId("okta|mgr")).toBeUndefined();
+    expect((await queries.getUserByExternalId("okta|mgr"))?.access_approved).toBe(false);
+    // one toggle later, they're in (the Paul flow — no DB surgery)
+    await queries.setUserAccessApproved((await queries.getUserByExternalId("okta|mgr"))!.id, true);
+    expect(await provider.authenticate(req(mgr))).not.toBeNull();
 
     // ...until an admin explicitly approves that user — then the flag lets them in
     // even though their role doesn't qualify.
@@ -150,7 +155,7 @@ describe("OidcAuthProvider", () => {
     // Inverse: an allowed role but the claim says false → denied (claim wins).
     const sa = await mint(privateKey, { sub: "okta|sax", email: "sax@x.io", role: "write_all", daboss_access: false });
     expect(await provider.authenticate(req(sa))).toBeNull();
-    expect(await queries.getUserByExternalId("okta|sax")).toBeUndefined();
+    expect((await queries.getUserByExternalId("okta|sax"))?.access_approved).toBe(false);
   });
 
   it("denies an offboarded identity and does not re-provision it", async () => {
