@@ -29,6 +29,7 @@ import { normalizeGitUrl, authedUrl as authedUrlWithToken } from "../utils/git.j
 import { config } from "../config.js";
 import { ensurePullRequest } from "../forge/github.js";
 import { loadProjectContext } from "./project-context.js";
+import { loadRepoMcpServers } from "./repo-mcp.js";
 import type { AgentRecord } from "../types/agent.js";
 import { logger } from "../utils/logger.js";
 
@@ -522,6 +523,19 @@ async function main(): Promise<void> {
         ? `📖 Loaded the repo's CLAUDE.md${existsSync(`${WORK_DIR}/.claude`) ? " + .claude/ conventions" : ""} into context (${projectContext.length} chars).`
         : `ℹ️ No CLAUDE.md at the repo root — running without project-specific instructions.`,
     }).catch(() => {});
+    // Load the repo's OWN MCP servers (its .mcp.json) so the agent gets the repo's
+    // tools (memory / knowledge base, etc.) and honors its rules — the piece that
+    // makes the repo's mcp_tool hooks actually run. Command hooks (PreToolUse
+    // guards) already fire via settingSources:["project"]. NOT for review agents:
+    // starting a repo's servers runs its code, which must never happen for a fork.
+    const repoMcpServers = agent.review_of_agent_id ? {} : await loadRepoMcpServers(WORK_DIR);
+    const repoMcpNames = Object.keys(repoMcpServers);
+    if (repoMcpNames.length) {
+      await queries.insertAgentEvent(AGENT_ID, "message", {
+        role: "system",
+        content: `🔌 Loaded ${repoMcpNames.length} MCP server(s) from the repo's .mcp.json: ${repoMcpNames.join(", ")}.`,
+      }).catch(() => {});
+    }
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const q = sdkQuery({
@@ -529,9 +543,12 @@ async function main(): Promise<void> {
         options: {
           cwd: WORK_DIR,
           canUseTool,
-          // Keep settingSources for .claude/settings.json (permissions/hooks); the
-          // CLAUDE.md itself is injected via the append below since the CLI ignores it.
+          // Keep settingSources for .claude/settings.json (permissions + command
+          // hooks like the repo's PreToolUse guards, which DO fire) and CLAUDE.md.
           settingSources: ["project"],
+          // The repo's own MCP servers (from its .mcp.json) — the SDK doesn't
+          // auto-load these, so we pass them. Empty for review agents (see above).
+          ...(repoMcpNames.length ? { mcpServers: repoMcpServers } : {}),
           ...(agent.model ? { model: agent.model } : {}),
           systemPrompt: {
             type: "preset" as const,
