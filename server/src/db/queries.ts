@@ -1232,8 +1232,12 @@ export async function completeReview(
 /** True if this agent already has a live/finished review agent — so we don't
  *  dispatch a second one for the same completion. */
 export async function hasActiveReviewAgent(reviewedAgentId: string): Promise<boolean> {
+  // Only a review that's still in flight blocks dispatching another. A COMPLETED (or
+  // verified) review must NOT block a fresh one — otherwise, after the change is
+  // re-worked and re-tested, no new review ever runs and the change is stuck with a
+  // stale/empty verdict (it never re-enters the Reviews queue).
   const res = await getPool().query(
-    "SELECT 1 FROM agents WHERE review_of_agent_id = $1 AND state NOT IN ('failed','aborted') LIMIT 1",
+    "SELECT 1 FROM agents WHERE review_of_agent_id = $1 AND state NOT IN ('failed','aborted','completed','verified') LIMIT 1",
     [reviewedAgentId]
   );
   return res.rows.length > 0;
