@@ -23,6 +23,7 @@ import { logger } from "../utils/logger.js";
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
 const KANIKO_IMAGE = process.env.DABOSS_KANIKO_IMAGE || "gcr.io/kaniko-project/executor:latest";
 const BUILD_SA = process.env.DABOSS_BUILD_SERVICE_ACCOUNT || "";
+const KANIKO_MEMORY = process.env.DABOSS_KANIKO_MEMORY || "4Gi";
 
 let coreApi: k8s.CoreV1Api | null = null;
 function api(): k8s.CoreV1Api {
@@ -164,6 +165,9 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
     `--dockerfile=${spec.dockerfile || "Dockerfile"}`,
     `--destination=${image}`,
     "--cache=true",
+    // Snapshotting a large rootfs is the memory hog; don't also hold compressed
+    // layers in RAM. Without this, kaniko OOMs on toolchain images (python + onnx).
+    "--compressed-caching=false",
     ...(cacheRepo ? [`--cache-repo=${cacheRepo}`] : []),
     ...Object.entries(spec.buildArgs || {}).map(([k, v]) => `--build-arg=${k}=${v}`),
   ];
@@ -176,6 +180,13 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
         name: "kaniko",
         image: KANIKO_IMAGE,
         args,
+        // Explicit resources — a namespace LimitRanger otherwise caps this at its
+        // default (~512Mi), and kaniko snapshotting a multi-GB toolchain image
+        // OOMKills there. Configurable for very large images.
+        resources: {
+          requests: { cpu: "500m", memory: "2Gi", "ephemeral-storage": "6Gi" },
+          limits: { cpu: "2", memory: KANIKO_MEMORY, "ephemeral-storage": "16Gi" },
+        },
         // Kaniko clones the git context using these creds (GitHub PAT / installation token).
         env: [
           { name: "GIT_USERNAME", value: "x-access-token" },
