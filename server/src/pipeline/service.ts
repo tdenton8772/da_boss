@@ -8,8 +8,10 @@ import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
 import { getFileContents, getRepoAccess } from "../forge/github.js";
 import { launchPipelineRunner } from "../agent/pod-dispatcher.js";
+import { ensurePipelineImages } from "../agent/image-builder.js";
 import { parsePipeline, PIPELINE_PATH, isTestPhase, type PipelinePhase } from "./config.js";
 import { produceReview } from "./review.js";
+import { logger } from "../utils/logger.js";
 import type { AgentRecord } from "../types/agent.js";
 
 export const secretEnvName = (n: string): string => n.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -58,6 +60,14 @@ export async function resolvePhase(
 }
 
 export async function launchResolved(runId: string, repoUrl: string, ref: string | undefined, r: ResolvedPhase): Promise<void> {
+  // Build any toolchain images the phase declares a `build:` for, if they're missing
+  // from the registry (kaniko); reuse them if present. Keeps image definitions in the
+  // repo and self-bootstraps a fresh registry. A build failure fails the launch — the
+  // phase can't run without its image.
+  await ensurePipelineImages(r.ph, {
+    repoUrl, ref, gitToken: r.gitToken,
+    onProgress: (msg) => logger.info({ runId, msg }, "pipeline image build"),
+  });
   await launchPipelineRunner({
     runId, repoUrl, ref, command: r.ph.command, image: r.ph.image ?? null,
     params: r.ph.params || {}, secrets: r.secrets, gitToken: r.gitToken,
