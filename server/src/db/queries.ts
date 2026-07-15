@@ -156,8 +156,12 @@ export async function deleteAgent(id: string): Promise<void> {
     await client.query("DELETE FROM token_usage WHERE agent_id = $1", [id]);
     await client.query("DELETE FROM permission_requests WHERE agent_id = $1", [id]);
     await client.query("DELETE FROM agent_events WHERE agent_id = $1", [id]);
+    await client.query("DELETE FROM agent_commands WHERE agent_id = $1", [id]);
     await client.query("DELETE FROM leases WHERE holder_agent_id = $1", [id]);
     await client.query("DELETE FROM intents WHERE agent_id = $1", [id]);
+    // A reviewed agent (or a review agent) has reviews rows FK'd to it — these blocked
+    // deleting completed agents (they'd been through review). Clear both linkages.
+    await client.query("DELETE FROM reviews WHERE reviewed_agent_id = $1 OR review_agent_id = $1", [id]);
     await client.query("DELETE FROM agents WHERE id = $1", [id]);
   });
 }
