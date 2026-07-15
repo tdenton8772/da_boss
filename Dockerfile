@@ -33,19 +33,12 @@ ENV NODE_ENV=production
 # git: clone repos into /work; util-linux: flock for per-user shard mirror locking;
 # universal-ctags: function line-ranges for the sidecar's semantic freeze-leases
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates util-linux universal-ctags python3 python3-pip \
+  && apt-get install -y --no-install-recommends git ca-certificates util-linux universal-ctags \
   && rm -rf /var/lib/apt/lists/*
-# Pre-bake a local ONNX embedding model (fastembed — onnxruntime, NOT torch/
-# tensorflow) so an agent pod running a repo whose MCP does self-contained semantic
-# search works fully offline: the model is in the image, not downloaded per pod
-# (~150-200MB, one-time per node at image pull). Fetch WITH network at build time,
-# then force offline for runtime. Model is configurable; a repo's MCP reads it from
-# FASTEMBED_CACHE_PATH. Neutral: no repo specifics baked in beyond a public model id.
-ARG EMBED_MODEL=BAAI/bge-small-en-v1.5
-ENV FASTEMBED_CACHE_PATH=/opt/fastembed
-RUN python3 -m pip install --no-cache-dir --break-system-packages fastembed \
-  && python3 -c "from fastembed import TextEmbedding; TextEmbedding('${EMBED_MODEL}', cache_dir='/opt/fastembed')"
-ENV HF_HUB_OFFLINE=1
+# NOTE: this base stays generic on purpose — no per-repo toolchain (python, embedders,
+# graphics libs, …). A repo that needs more declares it in `.daboss/agent.Dockerfile`
+# (FROM ${DABOSS_BASE} + its deps); da_boss builds that agent image once, keyed by the
+# base + that Dockerfile, and runs the repo's agents in it. See agent/agent-image.ts.
 WORKDIR /app
 # hoisted workspace node_modules live at the repo root
 COPY --from=proddeps /app/node_modules ./node_modules

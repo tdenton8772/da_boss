@@ -12,6 +12,7 @@ import { deleteRemoteBranch, normalizeGitUrl, authedUrl } from "../utils/git.js"
 import type { AgentRecord } from "../types/agent.js";
 import { config } from "../config.js";
 import { resolvePresetConfigured } from "./sizing.js";
+import { resolveAgentImage } from "./agent-image.js";
 import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
@@ -174,6 +175,20 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     hasGit = true;
   }
 
+  // Self-provisioning agent image: if the repo declares `.daboss/agent.Dockerfile`,
+  // build it once (kaniko, keyed by base+Dockerfile) and run the agent in it; else the
+  // generic base. A deploy/custom agent (worker_image already set) keeps its image.
+  let agentImage = agent.worker_image || WORKER_IMAGE;
+  if (!agent.worker_image && agent.repo_url && hasGit) {
+    agentImage = await resolveAgentImage({
+      repoUrl: agent.repo_url,
+      ref: agent.repo_ref || undefined,
+      gitToken: secretData.GIT_TOKEN,
+      baseImage: WORKER_IMAGE,
+      onProgress: (msg) => { void queries.insertAgentEvent(agentId, "message", { role: "system", content: `🧱 ${msg}` }).catch(() => {}); },
+    });
+  }
+
   const secretName = agentSecretName(agentId);
   await upsertAgentCredSecret(secretName, secretData);
 
@@ -249,8 +264,9 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
       containers: [
         {
           name: "agent",
-          // image override (e.g. a gcloud/kubectl image for a deploy-manager agent)
-          image: agent.worker_image || WORKER_IMAGE,
+          // The self-provisioned repo image (or a custom worker_image, e.g. a
+          // gcloud/kubectl image for a deploy-manager agent), else the generic base.
+          image: agentImage,
           imagePullPolicy: "IfNotPresent",
           command: ["node", "dist/worker/index.js"],
           env: [

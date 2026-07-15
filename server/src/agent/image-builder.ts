@@ -128,30 +128,44 @@ function hash(s: string): number { let h = 0; for (let i = 0; i < s.length; i++)
  *  failure throws so the caller can surface it (a phase can't run without its image). */
 export async function ensurePipelineImages(
   phase: { image?: string; build?: ImageBuild; services?: Array<{ image: string; build?: ImageBuild }> },
-  opts: { repoUrl: string; ref?: string; gitToken: string; onProgress?: (msg: string) => void }
+  opts: BuildOpts
 ): Promise<void> {
   for (const { image, build } of imagesToEnsure(phase)) {
-    if (await imageExists(image)) {
-      opts.onProgress?.(`✓ image ${image} already exists — reusing`);
-      continue;
-    }
-    opts.onProgress?.(`🔨 building ${image} from ${build.context} (kaniko)…`);
-    await buildImage(image, build, opts.repoUrl, opts.ref, opts.gitToken);
-    opts.onProgress?.(`✓ built + pushed ${image}`);
+    await ensureImage(image, { context: build.context, dockerfile: build.dockerfile }, opts);
   }
 }
 
-async function buildImage(image: string, build: ImageBuild, repoUrl: string, ref: string | undefined, gitToken: string): Promise<void> {
+export interface BuildSpec {
+  context: string; // build context dir in the repo ("." = repo root)
+  dockerfile?: string; // Dockerfile path relative to context (default "Dockerfile")
+  buildArgs?: Record<string, string>; // --build-arg K=V (e.g. DABOSS_BASE for agent images)
+}
+export interface BuildOpts { repoUrl: string; ref?: string; gitToken: string; onProgress?: (msg: string) => void }
+
+/** Ensure `image` exists in the registry — reuse if present, build with kaniko if
+ *  missing. Throws if the build fails (the caller can't run without the image). */
+export async function ensureImage(image: string, spec: BuildSpec, opts: BuildOpts): Promise<void> {
+  if (await imageExists(image)) {
+    opts.onProgress?.(`✓ image ${image} already exists — reusing`);
+    return;
+  }
+  opts.onProgress?.(`🔨 building ${image} from ${spec.context} (kaniko)…`);
+  await buildImage(image, spec, opts.repoUrl, opts.ref, opts.gitToken);
+  opts.onProgress?.(`✓ built + pushed ${image}`);
+}
+
+async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: string | undefined, gitToken: string): Promise<void> {
   const gitUrl = normalizeGitUrl(repoUrl).replace(/^https:\/\//, "");
   const name = podName(image);
   const cacheRepo = cacheRepoFor(image);
   const args = [
     `--context=git://${gitUrl}${ref ? `#refs/heads/${ref}` : ""}`,
-    `--context-sub-path=${build.context}`,
-    `--dockerfile=${build.dockerfile || "Dockerfile"}`,
+    `--context-sub-path=${spec.context}`,
+    `--dockerfile=${spec.dockerfile || "Dockerfile"}`,
     `--destination=${image}`,
     "--cache=true",
     ...(cacheRepo ? [`--cache-repo=${cacheRepo}`] : []),
+    ...Object.entries(spec.buildArgs || {}).map(([k, v]) => `--build-arg=${k}=${v}`),
   ];
   const pod: k8s.V1Pod = {
     metadata: { name, namespace: NAMESPACE, labels: { app: "daboss-build" } },
