@@ -12,8 +12,18 @@ import { parse as parseYaml } from "yaml";
 
 /** A backing service the phase needs (e.g. a test database) — runs alongside the
  *  task as a native sidecar on the same localhost. Domain-neutral: any image. */
+/** How to build a toolchain image from a Dockerfile in the repo, if it isn't in the
+ *  registry yet. Keeps image DEFINITIONS in the repo (neutral) and self-bootstraps:
+ *  da_boss builds `image` from `<context>/Dockerfile` (kaniko) when it's missing, and
+ *  reuses it when it's present — `image`'s tag is the cache key. */
+export interface ImageBuild {
+  context: string; // Dockerfile context dir in the repo (e.g. "images/elixir-test")
+  dockerfile?: string; // path relative to context (default "Dockerfile")
+}
+
 export interface PipelineService {
   image: string;
+  build?: ImageBuild; // build `image` from the repo if it's missing (YAML: string context or { context, dockerfile })
   name?: string; // container name (default svc-N)
   port?: number; // if set, the task waits for localhost:<port> before running
   env?: Record<string, string>;
@@ -22,6 +32,7 @@ export interface PipelineService {
 export interface PipelinePhase {
   command: string;
   image?: string; // toolchain image to run in (e.g. google/cloud-sdk); default: da_boss
+  build?: ImageBuild; // build `image` from the repo if it's missing (YAML: string context or { context, dockerfile })
   requires?: string[]; // named secrets → injected as env vars
   params?: Record<string, string>; // static env params
   gate?: "human" | "auto"; // "human" → the run waits for an approve click
@@ -70,6 +81,22 @@ function asStringMap(v: unknown, where: string): Record<string, string> | undefi
   return out;
 }
 
+/** Normalize a `build:` field — accepts a string (the Dockerfile context) or
+ *  `{ context, dockerfile }` — into an ImageBuild. */
+function parseBuild(v: unknown, where: string): ImageBuild | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === "string") {
+    if (!v.trim()) throw new Error(`${where}.build (context) must be non-empty`);
+    return { context: v };
+  }
+  if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+    const b = v as Record<string, unknown>;
+    if (typeof b.context !== "string" || !b.context.trim()) throw new Error(`${where}.build needs a 'context'`);
+    return { context: b.context, dockerfile: typeof b.dockerfile === "string" ? b.dockerfile : undefined };
+  }
+  throw new Error(`${where}.build must be a string (context) or { context, dockerfile }`);
+}
+
 /** Parse + validate a pipeline definition. Throws with a clear message on bad input. */
 export function parsePipeline(yamlText: string): Pipeline {
   const doc = parseYaml(yamlText) as unknown;
@@ -105,6 +132,7 @@ export function parsePipeline(yamlText: string): Pipeline {
         if (typeof sv?.image !== "string" || !sv.image.trim()) throw new Error(`phase '${name}'.services[${i}] needs an 'image'`);
         return {
           image: sv.image,
+          build: parseBuild(sv.build, `phase '${name}'.services[${i}]`),
           name: typeof sv.name === "string" ? sv.name : undefined,
           port: typeof sv.port === "number" ? sv.port : undefined,
           env: asStringMap(sv.env, `phase '${name}'.services[${i}].env`),
@@ -114,6 +142,7 @@ export function parsePipeline(yamlText: string): Pipeline {
     phases[name] = {
       command: p.command,
       image: typeof p.image === "string" ? p.image : undefined,
+      build: parseBuild(p.build, `phase '${name}'`),
       requires: asStringArray(p.requires, `phase '${name}'.requires`),
       params: asStringMap(p.params, `phase '${name}'.params`),
       gate: (p.gate as "human" | "auto") ?? "auto",
