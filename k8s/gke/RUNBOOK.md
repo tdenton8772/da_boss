@@ -88,6 +88,40 @@ kubectl apply -f k8s/gke/40-netpol.yaml
 - Set the Supervisor Credential (Settings, admin) to a designated admin so the
   reviewer/supervisor have a Claude credential.
 
+## 11. Build identity (kaniko on-demand image builds) — LEAST PRIVILEGE
+
+Needed only if a repo uses on-demand images: a pipeline phase/service `build:` or a
+repo's `.daboss/agent.Dockerfile` (self-provisioning agent images). da_boss builds
+these with kaniko in-cluster; the build pod needs an identity that can **pull the
+base + push the result** to the AR repo — and **nothing else** (no deploy, no cluster
+access). Dedicated GSA/KSA, ONE role: `roles/artifactregistry.writer`.
+
+```bash
+PROJECT=YOUR_PROJECT
+# GSA with ONLY Artifact Registry write on the daboss repo (writer = pull + push).
+gcloud iam service-accounts create daboss-build --project=$PROJECT \
+  --display-name="da_boss kaniko image builder"
+gcloud artifacts repositories add-iam-policy-binding daboss \
+  --location=us-central1 --project=$PROJECT \
+  --member="serviceAccount:daboss-build@$PROJECT.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+# Workload Identity: let the daboss/daboss-build KSA impersonate that GSA.
+gcloud iam service-accounts add-iam-policy-binding \
+  daboss-build@$PROJECT.iam.gserviceaccount.com --project=$PROJECT \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:$PROJECT.svc.id.goog[daboss/daboss-build]"
+# k8s side (da_boss can do these itself):
+kubectl -n daboss create serviceaccount daboss-build
+kubectl -n daboss annotate serviceaccount daboss-build \
+  iam.gke.io/gcp-service-account=daboss-build@$PROJECT.iam.gserviceaccount.com
+kubectl -n daboss set env deploy/daboss DABOSS_BUILD_SERVICE_ACCOUNT=daboss-build
+```
+Permissions summary — the build identity needs **exactly** `roles/artifactregistry.writer`
+on the `daboss` repo. Do NOT reuse the deploy SA (that one can reach the cluster; a
+builder shouldn't). If `DABOSS_BUILD_SERVICE_ACCOUNT` is unset or the grant is missing,
+kaniko can't push → da_boss falls back to the generic base image (agents still run,
+just without the repo's declared toolchain).
+
 ## Notes / follow-ups
 - `test-web` phase image: on GKE point the app's `.daboss/pipeline.yaml` at
   `us-central1-docker.pkg.dev/YOUR_PROJECT/daboss/elixir-test:1.18` (not the local
