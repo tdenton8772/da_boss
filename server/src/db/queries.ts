@@ -1391,6 +1391,16 @@ export async function getActiveDeployStatusByRepoRef(): Promise<Map<string, stri
   return map;
 }
 
+/** States of the given agent ids, keyed by id — for resolving a change's deploy
+ *  agent state (deployed_by_agent_id → its deploy agent's state). */
+export async function getAgentStatesByIds(ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const res = await getPool().query<{ id: string; state: string }>(
+    "SELECT id, state FROM agents WHERE id = ANY($1)", [ids]
+  );
+  return new Map(res.rows.map((r) => [r.id, r.state]));
+}
+
 /** The most recent completed test run for an agent — feeds the deploy review. */
 export async function getLatestTestRunForAgent(agentId: string): Promise<PipelineRun | undefined> {
   const res = await getPool().query<PipelineRun>(

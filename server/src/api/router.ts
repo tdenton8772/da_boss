@@ -340,13 +340,18 @@ export function createRouter(manager: AgentManager): Router {
     const tokenSummaries = await queries.getAgentTokenSummaries();
     const summaryMap = new Map(tokenSummaries.map((s) => [s.agent_id, s]));
     const testing = new Set(await queries.getAgentsWithActiveTestRuns());
-    // In-flight deploy per repo/ref → a verified change reads its real deploy state.
+    // In-flight deploy per repo/ref (the pre-claim gate) + the state of each change's
+    // deploy agent (once claimed) → one coherent deploy status per change.
     const deployStatus = await queries.getActiveDeployStatusByRepoRef();
+    const deployAgentStates = await queries.getAgentStatesByIds(
+      agents.map((a) => a.deployed_by_agent_id).filter((x): x is string => !!x)
+    );
 
     const enriched = agents.map((a) => ({
       ...a,
       testing: testing.has(a.id), // so the card shows one coherent status
       deploy_status: a.repo_url ? deployStatus.get(`${a.repo_url.replace(/\.git$/, "")}@${a.repo_ref || "main"}`) ?? null : null,
+      deploy_agent_state: a.deployed_by_agent_id ? deployAgentStates.get(a.deployed_by_agent_id) ?? null : null,
       tokens: summaryMap.get(a.id) || {
         total_input_tokens: 0,
         total_output_tokens: 0,
@@ -493,11 +498,15 @@ export function createRouter(manager: AgentManager): Router {
       : undefined;
     const deploy_pending = !!activeDeploy;
     const deploy_status = activeDeploy?.status ?? null;
+    // Once a deploy has CLAIMED this change, its status follows that deploy agent.
+    const deploy_agent_state = agent.deployed_by_agent_id
+      ? (await queries.getAgent(agent.deployed_by_agent_id))?.state ?? null
+      : null;
     // Link to the review agent (its live trace) so the UI can offer "watch the review".
     const review_agent_id = await queries.getReviewAgentIdFor(agent.id);
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, review_agent_id, shipped });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped });
   });
 
   // Queue the standard review agent on demand (not just auto-after-tests). Same

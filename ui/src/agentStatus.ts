@@ -17,9 +17,13 @@ export function deriveStatus(agent: {
   recommendation?: string | null;
   pr_number?: number | null;
   deployed_by_agent_id?: string | null;
-  // Status of an in-flight deploy for this change's repo/ref, if any:
-  // pending_review = pre-deploy gate (tests on main), pending_approval = awaiting a
-  // human, running = deploying. Lets "verified" read what's actually happening.
+  // The state of the DEPLOY AGENT that claimed this change (via deployed_by_agent_id),
+  // if any — running = deploying, completed = deployed, failed = deploy failed. This
+  // is what a change reads once a deploy has claimed it, so N changes in one deploy
+  // move together and a prior deploy's change keeps its own status.
+  deploy_agent_state?: string | null;
+  // Status of an in-flight deploy for this change's repo/ref BEFORE it's claimed
+  // (the gate): pending_review = tests on main, pending_approval = awaiting a human.
   deploy_status?: string | null;
 }): StatusView {
   switch (agent.state) {
@@ -32,9 +36,23 @@ export function deriveStatus(agent: {
     case "failed": return { key: "failed", label: "Failed", color: "text-red-400" };
     case "aborted": return { key: "aborted", label: "Aborted", color: "text-red-400" };
     // A landed change is live, being deployed right now, or merged and waiting for a
-    // deploy to be kicked off — these must not all read the same "Merged".
+    // deploy to be kicked off — these must not all read the same "Merged". Check the
+    // IN-FLIGHT deploy FIRST: `deployed_by_agent_id` is set when the deploy agent is
+    // dispatched (not when it finishes), so a still-running deploy would otherwise
+    // read "Deployed" prematurely while the deploy agent is only mid-run.
     case "verified": {
-      if (agent.deployed_by_agent_id) return { key: "deployed", label: "Deployed", color: "text-green-400" };
+      // Claimed by a deploy → mirror THAT deploy agent's state (N changes in one
+      // deploy read the same thing; a prior deploy's change keeps its own).
+      if (agent.deployed_by_agent_id) {
+        switch (agent.deploy_agent_state) {
+          case "completed":
+          case "verified": return { key: "deployed", label: "Deployed", color: "text-green-400" };
+          case "failed":
+          case "aborted": return { key: "deploy_failed", label: "Deploy failed", color: "text-red-400" };
+          default: return { key: "deploying", label: "Deploying…", color: "text-blue-400", spin: true }; // pending/queued/running
+        }
+      }
+      // Not yet claimed by a deploy → is one being gated for this repo/ref?
       switch (agent.deploy_status) {
         case "pending_review": return { key: "deploy_gate", label: "Deploy gate: testing main", color: "text-blue-400", spin: true };
         case "pending_approval": return { key: "deploy_approval", label: "Deploy: awaiting approval", color: "text-amber-400" };
