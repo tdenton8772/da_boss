@@ -26,7 +26,8 @@ export async function resolvePhase(
   userId: string,
   repoUrl: string,
   ref: string | undefined,
-  phaseName: string
+  phaseName: string,
+  opts?: { allowAnyRef?: boolean }
 ): Promise<ResolvedPhase> {
   const gitCred = await queries.getUserGitCredential(userId);
   if (!gitCred) throw { status: 400, message: "Add a git credential first (needed to read the repo)." };
@@ -47,7 +48,7 @@ export async function resolvePhase(
   const pipeline = parsePipeline(yamlText);
   const ph = pipeline.phases[phaseName];
   if (!ph) throw { status: 404, message: `No phase '${phaseName}'. Available: ${Object.keys(pipeline.phases).join(", ")}` };
-  if (ph.only_ref && ref !== ph.only_ref) {
+  if (ph.only_ref && ref !== ph.only_ref && !opts?.allowAnyRef) {
     throw { status: 400, message: `Phase '${phaseName}' may only run on '${ph.only_ref}' (got '${ref ?? "default"}'). Deploy from the trusted ref, not a PR branch.` };
   }
   const secrets: Record<string, string> = {};

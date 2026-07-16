@@ -6,7 +6,7 @@ import { deleteAgentRemoteBranch, launchStateCleanupPod, launchPipelineRunner } 
 import { parsePipeline } from "../pipeline/config.js";
 import * as pipelineService from "../pipeline/service.js";
 import { maybeProposeDeploy } from "../pipeline/completion.js";
-import { dispatchDeployAgent } from "../pipeline/deploy-agent.js";
+import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
 import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview } from "../forge/github.js";
 import { nanoid } from "nanoid";
@@ -913,6 +913,30 @@ export function createRouter(manager: AgentManager): Router {
       await queries.insertAuditLog(ip, "pipeline.approve", "pipeline", run.id, `${run.phase} @ ${run.repo_url}`, req.user?.userId);
       await pipelineService.launchResolved(run.id, run.repo_url, run.git_ref || undefined, r);
       res.json({ ok: true, runId: run.id });
+    } catch (err) {
+      const e = err as { status?: number; message?: string };
+      res.status(e.status || 400).json({ error: e.message || String(err) });
+    }
+  });
+
+  // Deploy an agent's BRANCH to staging directly — bypasses the main-only guardrail
+  // AND the pre-deploy gate. This is an iteration deploy you trigger explicitly (the
+  // click IS the approval), so you can see the build before the PR merges. Reuses the
+  // repo's `deploy` phase command + identity, just on the branch. NOTE: it ships the
+  // branch to the SHARED staging env, replacing what's there until main is redeployed.
+  router.post("/api/agents/:id/deploy-branch", async (req, res) => {
+    const agent = await queries.getAgent(req.params.id);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) { res.status(400).json({ error: "Agent has no repo/branch to deploy" }); return; }
+    try {
+      const { runId, agentId } = await deployAgentBranch(manager, agent);
+      const ip = req.ip || req.socket.remoteAddress || null;
+      if (agentId) {
+        await queries.insertAgentEvent(agentId, "message", { role: "system", content: `🌿 **${actorOf(req)}** deployed BRANCH \`${agent.branch}\` to staging (bypassing the main gate) — running it now.` });
+        await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `🌿 Deploying this branch to staging (bypassing main) — [watch it](/agent/${agentId}).` }).catch(() => {});
+      }
+      await queries.insertAuditLog(ip, "pipeline.deploy_branch", "pipeline", runId, `${agent.branch} @ ${agent.repo_url}${agentId ? ` → agent ${agentId}` : ""} (by ${actorOf(req)})`, req.user?.userId);
+      res.json({ ok: true, runId, agentId });
     } catch (err) {
       const e = err as { status?: number; message?: string };
       res.status(e.status || 400).json({ error: e.message || String(err) });

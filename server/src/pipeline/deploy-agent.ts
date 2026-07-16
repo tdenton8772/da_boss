@@ -14,11 +14,14 @@
  * Domain-neutral — the command + identity come from the repo's pipeline.yaml; the
  * agent-capable image is da_boss config (config.deployAgentImage).
  */
+import { nanoid } from "nanoid";
 import { config } from "../config.js";
 import * as queries from "../db/queries.js";
+import { resolvePhase, launchResolved } from "./service.js";
 import type { AgentManager } from "../agent/manager.js";
 import type { PipelinePhase } from "./config.js";
 import type { PipelineRun } from "../db/queries.js";
+import type { AgentRecord } from "../types/agent.js";
 
 /** Build the deploy-manager prompt: run the command DETACHED, writing to the
  *  recorder's files (/work/.daboss/{log,exit}) so the run is tracked by exit code;
@@ -98,6 +101,24 @@ export async function dispatchDeployAgent(
   }
   await manager.startAgent(agent.id);
   return agent.id;
+}
+
+/** Deploy an agent's BRANCH (not main) to staging directly — bypasses the main-only
+ *  guardrail AND the pre-deploy gate. The caller triggering it IS the approval. Reuses
+ *  the repo's `deploy` phase command + identity, on the branch. Shared by the REST
+ *  endpoint + the MCP tool. Ships the branch to the SHARED staging env. */
+export async function deployAgentBranch(manager: AgentManager, agent: AgentRecord): Promise<{ runId: string; agentId?: string }> {
+  if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) throw { status: 400, message: "Agent has no repo/branch to deploy" };
+  const r = await resolvePhase(agent.created_by_user_id, agent.repo_url, agent.branch, "deploy", { allowAnyRef: true });
+  const runId = `run_${nanoid(12)}`;
+  await queries.insertPipelineRun({ id: runId, repoUrl: agent.repo_url, ref: agent.branch, phase: "deploy", status: "running", createdByUserId: agent.created_by_user_id, agentId: agent.id });
+  const run = (await queries.getPipelineRun(runId))!;
+  if (r.ph.agent) {
+    const deployAgentId = await dispatchDeployAgent(manager, run, r.ph);
+    return { runId, agentId: deployAgentId };
+  }
+  await launchResolved(runId, agent.repo_url, agent.branch, r);
+  return { runId };
 }
 
 /** Safety net for the deploy-agent-tracking gap: when a deploy-manager agent

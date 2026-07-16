@@ -265,6 +265,20 @@ export function AgentDetail() {
               🔍 Queue review
             </button>
           )}
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+            <button
+              onClick={() => {
+                if (!confirm(`Deploy branch \`${agent.branch}\` to STAGING now?\n\nThis bypasses the main-only gate and ships the branch to shared staging (replacing what's there until main is redeployed) so you can see the build before merging.`)) return;
+                api.deployBranch(agent.id)
+                  .then((r) => { toast.success("Deploying branch to staging…"); if (r.agentId) navigate(`/agent/${r.agentId}`); })
+                  .catch((e) => toast.error(e instanceof Error ? e.message : "Branch deploy failed"));
+              }}
+              className="mt-1 text-xs bg-emerald-900 hover:bg-emerald-800 text-emerald-200 rounded px-2 py-1"
+              title="Deploy THIS branch to staging (bypasses main) so you can see the build before the PR merges"
+            >
+              🌿 Deploy branch → staging
+            </button>
+          )}
         </div>
       </div>
 

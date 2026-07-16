@@ -13,6 +13,7 @@ import type { AgentManager } from "../agent/manager.js";
 import type { AuthedUser } from "../types/auth.js";
 import * as queries from "../db/queries.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
+import { deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { runTestPhasesForAgent } from "../pipeline/service.js";
 import { resolveBearer } from "./tokens.js";
 import { logger } from "../utils/logger.js";
@@ -142,6 +143,28 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
       if (!reviewAgentId) return asError("Couldn't queue a review — the agent has no repo/branch/owner.");
       const review = await queries.getReviewByReviewAgent(reviewAgentId);
       return asText({ review_id: review?.id ?? null, review_agent_id: reviewAgentId, status: "running" });
+    }
+  );
+
+  server.registerTool(
+    "deploy_branch",
+    {
+      description:
+        "Deploy an agent's CURRENT branch to staging WITHOUT merging — bypasses the main-only gate so a human can see the build before the PR merges. Ships the branch to the SHARED staging env (replacing what's there until main is redeployed). Returns the deploy run id + the deploy-manager agent id (poll get_agent_events on it to watch progress). Requires the repo to define an agent-managed `deploy` phase.",
+      inputSchema: { agent_id: z.string().describe("The agent whose branch to deploy to staging") },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      try {
+        const { runId, agentId } = await deployAgentBranch(manager, agent);
+        if (agentId) await queries.insertAgentEvent(agent_id, "message", { role: "system", content: `🌿 Deploying this branch to staging (bypassing main) — [watch it](/agent/${agentId}).` }).catch(() => {});
+        return asText({ run_id: runId, deploy_agent_id: agentId ?? null, note: "Branch deploying to staging; watch the deploy agent for progress." });
+      } catch (err) {
+        const e = err as { status?: number; message?: string };
+        return asError(e.message || String(err));
+      }
     }
   );
 
