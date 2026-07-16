@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import type { AgentManager } from "../agent/manager.js";
 import { runChecks, type SupervisorDeps } from "./checks.js";
+import { runTestPhasesForAgent } from "../pipeline/service.js";
 import * as queries from "../db/queries.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
@@ -14,6 +15,16 @@ export function depsFromManager(manager: AgentManager): SupervisorDeps {
     pauseAgent: (id) => manager.pauseAgent(id),
     resolvePermission: (id, decision, answer) => manager.resolvePermission(id, decision, answer),
     sendInput: (id, message) => manager.sendInput(id, message),
+    queueTestCycle: async (id) => {
+      const agent = await queries.getAgent(id);
+      if (!agent) return false;
+      try {
+        const started = await runTestPhasesForAgent(agent); // throws {status:404} if no test phase
+        return started.length > 0;
+      } catch {
+        return false; // no test phase / no repo — nothing to queue
+      }
+    },
   };
 }
 

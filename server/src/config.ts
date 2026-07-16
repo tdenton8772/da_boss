@@ -19,6 +19,11 @@ export const config = {
   // "inprocess" = spawn claude as a child of the boss (host/dev).
   // "pod"       = dispatch each agent to its own k8s pod (in-cluster).
   agentExecution: (process.env.AGENT_EXECUTION || "inprocess") as "inprocess" | "pod",
+  // Auto-run the test gate every time an agent completes a turn. OFF by default:
+  // agents iterate freely, and a test cycle is queued ONLY on demand — the agent
+  // (run_checks), a human (the 🧪 Run tests / review buttons), the supervisor
+  // (when it judges the change ready), or the merge land-gate.
+  autoTestOnComplete: (process.env.DABOSS_AUTO_TEST || "false") === "true",
   // Live per-agent sidecar (heartbeat + git telemetry + push command channel).
   // Added as a second container in each agent pod when on. Deterministic/advisory.
   agentSidecar: (process.env.AGENT_SIDECAR || "off") === "on",

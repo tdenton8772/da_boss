@@ -66,6 +66,18 @@ export interface SupervisorDeps {
   blockAgent?(agentId: string, reason: string): Promise<void>;
   /** Redirect a RUNNING agent mid-turn without killing it (interrupt + new instruction). */
   steerAgent?(agentId: string, message: string): Promise<void>;
+  /** Queue the repo's test gate on an agent's branch — the boss validating a change
+   *  it judges ready. Auto-test on completion is OFF; the supervisor is one of the
+   *  things (with the agent's run_checks + the human buttons) that can trigger it. */
+  queueTestCycle?(agentId: string): Promise<boolean>;
+}
+
+/** The boss validates a change it judged done: queue the repo's test gate on the
+ *  agent's branch (best-effort — no-op if the dep is absent or there's no PR/branch). */
+async function queueTestsIfReady(agentId: string, deps: SupervisorDeps, actions: Action[]): Promise<void> {
+  if (!deps.queueTestCycle) return;
+  const started = await deps.queueTestCycle(agentId).catch(() => false);
+  if (started) actions.push({ agentId, type: "supervisor_test", detail: "Supervisor queued a test cycle (validating the finished change)." });
 }
 
 export async function runChecks(
@@ -357,6 +369,8 @@ export async function runChecks(
             type: "supervisor_complete",
             detail: `Supervisor marked done: ${decision.message.substring(0, 100)}`,
           });
+          // Boss judged it done → validate it (auto-test on completion is off).
+          await queueTestsIfReady(agent.id, deps, actions);
           continue; // Skip idle warning
         } else if (decision.action === "notify") {
           recordAction(agent.id);
