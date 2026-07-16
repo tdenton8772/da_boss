@@ -268,6 +268,12 @@ export class AgentManager {
     // session (restored from the shard) with this message as the turn prompt.
     if (config.agentExecution === "pod") {
       await queries.insertAgentEvent(agentId, "message", { role: "user", content: message });
+      // Make it unmistakable this is a RESUME of THIS agent, not a new one — the pod
+      // re-dispatch below re-emits build/clone/load lines that read like a fresh boot.
+      await queries.insertAgentEvent(agentId, "message", {
+        role: "system",
+        content: `↻ Resuming **this same agent** with your message${agent.branch ? ` on branch \`${agent.branch}\`` : ""}${agent.pr_number ? ` (PR #${agent.pr_number})` : ""}. The setup lines below are its pod restarting to pick up your input — **not** a new agent.`,
+      });
       try {
         await createAgentPod(agentId, message);
       } catch (err) {
