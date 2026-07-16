@@ -36,6 +36,7 @@ interface AgentData {
   landing?: boolean;
   deploy_pending?: boolean;
   deploy_status?: string | null;
+  deploy_agent_state?: string | null;
   review_agent_id?: string | null;
   review_of_agent_id?: string | null;
   deployed_by_agent_id?: string | null;
