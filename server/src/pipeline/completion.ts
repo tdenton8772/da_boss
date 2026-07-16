@@ -14,6 +14,7 @@ import { dispatchReviewAgent } from "./review-agent.js";
 import { runPhase, listTestPhases, runDeployGateTests } from "./service.js";
 import { produceReview } from "./review.js";
 import { isTestPhase } from "./config.js";
+import { config } from "../config.js";
 import type { PipelineRun } from "../db/queries.js";
 import type { AgentManager } from "../agent/manager.js";
 import { logger } from "../utils/logger.js";
@@ -207,9 +208,11 @@ async function gateTestBatch(run: PipelineRun): Promise<void> {
         : `❌ Tests failed (${summary}) — PR #${agent.pr_number} left as draft with the failure comment.`,
     });
     logger.info({ prNumber: agent.pr_number, allPassed, phases: expected }, "Gated PR from test batch");
-    // Tests are in → dispatch an in-depth review AGENT (repo + tools, uncapped),
-    // once. Its recommendation lands on this agent when it finishes.
-    if (mgr) void dispatchReviewAgent(mgr, agent).catch((e) => logger.warn({ agentId: agent.id, err: e instanceof Error ? e.message : String(e) }, "Review agent dispatch failed"));
+    // Tests passing gates the PR (comment + ready), but does NOT auto-dispatch a
+    // review — that's on-demand now (request_review / the Review button), same policy
+    // as auto-test. Otherwise a mid-iteration test run (run_checks, etc.) would spin
+    // up an unwanted review. Gated by the same flag so both flip together.
+    if (mgr && config.autoTestOnComplete) void dispatchReviewAgent(mgr, agent).catch((e) => logger.warn({ agentId: agent.id, err: e instanceof Error ? e.message : String(e) }, "Review agent dispatch failed"));
   } catch (err) {
     logger.warn({ prNumber: agent.pr_number, err: err instanceof Error ? err.message : String(err) }, "PR gate failed");
   }

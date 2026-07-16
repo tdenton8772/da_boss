@@ -149,7 +149,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     "run_checks",
     {
       description:
-        "Re-run the repo's pipeline gates (ALL test phases) on an agent's CURRENT branch WITHOUT merging — use after you pushed a fix to re-validate. Runs asynchronously; when the gates finish, the PR is re-gated and a FRESH review is dispatched automatically. Poll get_verdict / list_reviewable_changes for the new outcome. Returns the runs started (or an error if the repo declares no test phase — then use request_review for a review-only pass).",
+        "Re-run the repo's pipeline gates (ALL test phases) on an agent's CURRENT branch WITHOUT merging — use after you pushed a fix to re-validate. Runs asynchronously; when the gates finish the PR is re-gated (comment + marked ready on green). It does NOT auto-dispatch a review — call request_review separately when you want the deep review. Returns the runs started (or an error if the repo declares no test phase).",
       inputSchema: { agent_id: z.string().describe("The agent whose current branch to re-check") },
     },
     async ({ agent_id }) => {
