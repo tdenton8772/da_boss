@@ -9,6 +9,7 @@ import pg from "pg";
 import type { EventEmitter } from "node:events";
 import * as queries from "../db/queries.js";
 import { maybeAutoTest } from "../pipeline/autochain.js";
+import { config } from "../config.js";
 import { applyReviewResult } from "../pipeline/review-agent.js";
 import { reconcileDeployRun } from "../pipeline/deploy-agent.js";
 import { logger } from "../utils/logger.js";
@@ -66,8 +67,9 @@ export function startLiveRelay(eventBus: EventEmitter): void {
           previousState: data.from,
         });
         const toState = String(data.to ?? "");
-        // Auto-chain: a completed agent with a PR + a test phase → run tests.
-        if (toState === "completed") void maybeAutoTest(ev.agent_id);
+        // Auto-chain: a completed agent → run tests. OFF by default (config) — agents
+        // iterate without building/testing until someone (agent/human/supervisor) asks.
+        if (toState === "completed" && config.autoTestOnComplete) void maybeAutoTest(ev.agent_id);
         // If a REVIEW agent just finished, parse its recommendation onto the PR.
         if (TERMINAL_STATES.has(toState)) void applyReviewResult(ev.agent_id).catch(() => {});
         // If a DEPLOY-MANAGER agent finished, make sure its deploy run is
