@@ -170,6 +170,9 @@ export const api = {
   // Test agent — run the repo's test phase for this agent's branch; gates its PR
   testAgent: (id: string) =>
     request<{ runId: string; phase: string }>(`/agents/${id}/test`, { method: "POST" }),
+  // Deploy this agent's BRANCH to staging (bypasses the main-only gate) — see it before merge
+  deployBranch: (id: string) =>
+    request<{ ok: boolean; runId: string; agentId?: string }>(`/agents/${id}/deploy-branch`, { method: "POST" }),
   // Report-back actions
   mergeAgent: (id: string, override?: boolean) => request<{ ok?: boolean; merged?: boolean; landing?: boolean }>(`/agents/${id}/merge`, { method: "POST", body: JSON.stringify({ override: !!override }) }),
   requestChanges: (id: string, feedback: string) =>
