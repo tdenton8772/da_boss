@@ -326,6 +326,7 @@ export interface AgentWithTokens {
   recommendation: string | null;
   testing?: boolean;
   landing?: boolean;
+  deploy_status?: string | null;
   deployed_by_agent_id?: string | null;
   review_of_agent_id?: string | null;
   adopted_ref?: string | null;

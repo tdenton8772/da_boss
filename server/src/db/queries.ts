@@ -1374,6 +1374,23 @@ export async function getActiveDeployRun(repoUrl: string, ref: string): Promise<
   return res.rows[0];
 }
 
+/** All in-flight deploy runs (any active status), keyed for the dashboard so a
+ *  verified change can show "deploy gate / awaiting approval / deploying" instead of
+ *  a flat "needs deploy". Key = `<bare repo>@<ref>`; newest wins. */
+export async function getActiveDeployStatusByRepoRef(): Promise<Map<string, string>> {
+  const res = await getPool().query<{ repo_url: string | null; git_ref: string | null; status: string }>(
+    `SELECT repo_url, git_ref, status FROM pipeline_runs
+      WHERE phase = 'deploy' AND status IN ('pending','pending_review','pending_approval','running')
+      ORDER BY created_at DESC`
+  );
+  const map = new Map<string, string>();
+  for (const r of res.rows) {
+    const key = `${(r.repo_url || "").replace(/\.git$/, "")}@${r.git_ref || "main"}`;
+    if (!map.has(key)) map.set(key, r.status); // newest (ordered desc) wins
+  }
+  return map;
+}
+
 /** The most recent completed test run for an agent — feeds the deploy review. */
 export async function getLatestTestRunForAgent(agentId: string): Promise<PipelineRun | undefined> {
   const res = await getPool().query<PipelineRun>(

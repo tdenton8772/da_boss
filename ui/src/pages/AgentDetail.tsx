@@ -35,6 +35,7 @@ interface AgentData {
   testing?: boolean;
   landing?: boolean;
   deploy_pending?: boolean;
+  deploy_status?: string | null;
   review_agent_id?: string | null;
   review_of_agent_id?: string | null;
   deployed_by_agent_id?: string | null;
@@ -360,11 +361,21 @@ export function AgentDetail() {
                   className="text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200 rounded px-3 py-1.5"
                 >Request changes</button>
               </div>
-            ) : agent.repo_url && (
+            ) : agent.repo_url && (() => {
+              // A deploy in flight → label the button by what stage it's actually at,
+              // so it doesn't read "Deploy in progress" while it's really testing main.
+              const deployLabel: Record<string, string> = {
+                pending_review: "Deploy gate: testing main…",
+                pending_approval: "Deploy: approve in Reviews →",
+                pending: "Deploying…",
+                running: "Deploying…",
+              };
+              const inFlight = agent.deploy_status ? deployLabel[agent.deploy_status] ?? "Deploy in progress…" : null;
+              return (
               <button
-                disabled={actionBusy || agent.deploy_pending}
-                title={agent.deploy_pending
-                  ? "A deploy is already in progress for this ref — running tests on main / awaiting your approval in Reviews."
+                disabled={actionBusy || !!agent.deploy_pending}
+                title={inFlight
+                  ? "A deploy is already in flight for this ref — see its stage on the label / in Reviews."
                   : `Deploy ${agent.repo_ref || "main"} — proposes a gated deploy you approve in Reviews`}
                 onClick={() => {
                   if (!confirm(`Deploy \`${agent.repo_ref || "main"}\`?\n\nThis proposes the repo's deploy phase. It's gated — you'll still approve it in Reviews before anything ships.`)) return;
@@ -375,8 +386,10 @@ export function AgentDetail() {
                     .finally(() => setActionBusy(false));
                 }}
                 className="text-sm bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white rounded px-3 py-1.5"
-              >{agent.deploy_pending ? "Deploy in progress…" : actionBusy ? "Proposing…" : `Deploy ${agent.repo_ref || "main"}`}</button>
-            )}
+              >{inFlight ?? (actionBusy ? "Proposing…" : `Deploy ${agent.repo_ref || "main"}`)}</button>
+              );
+            })()
+            }
           </div>
           {agent.review && (
             <pre className="text-xs text-gray-400 whitespace-pre-wrap font-sans max-h-56 overflow-y-auto">{agent.review}</pre>

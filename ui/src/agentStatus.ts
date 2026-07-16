@@ -17,6 +17,10 @@ export function deriveStatus(agent: {
   recommendation?: string | null;
   pr_number?: number | null;
   deployed_by_agent_id?: string | null;
+  // Status of an in-flight deploy for this change's repo/ref, if any:
+  // pending_review = pre-deploy gate (tests on main), pending_approval = awaiting a
+  // human, running = deploying. Lets "verified" read what's actually happening.
+  deploy_status?: string | null;
 }): StatusView {
   switch (agent.state) {
     case "pending": return { key: "pending", label: "Pending", color: "text-gray-400" };
@@ -27,11 +31,18 @@ export function deriveStatus(agent: {
     case "paused": return { key: "paused", label: "Paused", color: "text-gray-400" };
     case "failed": return { key: "failed", label: "Failed", color: "text-red-400" };
     case "aborted": return { key: "aborted", label: "Aborted", color: "text-red-400" };
-    // A landed change is either live (a later deploy shipped it) or merged and
-    // waiting for the next deploy — never let both read the same "Merged".
-    case "verified": return agent.deployed_by_agent_id
-      ? { key: "deployed", label: "Deployed", color: "text-green-400" }
-      : { key: "merged", label: "Merged · needs deploy", color: "text-sky-400" };
+    // A landed change is live, being deployed right now, or merged and waiting for a
+    // deploy to be kicked off — these must not all read the same "Merged".
+    case "verified": {
+      if (agent.deployed_by_agent_id) return { key: "deployed", label: "Deployed", color: "text-green-400" };
+      switch (agent.deploy_status) {
+        case "pending_review": return { key: "deploy_gate", label: "Deploy gate: testing main", color: "text-blue-400", spin: true };
+        case "pending_approval": return { key: "deploy_approval", label: "Deploy: awaiting approval", color: "text-amber-400" };
+        case "pending":
+        case "running": return { key: "deploying", label: "Deploying…", color: "text-blue-400", spin: true };
+      }
+      return { key: "merged", label: "Merged · needs deploy", color: "text-sky-400" };
+    }
   }
   if (agent.state === "completed") {
     // Refine the "completed" lifecycle by what's actually happening in the pipeline.

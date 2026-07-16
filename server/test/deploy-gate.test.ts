@@ -76,6 +76,23 @@ describe("getDeployGateTests — pre-deploy test runs tagged to a deploy", () =>
   });
 });
 
+describe("getActiveDeployStatusByRepoRef — a verified change reads its real deploy stage", () => {
+  it("maps repo@ref → the in-flight deploy status (newest wins), ignoring terminal", async () => {
+    await queries.insertPipelineRun({ id: "d_old", repoUrl: `${REPO}.git`, ref: "main", phase: "deploy", status: "failed" });
+    await queries.insertPipelineRun({ id: "d_now", repoUrl: REPO, ref: "main", phase: "deploy", status: "pending_review" });
+    await queries.insertPipelineRun({ id: "d_other", repoUrl: REPO, ref: "release", phase: "deploy", status: "pending_approval" });
+    const m = await queries.getActiveDeployStatusByRepoRef();
+    // .git suffix normalized so it keys the same as the agent's repo_url
+    expect(m.get(`${REPO}@main`)).toBe("pending_review");
+    expect(m.get(`${REPO}@release`)).toBe("pending_approval");
+  });
+
+  it("omits repos with only terminal deploy runs", async () => {
+    await queries.insertPipelineRun({ id: "d_done", repoUrl: REPO, ref: "main", phase: "deploy", status: "passed" });
+    expect((await queries.getActiveDeployStatusByRepoRef()).get(`${REPO}@main`)).toBeUndefined();
+  });
+});
+
 describe("hasLandInFlight — keeps the Merge button disabled during a land", () => {
   it("is true while a land_on_pass run is non-terminal, false once it's terminal", async () => {
     await queries.insertAgent({ ...baseAgent, id: "ag_land", state: "completed" });
