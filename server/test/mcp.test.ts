@@ -54,7 +54,7 @@ describe("MCP surface", () => {
       "create_agent", "list_agents", "get_agent", "get_agent_events",
       "start_agent", "pause_agent", "resume_agent", "kill_agent", "send_input",
       "list_pending_permissions", "resolve_permission",
-      "list_reviewable_changes", "request_review", "get_verdict",
+      "list_reviewable_changes", "request_review", "run_checks", "get_verdict",
       "list_deploys", "get_deploy_verdict",
     ]) expect(tools.has(t)).toBe(true);
     await client.close();

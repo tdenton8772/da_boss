@@ -13,6 +13,7 @@ import type { AgentManager } from "../agent/manager.js";
 import type { AuthedUser } from "../types/auth.js";
 import * as queries from "../db/queries.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
+import { runTestPhasesForAgent } from "../pipeline/service.js";
 import { resolveBearer } from "./tokens.js";
 import { logger } from "../utils/logger.js";
 
@@ -141,6 +142,27 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
       if (!reviewAgentId) return asError("Couldn't queue a review — the agent has no repo/branch/owner.");
       const review = await queries.getReviewByReviewAgent(reviewAgentId);
       return asText({ review_id: review?.id ?? null, review_agent_id: reviewAgentId, status: "running" });
+    }
+  );
+
+  server.registerTool(
+    "run_checks",
+    {
+      description:
+        "Re-run the repo's pipeline gates (ALL test phases) on an agent's CURRENT branch WITHOUT merging — use after you pushed a fix to re-validate. Runs asynchronously; when the gates finish, the PR is re-gated and a FRESH review is dispatched automatically. Poll get_verdict / list_reviewable_changes for the new outcome. Returns the runs started (or an error if the repo declares no test phase — then use request_review for a review-only pass).",
+      inputSchema: { agent_id: z.string().describe("The agent whose current branch to re-check") },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "review:create"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      try {
+        const runs = await runTestPhasesForAgent(agent);
+        return asText({ runs, note: "Gates re-running on the current branch; the PR re-gates and a fresh review dispatches when they finish." });
+      } catch (err) {
+        const e = err as { status?: number; message?: string };
+        return asError(e.message || String(err));
+      }
     }
   );
 
