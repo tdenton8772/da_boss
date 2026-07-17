@@ -173,6 +173,11 @@ export const api = {
   // Deploy this agent's BRANCH to staging (bypasses the main-only gate) — see it before merge
   deployBranch: (id: string) =>
     request<{ ok: boolean; runId: string; agentId?: string }>(`/agents/${id}/deploy-branch`, { method: "POST" }),
+  // Merge the base branch (main) INTO this agent's feature branch (branch cut from an
+  // older main). Clean → {clean:true} (resume to pick it up); conflicts → {dispatched:true}
+  // (the agent resolves them, then da_boss pushes).
+  syncMain: (id: string) =>
+    request<{ ok: boolean; clean?: boolean; dispatched?: boolean }>(`/agents/${id}/sync-main`, { method: "POST" }),
   // Report-back actions
   mergeAgent: (id: string, override?: boolean) => request<{ ok?: boolean; merged?: boolean; landing?: boolean }>(`/agents/${id}/merge`, { method: "POST", body: JSON.stringify({ override: !!override }) }),
   requestChanges: (id: string, feedback: string) =>
