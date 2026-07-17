@@ -9,6 +9,7 @@ import { maybeProposeDeploy } from "../pipeline/completion.js";
 import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
 import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview } from "../forge/github.js";
+import { syncMainIntoBranch } from "../forge/sync-branch.js";
 import { nanoid } from "nanoid";
 import { SUPERVISOR_CRED_SETTING } from "../supervisor/credential.js";
 import { scenarios } from "../testing/scenarios.js";
@@ -940,6 +941,36 @@ export function createRouter(manager: AgentManager): Router {
     } catch (err) {
       const e = err as { status?: number; message?: string };
       res.status(e.status || 400).json({ error: e.message || String(err) });
+    }
+  });
+
+  // Bring the base branch (main) INTO the agent's feature branch — for a branch cut
+  // from an older main that has since diverged. Two paths:
+  //  • Clean, and the branch has a PR → GitHub merges base→head server-side
+  //    (updateBranch, a merge commit — NOT a rebase, so the branch history the agent
+  //    has checked out isn't rewritten). Resume the agent to pick it up.
+  //  • Conflicts, or no PR yet → hand it to the agent: it merges origin/<base>
+  //    locally, resolves conflicts with its knowledge of the code, and stops; da_boss
+  //    pushes the branch as usual. This is the common case for a truly diverged branch.
+  router.post("/api/agents/:id/sync-main", async (req, res) => {
+    const agent = await queries.getAgent(req.params.id);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) { res.status(400).json({ error: "Agent has no repo/branch to sync" }); return; }
+    const ip = req.ip || req.socket.remoteAddress || null;
+    try {
+      const { clean, baseRef } = await syncMainIntoBranch(manager, agent);
+      if (clean) {
+        await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `⬇️ **${actorOf(req)}** merged the latest \`${baseRef}\` into \`${agent.branch}\` (clean, server-side). Resume the agent so its pod picks up the updated branch.` });
+        await queries.insertAuditLog(ip, "agent.sync_main", "agent", agent.id, `PR #${agent.pr_number}: clean merge of ${baseRef}`, req.user?.userId);
+        res.json({ ok: true, clean: true });
+        return;
+      }
+      await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `⬇️ **${actorOf(req)}** asked to merge \`${baseRef}\` into \`${agent.branch}\`${agent.pr_number ? " — it conflicts, so" : " —"} the agent is merging and resolving conflicts now. da_boss pushes the branch when it finishes.` });
+      await queries.insertAuditLog(ip, "agent.sync_main", "agent", agent.id, `${baseRef} → ${agent.branch} (agent resolve)`, req.user?.userId);
+      res.status(202).json({ ok: true, dispatched: true });
+    } catch (err) {
+      const e = err as { status?: number; message?: string };
+      res.status(e.status || 500).json({ error: e.message || (err instanceof Error ? err.message : String(err)) });
     }
   });
 

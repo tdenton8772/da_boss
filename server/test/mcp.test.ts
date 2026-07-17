@@ -54,7 +54,7 @@ describe("MCP surface", () => {
       "create_agent", "list_agents", "get_agent", "get_agent_events",
       "start_agent", "pause_agent", "resume_agent", "kill_agent", "send_input",
       "list_pending_permissions", "resolve_permission",
-      "list_reviewable_changes", "request_review", "run_checks", "deploy_branch", "get_verdict",
+      "list_reviewable_changes", "request_review", "run_checks", "deploy_branch", "sync_main", "get_verdict",
       "list_deploys", "get_deploy_verdict",
     ]) expect(tools.has(t)).toBe(true);
     await client.close();
@@ -114,6 +114,30 @@ describe("MCP surface", () => {
     // get_verdict reflects the open review
     const verdict = await client.callTool({ name: "get_verdict", arguments: { agent_id: "ag_target" } });
     expect(JSON.stringify(verdict.content)).toContain("running");
+    await client.close();
+  });
+
+  it("sync_main is denied without the agent:control scope", async () => {
+    const client = await connect(port, await mintMcpToken("mcp,review:read"));
+    const res = await client.callTool({ name: "sync_main", arguments: { agent_id: "ag_whatever" } });
+    expect(res.isError).toBe(true);
+    expect(JSON.stringify(res.content)).toContain("agent:control");
+    await client.close();
+  });
+
+  it("sync_main errors clearly when the agent has no repo/branch", async () => {
+    await queries.createUser({ id: "usr_bot", email: "bot@test.co", role: "bot" }).catch(() => {});
+    await queries.insertAgent({
+      id: "ag_norepo", name: "no repo", prompt: "x", cwd: "/work", state: "completed",
+      priority: "medium", permission_mode: "default", sdk_session_id: null, model: "claude-sonnet-5",
+      max_turns: null, max_budget_usd: null, error_message: null, supervisor_instructions: "",
+      permission_policy: "auto", created_by_user_id: "usr_bot", repo_url: null,
+      repo_ref: null, branch: null, service_account: null, worker_image: null, adopted_ref: null,
+    });
+    const client = await connect(port, await mintMcpToken("mcp,agent:control"));
+    const res = await client.callTool({ name: "sync_main", arguments: { agent_id: "ag_norepo" } });
+    expect(res.isError).toBe(true);
+    expect(JSON.stringify(res.content)).toContain("no repo/branch");
     await client.close();
   });
 

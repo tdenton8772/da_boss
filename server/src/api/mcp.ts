@@ -14,6 +14,7 @@ import type { AuthedUser } from "../types/auth.js";
 import * as queries from "../db/queries.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
 import { deployAgentBranch } from "../pipeline/deploy-agent.js";
+import { syncMainIntoBranch } from "../forge/sync-branch.js";
 import { runTestPhasesForAgent } from "../pipeline/service.js";
 import { resolveBearer } from "./tokens.js";
 import { logger } from "../utils/logger.js";
@@ -161,6 +162,32 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
         const { runId, agentId } = await deployAgentBranch(manager, agent);
         if (agentId) await queries.insertAgentEvent(agent_id, "message", { role: "system", content: `🌿 Deploying this branch to staging (bypassing main) — [watch it](/agent/${agentId}).` }).catch(() => {});
         return asText({ run_id: runId, deploy_agent_id: agentId ?? null, note: "Branch deploying to staging; watch the deploy agent for progress." });
+      } catch (err) {
+        const e = err as { status?: number; message?: string };
+        return asError(e.message || String(err));
+      }
+    }
+  );
+
+  server.registerTool(
+    "sync_main",
+    {
+      description:
+        "Bring the base branch (main) INTO an agent's feature branch — for a branch cut from an older main that has since diverged. If the branch is a clean fast-merge and has a PR, GitHub merges base→head server-side (a merge commit, not a rebase) and the agent picks it up on its next resume. If it conflicts (or has no PR yet), the agent is dispatched to merge origin/<base> locally, resolve conflicts with its knowledge of the code, and stop — da_boss then pushes the branch. Returns {clean:true} for the server-side merge or {dispatched:true} when the agent is resolving.",
+      inputSchema: { agent_id: z.string().describe("The agent whose branch to merge the base branch into") },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      try {
+        const { clean, baseRef } = await syncMainIntoBranch(manager, agent);
+        if (clean) {
+          await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `⬇️ Merged the latest \`${baseRef}\` into \`${agent.branch}\` (clean, server-side). Resume the agent to pick it up.` });
+          return asText({ clean: true, note: `${baseRef} merged into ${agent.branch} server-side; resume the agent to pick up the updated branch.` });
+        }
+        await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `⬇️ Merging \`${baseRef}\` into \`${agent.branch}\`${agent.pr_number ? " (conflicts) —" : " —"} the agent is resolving now; da_boss pushes when it finishes.` });
+        return asText({ dispatched: true, note: `Agent is merging ${baseRef} into ${agent.branch} and resolving conflicts; da_boss pushes the branch when it stops.` });
       } catch (err) {
         const e = err as { status?: number; message?: string };
         return asError(e.message || String(err));

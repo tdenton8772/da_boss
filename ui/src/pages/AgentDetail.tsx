@@ -268,6 +268,20 @@ export function AgentDetail() {
           {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
             <button
               onClick={() => {
+                if (!confirm(`Merge the latest \`${agent.repo_ref || "main"}\` into branch \`${agent.branch}\`?\n\nUse this when the branch was cut from an older ${agent.repo_ref || "main"} and they've diverged. A clean merge happens server-side (then resume the agent). If it conflicts, the agent merges and resolves the conflicts itself, then da_boss pushes.`)) return;
+                api.syncMain(agent.id)
+                  .then((r) => toast.success(r.clean ? `Merged ${agent.repo_ref || "main"} in cleanly — resume the agent to pick it up` : `Agent is merging ${agent.repo_ref || "main"} and resolving conflicts…`))
+                  .catch((e) => toast.error(e instanceof Error ? e.message : "Sync failed"));
+              }}
+              className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1"
+              title={`Merge the latest ${agent.repo_ref || "main"} into this feature branch (for a branch cut from an older ${agent.repo_ref || "main"} that has diverged)`}
+            >
+              ⬇️ Merge {agent.repo_ref || "main"} in
+            </button>
+          )}
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+            <button
+              onClick={() => {
                 if (!confirm(`Deploy branch \`${agent.branch}\` to STAGING now?\n\nThis bypasses the main-only gate and ships the branch to shared staging (replacing what's there until main is redeployed) so you can see the build before merging.`)) return;
                 api.deployBranch(agent.id)
                   .then((r) => { toast.success("Deploying branch to staging…"); if (r.agentId) navigate(`/agent/${r.agentId}`); })
