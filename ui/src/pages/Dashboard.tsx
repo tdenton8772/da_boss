@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { api, type AgentWithTokens, type BudgetStatus, type PermissionReq } from "../api";
 import { useWebSocket, type ServerEvent } from "../ws";
 import { AgentCard } from "../components/AgentCard";
+import { deriveStatus } from "../agentStatus";
 import { TokenBudgetBar } from "../components/TokenBudgetBar";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { CreateAgentForm } from "../components/CreateAgentForm";
@@ -84,7 +85,9 @@ export function Dashboard() {
       case "cost":
         return b.tokens.total_cost_usd - a.tokens.total_cost_usd;
       case "status":
-        return a.state.localeCompare(b.state);
+        // Sort by the SAME canonical status shown on the card (not the raw lifecycle
+        // state), so the ordering matches the labels the user sees.
+        return deriveStatus(a).label.localeCompare(deriveStatus(b).label);
       case "date":
       default:
         return new Date(b.updated_at || b.created_at).getTime() -

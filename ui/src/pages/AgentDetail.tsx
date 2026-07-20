@@ -8,6 +8,7 @@ import { useWebSocket, type ServerEvent } from "../ws";
 import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
 import { deriveStatus } from "../agentStatus";
+import { AgentActivity } from "../components/AgentActivity";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { useToastHelpers } from "../components/Toast";
 import { ArrowLeft } from "lucide-react";
@@ -347,6 +348,10 @@ export function AgentDetail() {
           </div>
         </div>
       )}
+
+      {/* Activity trace — every pipeline run + child agent associated with this agent
+          (tests/land/deploy run as pods with no page of their own; surfaced here). */}
+      <AgentActivity agentId={agent.id} />
 
       {/* Verdict card — the report-back: reviewer recommendation + next steps */}
       {agent.recommendation && (

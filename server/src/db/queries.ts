@@ -1357,6 +1357,28 @@ export async function getPipelineRunsForAgent(agentId: string): Promise<Pipeline
   return res.rows;
 }
 
+/** Batch of agent ids with a land in flight — the list-endpoint counterpart of
+ *  hasLandInFlight, so the dashboard card can show "Landing…" identically to detail. */
+export async function getAgentsWithLandInFlight(): Promise<string[]> {
+  const res = await getPool().query<{ agent_id: string }>(
+    `SELECT DISTINCT agent_id FROM pipeline_runs
+      WHERE agent_id IS NOT NULL AND land_on_pass = true
+        AND status IN ('pending','pending_review','pending_approval','running')`
+  );
+  return res.rows.map((r) => r.agent_id);
+}
+
+/** Child REVIEW agents for a change — agents dispatched to review THIS agent's work
+ *  (review_of_agent_id points back here). Newest first. For the activity trace. */
+export async function getReviewAgentsForAgent(agentId: string): Promise<Array<{ id: string; name: string; state: string; recommendation: string | null; created_at: Date }>> {
+  const res = await getPool().query<{ id: string; name: string; state: string; recommendation: string | null; created_at: Date }>(
+    `SELECT id, name, state, recommendation, created_at FROM agents
+      WHERE review_of_agent_id = $1 ORDER BY created_at DESC`,
+    [agentId]
+  );
+  return res.rows;
+}
+
 /** An in-flight (proposed, awaiting approval, or running) deploy for this repo+ref,
  *  if any — so we don't stack duplicate deploy cards on every merge to main. The
  *  repo_url is matched with and without a trailing `.git` (agents clone `…​.git`;

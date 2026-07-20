@@ -10,6 +10,7 @@ import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
 import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview, resolveOpenPrByBranch } from "../forge/github.js";
 import { syncMainIntoBranch } from "../forge/sync-branch.js";
+import { computeAgentStatus } from "./agent-status.js";
 import { nanoid } from "nanoid";
 import { SUPERVISOR_CRED_SETTING } from "../supervisor/credential.js";
 import { scenarios } from "../testing/scenarios.js";
@@ -360,6 +361,7 @@ export function createRouter(manager: AgentManager): Router {
     const tokenSummaries = await queries.getAgentTokenSummaries();
     const summaryMap = new Map(tokenSummaries.map((s) => [s.agent_id, s]));
     const testing = new Set(await queries.getAgentsWithActiveTestRuns());
+    const landing = new Set(await queries.getAgentsWithLandInFlight());
     // In-flight deploy per repo/ref (the pre-claim gate) + the state of each change's
     // deploy agent (once claimed) → one coherent deploy status per change.
     const deployStatus = await queries.getActiveDeployStatusByRepoRef();
@@ -367,17 +369,26 @@ export function createRouter(manager: AgentManager): Router {
       agents.map((a) => a.deployed_by_agent_id).filter((x): x is string => !!x)
     );
 
-    const enriched = agents.map((a) => ({
-      ...a,
-      testing: testing.has(a.id), // so the card shows one coherent status
-      deploy_status: a.repo_url ? deployStatus.get(`${a.repo_url.replace(/\.git$/, "")}@${a.repo_ref || "main"}`) ?? null : null,
-      deploy_agent_state: a.deployed_by_agent_id ? deployAgentStates.get(a.deployed_by_agent_id) ?? null : null,
-      tokens: summaryMap.get(a.id) || {
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cost_usd: 0,
-      },
-    }));
+    const enriched = agents.map((a) => {
+      const testingA = testing.has(a.id);
+      const landingA = landing.has(a.id);
+      const deploy_status = a.repo_url ? deployStatus.get(`${a.repo_url.replace(/\.git$/, "")}@${a.repo_ref || "main"}`) ?? null : null;
+      const deploy_agent_state = a.deployed_by_agent_id ? deployAgentStates.get(a.deployed_by_agent_id) ?? null : null;
+      return {
+        ...a,
+        testing: testingA, // so the card shows one coherent status
+        landing: landingA,
+        deploy_status,
+        deploy_agent_state,
+        // THE canonical status — same function + same inputs the detail endpoint uses.
+        status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, deploy_status, deploy_agent_state }),
+        tokens: summaryMap.get(a.id) || {
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          total_cost_usd: 0,
+        },
+      };
+    });
 
     res.json(enriched);
   });
@@ -532,7 +543,37 @@ export function createRouter(manager: AgentManager): Router {
     const review_agent_id = await queries.getReviewAgentIdFor(agent.id);
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped });
+    // THE canonical status — identical function + inputs to the list endpoint, so the
+    // detail header and the dashboard card can never disagree.
+    const status = computeAgentStatus({ ...agent, testing, landing, deploy_status, deploy_agent_state });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status });
+  });
+
+  // The ACTIVITY TRACE: every pipeline run and child agent associated with this
+  // agent — so tests/land-retests/deploys (which run as pipeline pods with no page)
+  // and review/deploy agents are all visible in one place from the originating
+  // agent. Run logs are NOT included here (they can be huge) — the UI fetches a
+  // single run's log on expand via GET /api/pipeline/runs/:id.
+  router.get("/api/agents/:id/activity", async (req, res) => {
+    const agent = await queries.getAgent(req.params.id);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    const runs = (await queries.getPipelineRunsForAgent(agent.id)).map((r) => ({
+      id: r.id, phase: r.phase, status: r.status, exit_code: r.exit_code,
+      land_on_pass: r.land_on_pass, deploy_gate_run_id: r.deploy_gate_run_id,
+      recommendation: r.recommendation, created_at: r.created_at, completed_at: r.completed_at,
+      has_log: !!(r.log && r.log.length),
+    }));
+    const reviews = await queries.getReviewAgentsForAgent(agent.id);
+    // If THIS is a change that got deployed, link its deploy agent; if it IS a deploy
+    // agent, list what it shipped.
+    const deployAgent = agent.deployed_by_agent_id ? await queries.getAgent(agent.deployed_by_agent_id) : null;
+    const shipped = await queries.getShippedAgents(agent.id);
+    res.json({
+      runs,
+      reviews,
+      deploy_agent: deployAgent ? { id: deployAgent.id, name: deployAgent.name, state: deployAgent.state } : null,
+      shipped,
+    });
   });
 
   // Queue the standard review agent on demand (not just auto-after-tests). Same

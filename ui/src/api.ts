@@ -313,7 +313,30 @@ export const api = {
   getSubagentTranscript: (transcriptPath: string) =>
     request<Array<{ role: string; content: string }>>(`/subagent-transcript?path=${encodeURIComponent(transcriptPath)}`),
 
+  // Activity trace — every pipeline run + child agent associated with an agent.
+  getAgentActivity: (agentId: string) =>
+    request<AgentActivity>(`/agents/${agentId}/activity`),
+
 };
+
+export interface ActivityRun {
+  id: string;
+  phase: string;
+  status: string;
+  exit_code: number | null;
+  land_on_pass: boolean | null;
+  deploy_gate_run_id: string | null;
+  recommendation: string | null;
+  created_at: string;
+  completed_at: string | null;
+  has_log: boolean;
+}
+export interface AgentActivity {
+  runs: ActivityRun[];
+  reviews: Array<{ id: string; name: string; state: string; recommendation: string | null; created_at: string }>;
+  deploy_agent: { id: string; name: string; state: string } | null;
+  shipped: Array<{ id: string; pr_number: number | null; name: string }>;
+}
 
 // Types shared with UI
 export interface AgentWithTokens {
@@ -332,6 +355,9 @@ export interface AgentWithTokens {
   pr_url: string | null;
   pr_number: number | null;
   recommendation: string | null;
+  // THE canonical status, computed on the server (see deriveStatus — it renders this
+  // as-is). Present on both the list and detail payloads so views can't disagree.
+  status?: { key: string; label: string; color: string; spin?: boolean } | null;
   testing?: boolean;
   landing?: boolean;
   deploy_status?: string | null;
