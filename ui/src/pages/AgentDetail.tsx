@@ -44,6 +44,7 @@ interface AgentData {
   adopted_ref?: string | null;
   branch?: string | null;
   size?: string | null;
+  is_deploy_agent?: boolean;
   shipped?: Array<{ id: string; pr_number: number | null; name: string }>;
   tokens?: { total_cost_usd: number };
 }
@@ -243,18 +244,23 @@ export function AgentDetail() {
         <div className="text-right text-sm shrink-0 flex flex-col items-end gap-1">
           <div className={deriveStatus(agent).color}>{deriveStatus(agent).label}</div>
           <div className="text-gray-500 font-mono">${cost.toFixed(4)}</div>
-          <button
-            onClick={() => {
-              api.testAgent(agent.id)
-                .then((r) => toast.success(`Running ${r.phase} phase — will gate the PR`))
-                .catch((e) => toast.error(e instanceof Error ? e.message : "Test failed to start"));
-            }}
-            className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1"
-            title="Run the repo's test phase for this branch; result gates the PR"
-          >
-            🧪 Run tests
-          </button>
-          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+          {agent.is_deploy_agent && (
+            <div className="mt-1 text-xs text-gray-500 italic">Deploy agent — give it feedback below; it isn't a deployable change.</div>
+          )}
+          {!agent.is_deploy_agent && (
+            <button
+              onClick={() => {
+                api.testAgent(agent.id)
+                  .then((r) => toast.success(`Running ${r.phase} phase — will gate the PR`))
+                  .catch((e) => toast.error(e instanceof Error ? e.message : "Test failed to start"));
+              }}
+              className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1"
+              title="Run the repo's test phase for this branch; result gates the PR"
+            >
+              🧪 Run tests
+            </button>
+          )}
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent && (
             <button
               onClick={() => {
                 api.queueReview(agent.id)
@@ -286,7 +292,7 @@ export function AgentDetail() {
               </select>
             </div>
           )}
-          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent && (
             <button
               onClick={() => {
                 if (!confirm(`Merge the latest \`${agent.repo_ref || "main"}\` into branch \`${agent.branch}\`?\n\nUse this when the branch was cut from an older ${agent.repo_ref || "main"} and they've diverged. A clean merge happens server-side (then resume the agent). If it conflicts, the agent merges and resolves the conflicts itself, then da_boss pushes.`)) return;
@@ -300,7 +306,7 @@ export function AgentDetail() {
               ⬇️ Merge {agent.repo_ref || "main"} in
             </button>
           )}
-          {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
+          {agent.repo_url && agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent && (
             <button
               onClick={() => {
                 if (!confirm(`Deploy branch \`${agent.branch}\` to STAGING now?\n\nThis bypasses the main-only gate and ships the branch to shared staging (replacing what's there until main is redeployed) so you can see the build before merging.`)) return;
