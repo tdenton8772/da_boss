@@ -590,6 +590,22 @@ export function createRouter(manager: AgentManager): Router {
     });
   });
 
+  // The agent's PLAN — its latest TodoWrite task list, parsed for a clean view (it
+  // otherwise sits as a raw blob in the message stream). Returns {todos: null} when
+  // the agent never wrote a plan.
+  router.get("/api/agents/:id/plan", async (req, res) => {
+    const raw = await queries.getLatestPlanEvent(req.params.id);
+    if (!raw) { res.json({ todos: null }); return; }
+    try {
+      const ev = JSON.parse(raw) as { content?: string };
+      const body = (ev.content || "").replace(/^\*\*TodoWrite\*\*:\s*/, "");
+      const parsed = JSON.parse(body) as { todos?: Array<{ content: string; status: string; activeForm?: string }> };
+      res.json({ todos: Array.isArray(parsed.todos) ? parsed.todos : null });
+    } catch {
+      res.json({ todos: null });
+    }
+  });
+
   // Queue the standard review agent on demand (not just auto-after-tests). Same
   // reviewer that runs in the pipeline — reads the branch in depth, covers
   // correctness + security/operational risk, ends with a parsed RECOMMENDATION.

@@ -298,6 +298,16 @@ export async function getAgentEvents(
   return res.rows;
 }
 
+/** The most recent TodoWrite event's raw data (the agent's current plan / task list),
+ *  or null. The caller parses the todos out — this just finds the latest one. */
+export async function getLatestPlanEvent(agentId: string): Promise<string | null> {
+  const res = await getPool().query<{ data: string }>(
+    "SELECT data FROM agent_events WHERE agent_id = $1 AND data LIKE '%TodoWrite%' ORDER BY id DESC LIMIT 1",
+    [agentId]
+  );
+  return res.rows[0]?.data ?? null;
+}
+
 export async function getLatestEventTime(agentId: string): Promise<string | null> {
   const res = await getPool().query<{ created_at: string }>(
     "SELECT created_at FROM agent_events WHERE agent_id = $1 ORDER BY id DESC LIMIT 1",
