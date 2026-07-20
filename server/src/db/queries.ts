@@ -298,19 +298,6 @@ export async function getAgentEvents(
   return res.rows;
 }
 
-/** Persist the agent's FULL plan (the TodoWrite todos JSON), verbatim. Called by the
- *  worker on each TodoWrite so the Plan view has the real task list, not the truncated
- *  message-trace preview. */
-export async function setAgentPlan(agentId: string, plan: string): Promise<void> {
-  await getPool().query("UPDATE agents SET plan = $2, updated_at = now() WHERE id = $1", [agentId, plan]);
-}
-
-/** The agent's current plan (full todos JSON string), or null if it never wrote one. */
-export async function getAgentPlan(agentId: string): Promise<string | null> {
-  const res = await getPool().query<{ plan: string | null }>("SELECT plan FROM agents WHERE id = $1", [agentId]);
-  return res.rows[0]?.plan ?? null;
-}
-
 export async function getLatestEventTime(agentId: string): Promise<string | null> {
   const res = await getPool().query<{ created_at: string }>(
     "SELECT created_at FROM agent_events WHERE agent_id = $1 ORDER BY id DESC LIMIT 1",

@@ -16,7 +16,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, copyFile, readdir, unlink, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import pg from "pg";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -231,13 +231,21 @@ function extractText(msg: unknown): string | null {
   return parts.length ? parts.join("\n") : null;
 }
 
-/** The FULL TodoWrite todos from an assistant message, if it wrote a plan this turn —
- *  captured here BEFORE the trace truncates it, so the Plan view has the real list. */
-function extractPlan(msg: unknown): string | null {
-  const m = msg as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } };
-  const todo = (m?.message?.content || []).filter((b) => b.type === "tool_use").reverse().find((b) => b.name === "TodoWrite");
-  const todos = todo?.input?.todos;
-  return Array.isArray(todos) ? JSON.stringify(todos) : null;
+/** Read the most-recently-written plan doc the agent saved under .claude/plans/. Some
+ *  agents write their plan to a file and call ExitPlanMode with empty input, so the
+ *  approval card has nothing to show — this recovers the plan text so the card can
+ *  render it. Best-effort. */
+async function readLatestPlanFile(): Promise<string | null> {
+  try {
+    const dir = `${WORK_DIR}/.claude/plans`;
+    if (!existsSync(dir)) return null;
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".md"));
+    let best = "", bestMtime = -1;
+    for (const f of files) {
+      try { const st = statSync(`${dir}/${f}`); if (st.mtimeMs > bestMtime) { bestMtime = st.mtimeMs; best = `${dir}/${f}`; } } catch { /* skip */ }
+    }
+    return best ? await readFile(best, "utf8") : null;
+  } catch { return null; }
 }
 
 function extractToolUses(msg: unknown): string[] {
@@ -466,7 +474,15 @@ async function main(): Promise<void> {
     if (shouldAutoApprove(toolName, toolInput, agentCwd, policy)) {
       return { behavior: "allow", updatedInput: toolInput };
     }
-    const request = await queries.insertPermissionRequest(AGENT_ID!, toolName, toolInput, options.toolUseID);
+    // Plan approval: if the agent wrote its plan to a .claude/plans/*.md file and
+    // called ExitPlanMode with no `plan` in the input, pull the file content in so the
+    // approval card can render the plan instead of showing an empty box.
+    let permInput = toolInput;
+    if (toolName === "ExitPlanMode" && !toolInput.plan) {
+      const planText = await readLatestPlanFile();
+      if (planText) permInput = { ...toolInput, plan: planText };
+    }
+    const request = await queries.insertPermissionRequest(AGENT_ID!, toolName, permInput, options.toolUseID);
     logger.info({ agentId: AGENT_ID, toolName, requestId: request.id }, "Permission requested from pod");
     await queries.insertAgentEvent(AGENT_ID!, "message", {
       role: "system",
@@ -587,9 +603,6 @@ async function main(): Promise<void> {
             for (const tu of extractToolUses(msg)) {
               await queries.insertAgentEvent(AGENT_ID, "message", { role: "tool", content: tu.slice(0, TOOL_MAX) });
             }
-            // Persist the FULL plan (not the truncated trace) so the Plan view is real.
-            const plan = extractPlan(msg);
-            if (plan) await queries.setAgentPlan(AGENT_ID, plan).catch(() => {});
             const usage = (msg as { message?: { usage?: Record<string, number> } }).message?.usage;
             if (usage && (usage.input_tokens || usage.output_tokens)) {
               const cost = (usage.input_tokens || 0) * 0.000003 + (usage.output_tokens || 0) * 0.000015;

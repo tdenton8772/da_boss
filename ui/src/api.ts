@@ -320,17 +320,7 @@ export const api = {
   getAgentActivity: (agentId: string) =>
     request<AgentActivity>(`/agents/${agentId}/activity`),
 
-  // The agent's plan — its latest TodoWrite task list, parsed.
-  getAgentPlan: (agentId: string) =>
-    request<{ todos: PlanTodo[] | null }>(`/agents/${agentId}/plan`),
-
 };
-
-export interface PlanTodo {
-  content: string;
-  status: string; // completed | in_progress | pending
-  activeForm?: string;
-}
 
 export interface ActivityRun {
   id: string;

@@ -590,19 +590,6 @@ export function createRouter(manager: AgentManager): Router {
     });
   });
 
-  // The agent's PLAN — the REAL, full TodoWrite task list the worker persisted (not
-  // the truncated message-trace preview). Returns {todos: null} if it never wrote one.
-  router.get("/api/agents/:id/plan", async (req, res) => {
-    const raw = await queries.getAgentPlan(req.params.id);
-    if (!raw) { res.json({ todos: null }); return; }
-    try {
-      const todos = JSON.parse(raw) as Array<{ content: string; status: string; activeForm?: string }>;
-      res.json({ todos: Array.isArray(todos) ? todos : null });
-    } catch {
-      res.json({ todos: null });
-    }
-  });
-
   // Queue the standard review agent on demand (not just auto-after-tests). Same
   // reviewer that runs in the pipeline — reads the branch in depth, covers
   // correctness + security/operational risk, ends with a parsed RECOMMENDATION.
