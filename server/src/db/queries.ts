@@ -1361,6 +1361,32 @@ export async function getPipelineRunsForAgent(agentId: string): Promise<Pipeline
   return res.rows;
 }
 
+/** Deploy runs for a branch (repo + ref). A branch deploy reassigns the run's
+ *  agent_id to the DEPLOY agent, so getPipelineRunsForAgent(origin) misses it — the
+ *  branch is the stable link back to the change that triggered it. */
+export async function getDeployRunsForBranch(repoUrl: string, ref: string): Promise<PipelineRun[]> {
+  const res = await getPool().query<PipelineRun>(
+    `SELECT * FROM pipeline_runs WHERE repo_url = $1 AND git_ref = $2 AND phase = 'deploy'
+      ORDER BY created_at DESC LIMIT 20`,
+    [repoUrl, ref]
+  );
+  return res.rows;
+}
+
+/** The CHANGE agent that owns a branch (not a review or deploy agent) — earliest such
+ *  agent. Used to route a branch deploy's outcome back to the origin's trace. */
+export async function getChangeAgentIdByBranch(repoUrl: string, branch: string): Promise<string | null> {
+  const res = await getPool().query<{ id: string }>(
+    `SELECT id FROM agents
+       WHERE repo_url = $1 AND branch = $2
+         AND review_of_agent_id IS NULL
+         AND name NOT ILIKE 'deploy %'
+       ORDER BY created_at ASC LIMIT 1`,
+    [repoUrl, branch]
+  );
+  return res.rows[0]?.id ?? null;
+}
+
 /** Batch of agent ids with a land in flight — the list-endpoint counterpart of
  *  hasLandInFlight, so the dashboard card can show "Landing…" identically to detail. */
 export async function getAgentsWithLandInFlight(): Promise<string[]> {

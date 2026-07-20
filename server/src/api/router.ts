@@ -568,11 +568,21 @@ export function createRouter(manager: AgentManager): Router {
     // agent, list what it shipped.
     const deployAgent = agent.deployed_by_agent_id ? await queries.getAgent(agent.deployed_by_agent_id) : null;
     const shipped = await queries.getShippedAgents(agent.id);
+    // Branch deploys triggered from this change (deploy-branch). Their run's agent_id
+    // was reassigned to the deploy agent, so they're linked by branch — otherwise a
+    // failed branch deploy would be invisible on the change that triggered it.
+    const branchDeploys = agent.branch && agent.repo_url
+      ? (await queries.getDeployRunsForBranch(agent.repo_url, agent.branch)).map((r) => ({
+          id: r.id, status: r.status, exit_code: r.exit_code, executor_agent_id: r.agent_id,
+          created_at: r.created_at, completed_at: r.completed_at, has_log: !!(r.log && r.log.length),
+        }))
+      : [];
     res.json({
       runs,
       reviews,
       deploy_agent: deployAgent ? { id: deployAgent.id, name: deployAgent.name, state: deployAgent.state } : null,
       shipped,
+      branch_deploys: branchDeploys,
     });
   });
 

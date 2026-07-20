@@ -66,4 +66,34 @@ describe("reconcileDeployRun — deploy-run safety net", () => {
     await reconcileDeployRun("ag_plain"); // must not throw
     expect((await queries.getAgent("ag_plain"))?.state).toBe("completed");
   });
+
+  it("routes a FAILED branch deploy's outcome back onto the ORIGIN change agent's trace", async () => {
+    // origin change agent that owns the branch
+    await queries.insertAgent({ ...deployAgent, id: "ag_origin", name: "extract forecast", repo_url: "https://github.com/x/y", branch: "feat/x" } as never);
+    // the deploy agent running that branch deploy (run's agent_id = deploy agent)
+    await queries.insertAgent({ ...deployAgent, id: "ag_dep2", name: "deploy feat/x", repo_url: "https://github.com/x/y" } as never);
+    await queries.insertPipelineRun({ id: "run_bd", repoUrl: "https://github.com/x/y", ref: "feat/x", phase: "deploy", status: "failed" });
+    await queries.updatePipelineRun("run_bd", { exit_code: 1 });
+    await queries.setAgentPipelineRun("ag_dep2", "run_bd");
+
+    await reconcileDeployRun("ag_dep2");
+
+    // the origin — NOT the deploy agent — gets the failure feedback on its trace
+    const originEvents = await queries.getAgentEvents("ag_origin", 10);
+    expect(JSON.stringify(originEvents)).toContain("FAILED");
+    expect(JSON.stringify(originEvents)).toContain("ag_dep2"); // links to the deploy agent
+  });
+
+  it("routes a SUCCEEDED branch deploy back to the origin too", async () => {
+    await queries.insertAgent({ ...deployAgent, id: "ag_o2", name: "some change", repo_url: "https://github.com/x/y", branch: "feat/z" } as never);
+    await queries.insertAgent({ ...deployAgent, id: "ag_dep3", name: "deploy feat/z", repo_url: "https://github.com/x/y" } as never);
+    await queries.insertPipelineRun({ id: "run_bz", repoUrl: "https://github.com/x/y", ref: "feat/z", phase: "deploy", status: "passed" });
+    await queries.updatePipelineRun("run_bz", { exit_code: 0 });
+    await queries.setAgentPipelineRun("ag_dep3", "run_bz");
+
+    await reconcileDeployRun("ag_dep3");
+
+    const originEvents = await queries.getAgentEvents("ag_o2", 10);
+    expect(JSON.stringify(originEvents)).toContain("succeeded");
+  });
 });
