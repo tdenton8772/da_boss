@@ -13,7 +13,11 @@ export interface StatusView {
 
 export function deriveStatus(agent: {
   state: string;
+  // Server-computed canonical status. When present it IS the answer — the UI does not
+  // re-derive. The local computation below is a fallback for payloads without it.
+  status?: StatusView | null;
   testing?: boolean;
+  landing?: boolean;
   recommendation?: string | null;
   pr_number?: number | null;
   deployed_by_agent_id?: string | null;
@@ -26,6 +30,9 @@ export function deriveStatus(agent: {
   // (the gate): pending_review = tests on main, pending_approval = awaiting a human.
   deploy_status?: string | null;
 }): StatusView {
+  // Server is the single source of truth — render exactly what it computed.
+  if (agent.status) return agent.status;
+  if (agent.state === "completed" && agent.landing) return { key: "landing", label: "Landing…", color: "text-blue-400", spin: true };
   switch (agent.state) {
     case "pending": return { key: "pending", label: "Pending", color: "text-gray-400" };
     case "queued": return { key: "queued", label: "Queued — sizing", color: "text-sky-400", spin: true };
