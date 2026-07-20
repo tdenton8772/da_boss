@@ -231,6 +231,15 @@ function extractText(msg: unknown): string | null {
   return parts.length ? parts.join("\n") : null;
 }
 
+/** The FULL TodoWrite todos from an assistant message, if it wrote a plan this turn —
+ *  captured here BEFORE the trace truncates it, so the Plan view has the real list. */
+function extractPlan(msg: unknown): string | null {
+  const m = msg as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } };
+  const todo = (m?.message?.content || []).filter((b) => b.type === "tool_use").reverse().find((b) => b.name === "TodoWrite");
+  const todos = todo?.input?.todos;
+  return Array.isArray(todos) ? JSON.stringify(todos) : null;
+}
+
 function extractToolUses(msg: unknown): string[] {
   const m = msg as {
     message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> };
@@ -578,6 +587,9 @@ async function main(): Promise<void> {
             for (const tu of extractToolUses(msg)) {
               await queries.insertAgentEvent(AGENT_ID, "message", { role: "tool", content: tu.slice(0, TOOL_MAX) });
             }
+            // Persist the FULL plan (not the truncated trace) so the Plan view is real.
+            const plan = extractPlan(msg);
+            if (plan) await queries.setAgentPlan(AGENT_ID, plan).catch(() => {});
             const usage = (msg as { message?: { usage?: Record<string, number> } }).message?.usage;
             if (usage && (usage.input_tokens || usage.output_tokens)) {
               const cost = (usage.input_tokens || 0) * 0.000003 + (usage.output_tokens || 0) * 0.000015;

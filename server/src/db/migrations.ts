@@ -569,6 +569,16 @@ const migrations: Migration[] = [
       ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS deploy_gate_run_id TEXT;
     `,
   },
+  {
+    // The agent's plan: the FULL TodoWrite todos JSON, written verbatim by the worker
+    // on each TodoWrite. Kept separate from the message trace (which stores only a
+    // truncated preview) so the Plan view renders the actual, complete task list.
+    version: 31,
+    name: "agent_plan",
+    up: `
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS plan TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {
