@@ -16,7 +16,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, copyFile, readdir, unlink, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import pg from "pg";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -238,6 +238,33 @@ function extractPlan(msg: unknown): string | null {
   const todo = (m?.message?.content || []).filter((b) => b.type === "tool_use").reverse().find((b) => b.name === "TodoWrite");
   const todos = todo?.input?.todos;
   return Array.isArray(todos) ? JSON.stringify(todos) : null;
+}
+
+/** Seed agents.plan from the RESTORED session transcript — recovers the last full
+ *  TodoWrite (untruncated, unlike the message trace) so an agent's plan shows on its
+ *  next dispatch even if it was written in a prior (ephemeral) pod. Best-effort. */
+async function seedPlanFromTranscript(): Promise<void> {
+  if (!AGENT_ID) return;
+  try {
+    const dir = `${process.env.HOME || "/root"}/.claude/projects/-work`;
+    if (!existsSync(dir)) return;
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    let best = "", bestSize = -1;
+    for (const f of files) {
+      try { const s = statSync(`${dir}/${f}`).size; if (s > bestSize) { bestSize = s; best = `${dir}/${f}`; } } catch { /* skip */ }
+    }
+    if (!best) return;
+    const lines = (await readFile(best, "utf8")).split("\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes("TodoWrite")) continue;
+      try {
+        const obj = JSON.parse(lines[i]) as { message?: { content?: Array<{ name?: string; input?: { todos?: unknown } }> } };
+        const tw = (obj.message?.content || []).filter((b) => b?.name === "TodoWrite").pop();
+        const todos = tw?.input?.todos;
+        if (Array.isArray(todos) && todos.length) { await queries.setAgentPlan(AGENT_ID, JSON.stringify(todos)); return; }
+      } catch { /* keep scanning older lines */ }
+    }
+  } catch { /* best effort */ }
 }
 
 function extractToolUses(msg: unknown): string[] {
@@ -573,6 +600,10 @@ async function main(): Promise<void> {
         },
       });
       currentQuery = q as unknown as { interrupt?: () => Promise<void> };
+
+      // Recover the plan from the restored transcript (in case it was written in a
+      // prior ephemeral pod) so it shows immediately; live TodoWrites update it below.
+      await seedPlanFromTranscript();
 
       try {
         for await (const msg of q) {
