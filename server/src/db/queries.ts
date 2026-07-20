@@ -28,7 +28,7 @@ function startOfMonthUtc(): string {
 export async function insertAgent(
   agent: Omit<
     AgentRecord,
-    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id" | "last_heartbeat_at"
+    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id" | "last_heartbeat_at" | "plan"
   >
 ): Promise<AgentRecord> {
   await getPool().query(
@@ -298,14 +298,17 @@ export async function getAgentEvents(
   return res.rows;
 }
 
-/** The most recent TodoWrite event's raw data (the agent's current plan / task list),
- *  or null. The caller parses the todos out — this just finds the latest one. */
-export async function getLatestPlanEvent(agentId: string): Promise<string | null> {
-  const res = await getPool().query<{ data: string }>(
-    "SELECT data FROM agent_events WHERE agent_id = $1 AND data LIKE '%TodoWrite%' ORDER BY id DESC LIMIT 1",
-    [agentId]
-  );
-  return res.rows[0]?.data ?? null;
+/** Persist the agent's FULL plan (the TodoWrite todos JSON), verbatim. Called by the
+ *  worker on each TodoWrite so the Plan view has the real task list, not the truncated
+ *  message-trace preview. */
+export async function setAgentPlan(agentId: string, plan: string): Promise<void> {
+  await getPool().query("UPDATE agents SET plan = $2, updated_at = now() WHERE id = $1", [agentId, plan]);
+}
+
+/** The agent's current plan (full todos JSON string), or null if it never wrote one. */
+export async function getAgentPlan(agentId: string): Promise<string | null> {
+  const res = await getPool().query<{ plan: string | null }>("SELECT plan FROM agents WHERE id = $1", [agentId]);
+  return res.rows[0]?.plan ?? null;
 }
 
 export async function getLatestEventTime(agentId: string): Promise<string | null> {

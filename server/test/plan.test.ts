@@ -12,30 +12,26 @@ async function mkAgent(id: string) {
   });
 }
 
-// Parse the plan the same way the /plan endpoint does.
-function parsePlan(raw: string | null) {
-  if (!raw) return null;
-  const ev = JSON.parse(raw) as { content?: string };
-  const body = (ev.content || "").replace(/^\*\*TodoWrite\*\*:\s*/, "");
-  return (JSON.parse(body) as { todos?: unknown[] }).todos ?? null;
-}
-
-describe("agent plan — latest TodoWrite", () => {
-  it("finds the latest TodoWrite and parses its todos", async () => {
+describe("agent plan — the real persisted TodoWrite", () => {
+  it("stores + reads the FULL plan (no truncation), latest write wins", async () => {
     await mkAgent("ag_plan");
-    await queries.insertAgentEvent("ag_plan", "message", { role: "assistant", content: "thinking…" });
-    await queries.insertAgentEvent("ag_plan", "message", { role: "tool", content: '**TodoWrite**: {"todos":[{"content":"old","status":"completed"}]}' });
-    await queries.insertAgentEvent("ag_plan", "message", { role: "tool", content: '**TodoWrite**: {"todos":[{"content":"do X","status":"completed"},{"content":"do Y","status":"in_progress","activeForm":"Doing Y"}]}' });
+    // a long plan that would blow past the 300-char trace truncation
+    const longContent = "Make Reports section header always visible + collapsible in the sidebar with role-based visibility for every report type";
+    await queries.setAgentPlan("ag_plan", JSON.stringify([{ content: "old", status: "completed" }]));
+    await queries.setAgentPlan("ag_plan", JSON.stringify([
+      { content: "do X", status: "completed", activeForm: "Doing X" },
+      { content: longContent, status: "in_progress", activeForm: "Making reports collapsible" },
+    ]));
 
-    const todos = parsePlan(await queries.getLatestPlanEvent("ag_plan")) as Array<{ content: string; status: string }>;
-    expect(todos).toHaveLength(2); // the LATEST TodoWrite, not the older one
+    const todos = JSON.parse((await queries.getAgentPlan("ag_plan"))!) as Array<{ content: string; status: string }>;
+    expect(todos).toHaveLength(2);
     expect(todos[0]).toMatchObject({ content: "do X", status: "completed" });
+    expect(todos[1].content).toBe(longContent); // full, untruncated
     expect(todos[1].status).toBe("in_progress");
   });
 
   it("returns null when the agent never wrote a plan", async () => {
     await mkAgent("ag_noplan");
-    await queries.insertAgentEvent("ag_noplan", "message", { role: "assistant", content: "no plan here" });
-    expect(await queries.getLatestPlanEvent("ag_noplan")).toBeNull();
+    expect(await queries.getAgentPlan("ag_noplan")).toBeNull();
   });
 });

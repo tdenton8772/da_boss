@@ -590,17 +590,14 @@ export function createRouter(manager: AgentManager): Router {
     });
   });
 
-  // The agent's PLAN — its latest TodoWrite task list, parsed for a clean view (it
-  // otherwise sits as a raw blob in the message stream). Returns {todos: null} when
-  // the agent never wrote a plan.
+  // The agent's PLAN — the REAL, full TodoWrite task list the worker persisted (not
+  // the truncated message-trace preview). Returns {todos: null} if it never wrote one.
   router.get("/api/agents/:id/plan", async (req, res) => {
-    const raw = await queries.getLatestPlanEvent(req.params.id);
+    const raw = await queries.getAgentPlan(req.params.id);
     if (!raw) { res.json({ todos: null }); return; }
     try {
-      const ev = JSON.parse(raw) as { content?: string };
-      const body = (ev.content || "").replace(/^\*\*TodoWrite\*\*:\s*/, "");
-      const parsed = JSON.parse(body) as { todos?: Array<{ content: string; status: string; activeForm?: string }> };
-      res.json({ todos: Array.isArray(parsed.todos) ? parsed.todos : null });
+      const todos = JSON.parse(raw) as Array<{ content: string; status: string; activeForm?: string }>;
+      res.json({ todos: Array.isArray(todos) ? todos : null });
     } catch {
       res.json({ todos: null });
     }
