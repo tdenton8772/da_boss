@@ -8,7 +8,7 @@ import * as pipelineService from "../pipeline/service.js";
 import { maybeProposeDeploy } from "../pipeline/completion.js";
 import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
-import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview } from "../forge/github.js";
+import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview, resolveOpenPrByBranch } from "../forge/github.js";
 import { syncMainIntoBranch } from "../forge/sync-branch.js";
 import { nanoid } from "nanoid";
 import { SUPERVISOR_CRED_SETTING } from "../supervisor/credential.js";
@@ -34,6 +34,25 @@ const DEFAULT_REPO_REF_SETTING = "default_repo_ref";
  *  the user id separately. */
 function actorOf(req: { user?: { email?: string; name?: string } }): string {
   return req.user?.email || req.user?.name || "someone";
+}
+
+/** Adopted PRs/branches are recorded with an `adopted_ref` but NO `pr_number`
+ *  (adoption never opens a PR, so it was never set) — which broke Merge, the deploy
+ *  proposal, and the sync-main fast path for any adopted change. Resolve the OPEN PR
+ *  by head branch and persist it, so those all work. Best-effort; returns the
+ *  resolved {number,url}, the already-set PR, or null when there's no open PR. */
+async function ensureAdoptedPrNumber(agent: {
+  id: string; pr_number: number | null; pr_url: string | null;
+  repo_url: string | null; branch: string | null; created_by_user_id: string | null;
+}): Promise<{ number: number; url: string } | null> {
+  if (agent.pr_number) return { number: agent.pr_number, url: agent.pr_url || "" };
+  if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) return null;
+  const gc = await queries.getUserGitCredential(agent.created_by_user_id);
+  if (!gc) return null;
+  const token = await getCipher().decrypt({ ciphertext: gc.ciphertext, nonce: gc.nonce, keyRef: gc.key_ref });
+  const pr = await resolveOpenPrByBranch(agent.repo_url, agent.branch, token);
+  if (pr) await queries.setAgentPullRequest(agent.id, pr.url, pr.number);
+  return pr;
 }
 
 export function createRouter(manager: AgentManager): Router {
@@ -447,6 +466,12 @@ export function createRouter(manager: AgentManager): Router {
       const ip = req.ip || req.socket.remoteAddress || null;
       manager.createAgent(body, req.user?.userId, req.user?.email?.split("@")[0]).then(async (agent) => {
         await queries.insertAuditLog(ip, "agent.create", "agent", agent.id, agent.name, req.user?.userId);
+        // Adopting an existing PR? Resolve + persist its pr_number now (adoption only
+        // stores adopted_ref), so the verdict card links it and Merge works later.
+        if (body.adopted_ref && !agent.pr_number) {
+          const pr = await ensureAdoptedPrNumber(agent).catch(() => null);
+          if (pr) agent = { ...agent, pr_number: pr.number, pr_url: pr.url };
+        }
         res.status(201).json(agent);
       }).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -995,9 +1020,16 @@ export function createRouter(manager: AgentManager): Router {
   // has a test phase, re-run it on the rebased branch — the completion listener
   // merges only on green (else it blocks + reports). No test phase → straight merge.
   router.post("/api/agents/:id/merge", async (req, res) => {
-    const agent = await queries.getAgent(req.params.id);
+    let agent = await queries.getAgent(req.params.id);
     if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
-    if (!agent.repo_url || !agent.pr_number || !agent.created_by_user_id) { res.status(400).json({ error: "Agent has no PR to merge" }); return; }
+    if (!agent.repo_url || !agent.created_by_user_id) { res.status(400).json({ error: "Agent has no repo/owner to merge" }); return; }
+    // Adopted PRs are recorded without a pr_number — resolve it by branch (and persist)
+    // before bailing, so the reviewer-approved change can actually be merged.
+    if (!agent.pr_number) {
+      const pr = await ensureAdoptedPrNumber(agent).catch(() => null);
+      if (pr) agent = { ...agent, pr_number: pr.number, pr_url: pr.url };
+    }
+    if (!agent.pr_number) { res.status(400).json({ error: "Agent has no PR to merge (no open PR found for its branch)." }); return; }
     // Guard against double-clicks: a land is async (rebase → retest → merge on the
     // completion listener), so without this each click spawns another rebase+retest
     // run against the same PR. Reject if already merged or a land is in flight.
