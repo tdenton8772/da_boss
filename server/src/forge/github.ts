@@ -301,6 +301,24 @@ async function findOpenPr(owner: string, repo: string, branch: string, token: st
 }
 
 /**
+ * Resolve the OPEN PR for a branch (by head ref), if one exists — WITHOUT creating
+ * anything. Used to backfill pr_number/pr_url for an ADOPTED PR/branch that da_boss
+ * recorded with only an adopted_ref (adoption doesn't open a PR, so pr_number was
+ * never set — which broke Merge/deploy on adopted PRs). Returns null when no open PR
+ * matches (or the host isn't recognized). Same-repo heads only (matches findOpenPr).
+ */
+export async function resolveOpenPrByBranch(
+  repoUrl: string,
+  branch: string,
+  token: string
+): Promise<{ number: number; url: string } | null> {
+  const gh = parseRepo(repoUrl);
+  if (!gh) return null;
+  const pr = await findOpenPr(gh.owner, gh.repo, branch, token);
+  return pr ? { number: pr.number, url: pr.url } : null;
+}
+
+/**
  * Find the open PR for this branch, or create one. Returns null when there's
  * nothing to PR (no commits vs. base) or the host isn't recognized — callers
  * treat null as "branch pushed, no PR" rather than an error.
