@@ -553,6 +553,44 @@ export function createRouter(manager: AgentManager): Router {
     res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
   });
 
+  // Upload a file for the agent (screenshot, doc, etc.). Stored in PG; the worker
+  // writes it into /work/uploads on the agent's next dispatch so the agent can read
+  // it — restoring the "hand a file to the agent" flow that worked when running local.
+  router.post("/api/agents/:id/files", async (req, res) => {
+    const agent = await queries.getAgent(req.params.id);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    const name = String(req.query.name || "").replace(/[/\\]/g, "_").trim();
+    if (!name) { res.status(400).json({ error: "name query param required" }); return; }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      const b = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+      size += b.length;
+      if (size > 25 * 1024 * 1024) { res.status(413).json({ error: "File too large (25 MB max)" }); return; }
+      chunks.push(b);
+    }
+    const bytes = Buffer.concat(chunks);
+    if (!bytes.length) { res.status(400).json({ error: "empty file" }); return; }
+    const id = `af_${nanoid(10)}`;
+    await queries.insertAgentFile({ id, agent_id: agent.id, name, mime: (req.headers["content-type"] as string) || null, size: bytes.length, bytes });
+    await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `📎 **${actorOf(req)}** uploaded \`${name}\` (${Math.max(1, Math.round(bytes.length / 1024))} KB) — the agent reads it at \`/work/uploads/${name}\` on its next turn.` });
+    res.status(201).json({ id, name, size: bytes.length });
+  });
+
+  router.get("/api/agents/:id/files", async (req, res) => {
+    res.json(await queries.listAgentFiles(req.params.id));
+  });
+
+  router.delete("/api/agents/:id/files/:fileId", async (req, res) => {
+    await queries.deleteAgentFile(req.params.fileId, req.params.id);
+    res.json({ ok: true });
+  });
+
+  // The agent's PLANS — its ExitPlanMode plans (viewable after approval), newest first.
+  router.get("/api/agents/:id/plans", async (req, res) => {
+    res.json(await queries.getAgentPlans(req.params.id));
+  });
+
   // The ACTIVITY TRACE: every pipeline run and child agent associated with this
   // agent — so tests/land-retests/deploys (which run as pipeline pods with no page)
   // and review/deploy agents are all visible in one place from the originating

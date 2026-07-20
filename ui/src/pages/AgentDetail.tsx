@@ -9,6 +9,8 @@ import { MessageStream, type Message } from "../components/MessageStream";
 import { ControlBar } from "../components/ControlBar";
 import { deriveStatus } from "../agentStatus";
 import { AgentActivity } from "../components/AgentActivity";
+import { AgentPlans } from "../components/AgentPlans";
+import { AgentFiles } from "../components/AgentFiles";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { useToastHelpers } from "../components/Toast";
 import { ArrowLeft } from "lucide-react";
@@ -374,6 +376,10 @@ export function AgentDetail() {
           </div>
         </div>
       )}
+
+      {/* Plans (ExitPlanMode plan docs) + user file uploads to the agent. */}
+      <AgentPlans agentId={agent.id} />
+      <AgentFiles agentId={agent.id} />
 
       {/* Activity trace — every pipeline run + child agent associated with this agent
           (tests/land/deploy run as pods with no page of their own; surfaced here). */}

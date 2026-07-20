@@ -320,7 +320,35 @@ export const api = {
   getAgentActivity: (agentId: string) =>
     request<AgentActivity>(`/agents/${agentId}/activity`),
 
+  // The agent's ExitPlanMode plans (viewable after approval).
+  getAgentPlans: (agentId: string) =>
+    request<AgentPlanEntry[]>(`/agents/${agentId}/plans`),
+
+  // Files the user hands to the agent — delivered into /work/uploads in the pod.
+  uploadAgentFile: async (agentId: string, file: File) => {
+    const res = await fetch(`${BASE}/agents/${agentId}/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    return res.json() as Promise<{ id: string; name: string; size: number }>;
+  },
+  listAgentFiles: (agentId: string) => request<AgentFile[]>(`/agents/${agentId}/files`),
+  deleteAgentFile: (agentId: string, fileId: string) => request<{ ok: boolean }>(`/agents/${agentId}/files/${fileId}`, { method: "DELETE" }),
+
 };
+
+export interface AgentPlanEntry {
+  id: number;
+  status: string; // pending | approved | denied
+  plan: string;
+  created_at: string;
+  resolution_answer: string | null;
+}
+export interface AgentFile {
+  id: string;
+  name: string;
+  mime: string | null;
+  size: number;
+  created_at: string;
+}
 
 export interface ActivityRun {
   id: string;
