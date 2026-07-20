@@ -579,6 +579,26 @@ const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS plan TEXT;
     `,
   },
+  {
+    // User-uploaded files for an agent (screenshots, docs, etc.). Stored here because
+    // the control plane can't write into the agent's pod; the worker downloads them
+    // into /work/uploads on dispatch so the agent can read them — restoring the
+    // "hand a file to the agent" workflow that worked when everything ran locally.
+    version: 32,
+    name: "agent_files",
+    up: `
+      CREATE TABLE IF NOT EXISTS agent_files (
+        id           TEXT PRIMARY KEY,
+        agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        name         TEXT NOT NULL,
+        mime         TEXT,
+        size         INTEGER NOT NULL,
+        bytes        BYTEA NOT NULL,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_files_agent ON agent_files(agent_id);
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

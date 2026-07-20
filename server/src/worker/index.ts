@@ -231,6 +231,22 @@ function extractText(msg: unknown): string | null {
   return parts.length ? parts.join("\n") : null;
 }
 
+/** Write the user's uploaded files into /work/uploads so the agent can read them —
+ *  restores the "hand a file to the agent" flow that only worked when running local. */
+async function writeUploadedFiles(): Promise<string[]> {
+  if (!AGENT_ID) return [];
+  try {
+    const files = await queries.getAgentFilesWithBytes(AGENT_ID);
+    if (!files.length) return [];
+    const dir = `${WORK_DIR}/uploads`;
+    await mkdir(dir, { recursive: true });
+    for (const f of files) {
+      await writeFile(`${dir}/${f.name.replace(/[/\\]/g, "_")}`, f.bytes);
+    }
+    return files.map((f) => f.name);
+  } catch { return []; }
+}
+
 /** Read the most-recently-written plan doc the agent saved under .claude/plans/. Some
  *  agents write their plan to a file and call ExitPlanMode with empty input, so the
  *  approval card has nothing to show — this recovers the plan text so the card can
@@ -589,6 +605,15 @@ async function main(): Promise<void> {
         },
       });
       currentQuery = q as unknown as { interrupt?: () => Promise<void> };
+
+      // Drop any user-uploaded files into /work/uploads so the agent can read them.
+      const uploaded = await writeUploadedFiles();
+      if (uploaded.length) {
+        await queries.insertAgentEvent(AGENT_ID, "message", {
+          role: "system",
+          content: `📎 ${uploaded.length} uploaded file(s) available in \`/work/uploads/\`: ${uploaded.map((n) => `\`${n}\``).join(", ")}`,
+        }).catch(() => {});
+      }
 
       try {
         for await (const msg of q) {

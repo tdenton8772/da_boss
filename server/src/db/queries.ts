@@ -1485,3 +1485,44 @@ export async function listPipelineRuns(limit = 50): Promise<PipelineRun[]> {
   );
   return res.rows;
 }
+
+// ── Agent file uploads (user → agent pod) ──────────────────
+export async function insertAgentFile(f: { id: string; agent_id: string; name: string; mime: string | null; size: number; bytes: Buffer }): Promise<void> {
+  await getPool().query(
+    "INSERT INTO agent_files (id, agent_id, name, mime, size, bytes) VALUES ($1,$2,$3,$4,$5,$6)",
+    [f.id, f.agent_id, f.name, f.mime, f.size, f.bytes]
+  );
+}
+export async function listAgentFiles(agentId: string): Promise<Array<{ id: string; name: string; mime: string | null; size: number; created_at: Date }>> {
+  const res = await getPool().query<{ id: string; name: string; mime: string | null; size: number; created_at: Date }>(
+    "SELECT id, name, mime, size, created_at FROM agent_files WHERE agent_id=$1 ORDER BY created_at DESC",
+    [agentId]
+  );
+  return res.rows;
+}
+/** name + bytes for every uploaded file — the worker writes these into /work/uploads. */
+export async function getAgentFilesWithBytes(agentId: string): Promise<Array<{ name: string; bytes: Buffer }>> {
+  const res = await getPool().query<{ name: string; bytes: Buffer }>(
+    "SELECT name, bytes FROM agent_files WHERE agent_id=$1 ORDER BY created_at ASC",
+    [agentId]
+  );
+  return res.rows;
+}
+export async function deleteAgentFile(id: string, agentId: string): Promise<void> {
+  await getPool().query("DELETE FROM agent_files WHERE id=$1 AND agent_id=$2", [id, agentId]);
+}
+
+// ── Plans: the agent's ExitPlanMode plans (viewable after approval) ─────────
+export async function getAgentPlans(agentId: string): Promise<Array<{ id: number; status: string; plan: string; created_at: Date; resolution_answer: string | null }>> {
+  const res = await getPool().query<{ id: number; tool_input: string; status: string; created_at: Date; resolution_answer: string | null }>(
+    "SELECT id, tool_input, status, created_at, resolution_answer FROM permission_requests WHERE agent_id=$1 AND tool_name='ExitPlanMode' ORDER BY created_at DESC",
+    [agentId]
+  );
+  return res.rows
+    .map((r) => {
+      let plan = "";
+      try { plan = (JSON.parse(r.tool_input) as { plan?: string }).plan || ""; } catch { plan = ""; }
+      return { id: r.id, status: r.status, plan, created_at: r.created_at, resolution_answer: r.resolution_answer };
+    })
+    .filter((p) => p.plan.trim().length > 0);
+}
