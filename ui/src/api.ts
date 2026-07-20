@@ -334,11 +334,21 @@ export interface ActivityRun {
   completed_at: string | null;
   has_log: boolean;
 }
+export interface BranchDeploy {
+  id: string;
+  status: string;
+  exit_code: number | null;
+  executor_agent_id: string | null;
+  created_at: string;
+  completed_at: string | null;
+  has_log: boolean;
+}
 export interface AgentActivity {
   runs: ActivityRun[];
   reviews: Array<{ id: string; name: string; state: string; recommendation: string | null; created_at: string }>;
   deploy_agent: { id: string; name: string; state: string } | null;
   shipped: Array<{ id: string; pr_number: number | null; name: string }>;
+  branch_deploys: BranchDeploy[];
 }
 
 // Types shared with UI

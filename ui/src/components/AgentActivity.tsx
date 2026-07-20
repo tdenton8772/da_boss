@@ -78,7 +78,8 @@ export function AgentActivity({ agentId }: { agentId: string }) {
   }, [load, act?.runs]);
 
   if (!act) return null;
-  const nothing = act.runs.length === 0 && act.reviews.length === 0 && !act.deploy_agent && act.shipped.length === 0;
+  const nothing = act.runs.length === 0 && act.reviews.length === 0 && !act.deploy_agent &&
+    act.shipped.length === 0 && (act.branch_deploys?.length ?? 0) === 0;
   if (nothing) return null;
 
   return (
@@ -101,6 +102,26 @@ export function AgentActivity({ agentId }: { agentId: string }) {
         <div className="mb-2">
           <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Pipeline runs</div>
           {act.runs.map((r) => <RunRow key={r.id} run={r} />)}
+        </div>
+      )}
+
+      {act.branch_deploys && act.branch_deploys.length > 0 && (
+        <div className="mb-2">
+          <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Branch deploys</div>
+          {act.branch_deploys.map((d) => (
+            <div key={d.id} className="flex items-center gap-2 py-1 text-sm">
+              🌿
+              <span className={runColor(d.status)}>
+                {d.status}{d.exit_code !== null && d.status === "failed" ? ` (exit ${d.exit_code})` : ""}
+              </span>
+              {d.executor_agent_id && (
+                <Link to={`/agent/${d.executor_agent_id}`} className="text-emerald-400 hover:text-emerald-200 underline">
+                  deploy agent →
+                </Link>
+              )}
+              <span className="ml-auto text-xs text-gray-600 font-mono">{new Date(d.created_at).toLocaleTimeString()}</span>
+            </div>
+          ))}
         </div>
       )}
 

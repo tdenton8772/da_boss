@@ -45,7 +45,9 @@ function deployPrompt(command: string, ref: string): string {
     "   After each poll, briefly narrate the stage (build / migrate / rollout / smoke).",
     "   CRITICAL: only ever inspect the log with `tail`, `grep`, or `grep -c`. NEVER use the Read tool on /work/.daboss/log — it can be 50k+ tokens and will exceed the file-read limit.",
     "3. When /work/.daboss/exit exists: if it's 0 and the smoke test reported 0 failures, post a short success summary (image/SHA, deployments rolled, routes checked) and STOP.",
-    "4. If the exit code is non-zero OR the smoke test failed: DO NOT leave things broken. Roll back the deployments that rolled (`kubectl rollout undo deployment/<name> -n <ns>`), confirm they're healthy, report exactly what failed and that you rolled back, then STOP.",
+    "4. If the exit code is non-zero OR the smoke test failed: FIRST capture the REAL error — never just report 'BUILD FAILURE'. If the log shows a Cloud Build failure, the specific compile/step error is in Cloud Build's own logs, NOT the tailed log. Pull the build id and fetch it:",
+    "     BID=$(grep -oE 'builds/[a-f0-9-]{36}' /work/.daboss/log | head -1 | cut -d/ -f2); [ -n \"$BID\" ] && gcloud builds log \"$BID\" 2>&1 | grep -iE 'error|== Compilation|\\*\\* \\(|\\.exs?:[0-9]|undefined|reserved' | tail -40",
+    "   That surfaces the actual failure (file:line + message). THEN do not leave things broken: roll back the deployments that rolled (`kubectl rollout undo deployment/<name> -n <ns>`), confirm they're healthy, and post a report that includes the SPECIFIC error you found (file:line + message) so the change can be fixed. Then STOP.",
     "5. Never modify any repo files.",
   ].join("\n");
 }
@@ -129,18 +131,36 @@ export async function deployAgentBranch(manager: AgentManager, agent: AgentRecor
 export async function reconcileDeployRun(agentId: string): Promise<void> {
   const agent = await queries.getAgent(agentId);
   if (!agent?.pipeline_run_id) return;
-  const run = await queries.getPipelineRun(agent.pipeline_run_id);
-  if (!run || run.phase !== "deploy" || run.status !== "running") return;
-  if (run.exit_code !== null && run.exit_code !== undefined) {
-    // Recorder wrote an exit code but the status wasn't flipped — derive it.
-    await queries.updatePipelineRun(run.id, { status: run.exit_code === 0 ? "passed" : "failed", completed: true });
-  } else {
-    // Agent ended with no recorded exit → outcome unknown; fail safe so the run
-    // doesn't sit `running` forever (a human should verify the cluster state).
-    await queries.updatePipelineRun(run.id, {
-      status: "failed",
-      log: `Deploy-manager agent ${agentId} ended (${agent.state}) with no recorded exit code — marked failed; verify the cluster state.`,
-      completed: true,
-    });
+  let run = await queries.getPipelineRun(agent.pipeline_run_id);
+  if (!run || run.phase !== "deploy") return;
+  // Reconcile a stuck run (recorder didn't flip it) from the agent's exit code.
+  if (run.status === "running") {
+    if (run.exit_code !== null && run.exit_code !== undefined) {
+      await queries.updatePipelineRun(run.id, { status: run.exit_code === 0 ? "passed" : "failed", completed: true });
+    } else {
+      // Agent ended with no recorded exit → outcome unknown; fail safe so the run
+      // doesn't sit `running` forever (a human should verify the cluster state).
+      await queries.updatePipelineRun(run.id, {
+        status: "failed",
+        log: `Deploy-manager agent ${agentId} ended (${agent.state}) with no recorded exit code — marked failed; verify the cluster state.`,
+        completed: true,
+      });
+    }
+    run = await queries.getPipelineRun(run.id); // refresh
+  }
+  // FEEDBACK LOOP: the deploy runs as a SEPARATE agent, so its outcome never lands on
+  // the change's trace. Push the result back onto the ORIGIN change agent (found by
+  // the deploy's branch) so a failure comes back to where you can fix it.
+  if (run && (run.status === "failed" || run.status === "passed") && run.repo_url && run.git_ref) {
+    const originId = await queries.getChangeAgentIdByBranch(run.repo_url, run.git_ref);
+    if (originId && originId !== agentId) {
+      const ok = run.status === "passed";
+      await queries.insertAgentEvent(originId, "message", {
+        role: "system",
+        content: ok
+          ? `✅ Branch deploy of \`${run.git_ref}\` **succeeded** — [deploy agent](/agent/${agentId}).`
+          : `❌ Branch deploy of \`${run.git_ref}\` **FAILED** — open the [deploy agent](/agent/${agentId}) for the specific error, then fix and redeploy. (Also shown under Activity below.)`,
+      }).catch(() => {});
+    }
   }
 }
