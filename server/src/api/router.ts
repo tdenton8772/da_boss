@@ -672,6 +672,22 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  // Resize an agent's pod (t-shirt size s|m|l|xl). Applies to its NEXT dispatch/
+  // resume, so the agent must not be actively running/queued — pause it first. Use
+  // when a task needs more memory/CPU than its current size (e.g. a compile that
+  // OOM-killed the pod).
+  router.post("/api/agents/:id/size", async (req, res) => {
+    const agent = await queries.getAgent(req.params.id);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    const size = String((req.body as { size?: string })?.size || "").toLowerCase();
+    if (!["s", "m", "l", "xl"].includes(size)) { res.status(400).json({ error: "size must be one of s | m | l | xl" }); return; }
+    if (agent.state === "running" || agent.state === "queued") { res.status(409).json({ error: "Pause the agent before resizing — the new size applies to the next pod." }); return; }
+    await queries.setAgentSize(agent.id, size);
+    await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `📐 **${actorOf(req)}** resized this agent to **${size.toUpperCase()}** — applies on next resume/dispatch.` });
+    await queries.insertAuditLog(req.ip || null, "agent.resize", "agent", agent.id, `size=${size}`, req.user?.userId);
+    res.json({ ok: true, size });
+  });
+
   router.post("/api/agents/:id/fresh-start", async (req, res) => {
     try {
       const { prompt } = req.body as { prompt?: string };

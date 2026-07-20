@@ -178,6 +178,9 @@ export const api = {
   // (the agent resolves them, then da_boss pushes).
   syncMain: (id: string) =>
     request<{ ok: boolean; clean?: boolean; dispatched?: boolean }>(`/agents/${id}/sync-main`, { method: "POST" }),
+  // Resize an agent's pod (applies on next resume/dispatch; agent must be paused)
+  resizeAgent: (id: string, size: "s" | "m" | "l" | "xl") =>
+    request<{ ok: boolean; size: string }>(`/agents/${id}/size`, { method: "POST", body: JSON.stringify({ size }) }),
   // Report-back actions
   mergeAgent: (id: string, override?: boolean) => request<{ ok?: boolean; merged?: boolean; landing?: boolean }>(`/agents/${id}/merge`, { method: "POST", body: JSON.stringify({ override: !!override }) }),
   requestChanges: (id: string, feedback: string) =>
@@ -366,6 +369,7 @@ export interface AgentWithTokens {
   review_of_agent_id?: string | null;
   adopted_ref?: string | null;
   branch?: string | null;
+  size?: string | null;
   created_by_user_id: string | null;
   created_at: string;
   updated_at: string;

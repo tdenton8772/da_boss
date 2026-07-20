@@ -43,6 +43,7 @@ interface AgentData {
   deployed_by_agent_id?: string | null;
   adopted_ref?: string | null;
   branch?: string | null;
+  size?: string | null;
   shipped?: Array<{ id: string; pr_number: number | null; name: string }>;
   tokens?: { total_cost_usd: number };
 }
@@ -265,6 +266,25 @@ export function AgentDetail() {
             >
               🔍 Queue review
             </button>
+          )}
+          {agent.state !== "running" && agent.state !== "queued" && (
+            <div className="mt-1 flex items-center gap-1 text-xs text-gray-400" title="Pod size for the next resume/dispatch. Bump it if a task OOM-killed its pod (e.g. a big compile).">
+              <span>Pod size:</span>
+              <select
+                value={agent.size || ""}
+                onChange={(e) => {
+                  const size = e.target.value as "s" | "m" | "l" | "xl";
+                  if (!size) return;
+                  api.resizeAgent(agent.id, size)
+                    .then(() => { toast.success(`Resized to ${size.toUpperCase()} — applies on next resume`); refresh(); })
+                    .catch((err) => toast.error(err instanceof Error ? err.message : "Resize failed"));
+                }}
+                className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-200"
+              >
+                <option value="">{agent.size ? agent.size.toUpperCase() : "auto"}</option>
+                {["s", "m", "l", "xl"].map((s) => <option key={s} value={s}>{s.toUpperCase()}</option>)}
+              </select>
+            </div>
           )}
           {agent.repo_url && agent.branch && !agent.review_of_agent_id && (
             <button

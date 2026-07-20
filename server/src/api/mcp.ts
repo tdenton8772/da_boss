@@ -170,6 +170,27 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
   );
 
   server.registerTool(
+    "resize_agent",
+    {
+      description:
+        "Change an agent's pod t-shirt size (s|m|l|xl). Applies on its NEXT resume/dispatch, so the agent must be paused/completed (not actively running or queued). Use when a task OOM-killed its pod or needs more CPU/memory (e.g. a large compile).",
+      inputSchema: {
+        agent_id: z.string().describe("The agent to resize"),
+        size: z.enum(["s", "m", "l", "xl"]).describe("New pod size"),
+      },
+    },
+    async ({ agent_id, size }) => {
+      const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      if (agent.state === "running" || agent.state === "queued") return asError("Pause the agent before resizing — the new size applies to the next pod.");
+      await queries.setAgentSize(agent.id, size);
+      await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `📐 Resized to **${size.toUpperCase()}** — applies on next resume/dispatch.` }).catch(() => {});
+      return asText({ ok: true, size, note: "Resized; resume the agent to dispatch a pod at the new size." });
+    }
+  );
+
+  server.registerTool(
     "sync_main",
     {
       description:
