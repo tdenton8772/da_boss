@@ -84,6 +84,23 @@ describe("reconcileDeployRun — deploy-run safety net", () => {
     expect(JSON.stringify(originEvents)).toContain("ag_dep2"); // links to the deploy agent
   });
 
+  it("isDeployAgent: true for a deploy executor, false for a change agent", async () => {
+    // deploy agent — ran a deploy phase
+    await queries.insertAgent({ ...deployAgent, id: "ag_isdep" });
+    await queries.insertPipelineRun({ id: "run_id1", repoUrl: "https://github.com/x/y", ref: "chore/agent/deploy-x", phase: "deploy", status: "running", agentId: "ag_isdep" });
+    expect(await queries.isDeployAgent("ag_isdep")).toBe(true);
+
+    // change agent — only test phases
+    await queries.insertAgent({ ...deployAgent, id: "ag_ischange" });
+    await queries.insertPipelineRun({ id: "run_id2", repoUrl: "https://github.com/x/y", ref: "feat/x", phase: "test", status: "passed", agentId: "ag_ischange" });
+    await queries.insertPipelineRun({ id: "run_id3", repoUrl: "https://github.com/x/y", ref: "feat/x", phase: "test-elixir", status: "passed", agentId: "ag_ischange" });
+    expect(await queries.isDeployAgent("ag_ischange")).toBe(false);
+
+    // no runs at all
+    await queries.insertAgent({ ...deployAgent, id: "ag_norun" });
+    expect(await queries.isDeployAgent("ag_norun")).toBe(false);
+  });
+
   it("routes a SUCCEEDED branch deploy back to the origin too", async () => {
     await queries.insertAgent({ ...deployAgent, id: "ag_o2", name: "some change", repo_url: "https://github.com/x/y", branch: "feat/z" } as never);
     await queries.insertAgent({ ...deployAgent, id: "ag_dep3", name: "deploy feat/z", repo_url: "https://github.com/x/y" } as never);

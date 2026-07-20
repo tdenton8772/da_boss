@@ -380,6 +380,7 @@ export interface AgentWithTokens {
   adopted_ref?: string | null;
   branch?: string | null;
   size?: string | null;
+  is_deploy_agent?: boolean;
   created_by_user_id: string | null;
   created_at: string;
   updated_at: string;

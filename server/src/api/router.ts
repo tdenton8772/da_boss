@@ -352,7 +352,9 @@ export function createRouter(manager: AgentManager): Router {
     // cluttering the dashboard — they stay reachable via the change's links
     // ("🔍 review agent", "🚀 shipped in deploy"). ?includeSubagents=true unnests.
     const includeSubagents = req.query.includeSubagents === "true";
-    const deployAgentIds = includeSubagents ? new Set<string>() : new Set(await queries.getDeployAgentIds());
+    // Always compute (used both to nest deploy agents off the dashboard AND to flag
+    // is_deploy_agent so the UI hides change-actions on them).
+    const deployAgentIds = new Set(await queries.getDeployAgentIds());
     const agents = (await manager.getAllAgents()).filter(
       (a) =>
         (includeTest || a.created_by_user_id !== TEST_USER_ID) &&
@@ -380,6 +382,7 @@ export function createRouter(manager: AgentManager): Router {
         landing: landingA,
         deploy_status,
         deploy_agent_state,
+        is_deploy_agent: deployAgentIds.has(a.id), // hide change-actions on deploy agents
         // THE canonical status — same function + same inputs the detail endpoint uses.
         status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, deploy_status, deploy_agent_state }),
         tokens: summaryMap.get(a.id) || {
@@ -546,7 +549,8 @@ export function createRouter(manager: AgentManager): Router {
     // THE canonical status — identical function + inputs to the list endpoint, so the
     // detail header and the dashboard card can never disagree.
     const status = computeAgentStatus({ ...agent, testing, landing, deploy_status, deploy_agent_state });
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status });
+    const is_deploy_agent = await queries.isDeployAgent(agent.id);
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
   });
 
   // The ACTIVITY TRACE: every pipeline run and child agent associated with this
@@ -1021,6 +1025,10 @@ export function createRouter(manager: AgentManager): Router {
     const agent = await queries.getAgent(req.params.id);
     if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
     if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) { res.status(400).json({ error: "Agent has no repo/branch to deploy" }); return; }
+    // A deploy agent's branch is a synthetic `chore/agent/deploy-*` throwaway (no
+    // pipeline.yaml, not on the remote) — deploying IT is nonsense. Give it feedback
+    // instead; deploy the CHANGE agent whose branch you actually want shipped.
+    if (await queries.isDeployAgent(agent.id)) { res.status(400).json({ error: "This is a deploy agent — you can't deploy it. Deploy the change agent whose branch you want shipped; send this agent feedback instead." }); return; }
     try {
       const { runId, agentId } = await deployAgentBranch(manager, agent);
       const ip = req.ip || req.socket.remoteAddress || null;
@@ -1071,6 +1079,7 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/agents/:id/test", async (req, res) => {
     const agent = await queries.getAgent(req.params.id);
     if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (await queries.isDeployAgent(agent.id)) { res.status(400).json({ error: "This is a deploy agent — its branch is a throwaway with no pipeline. Test the change agent instead." }); return; }
     const phaseName = (req.body as { phase?: string })?.phase || "test";
     try {
       const runId = await pipelineService.runPhaseForAgent(agent, phaseName);

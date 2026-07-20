@@ -1327,6 +1327,22 @@ export async function getDeployAgentIds(): Promise<string[]> {
   return res.rows.map((r) => r.agent_id);
 }
 
+/** Whether THIS agent is a deploy executor — it ran (or is running) a non-test
+ *  pipeline phase, i.e. it's a deploy manager, not a change. Single-agent form of
+ *  getDeployAgentIds. Used to hide/deny change-actions (deploy/test/merge) on a
+ *  deploy agent — its branch is a synthetic `chore/agent/deploy-*` throwaway with no
+ *  pipeline.yaml, so deploying/testing IT is nonsense; you only give it feedback. */
+export async function isDeployAgent(agentId: string): Promise<boolean> {
+  const res = await getPool().query(
+    `SELECT 1 FROM pipeline_runs
+      WHERE agent_id = $1
+        AND NOT (phase = 'test' OR phase LIKE 'test-%')
+        AND status NOT IN ('pending','pending_review','pending_approval') LIMIT 1`,
+    [agentId]
+  );
+  return res.rows.length > 0;
+}
+
 /** Whether the agent has a test phase (test / test-*) in flight — so the UI can
  *  show "Testing…" instead of a finished-looking "completed + Resume" while its
  *  suites run in separate pods. */
