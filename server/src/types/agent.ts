@@ -56,6 +56,7 @@ export interface AgentRecord {
   updated_at: string;
   started_at: string | null;
   completed_at: string | null;
+  last_heartbeat_at: string | null; // sidecar beats while the pod is alive; stale = dead pod
 }
 
 export interface CreateAgentRequest {

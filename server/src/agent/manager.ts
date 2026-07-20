@@ -524,20 +524,37 @@ export class AgentManager {
    * Also kill any orphaned claude processes from the previous run.
    */
   async restoreAgents(): Promise<void> {
-    const interrupted = await queries.getAgentsByState(
+    const active = await queries.getAgentsByState(
       "running",
       "waiting_permission",
       "waiting_input"
     );
+    // Only pause agents whose POD IS GONE. A pod that survived the control-plane
+    // restart keeps beating (the pod↔boss bus is Postgres, so its events keep
+    // flowing and this new control plane picks them up) — pausing it would be the
+    // churn that froze the forecast agent on every redeploy. A FRESH heartbeat = the
+    // pod is alive → leave it running; stale/absent = dead → pause. The periodic
+    // reaper (startAgentReaper) handles pods that die AFTER startup.
+    const freshCutoff = Date.now() - config.reaperStaleSeconds * 1000;
+    const interrupted = active.filter((a) => {
+      const hb = a.last_heartbeat_at ? new Date(a.last_heartbeat_at).getTime() : 0;
+      return hb < freshCutoff; // no fresh heartbeat → pod gone
+    });
     for (const agent of interrupted) {
       logger.info(
         { agentId: agent.id, state: agent.state },
-        "Marking interrupted agent as paused"
+        "Restart: pod heartbeat stale/absent — pausing"
       );
       await queries.updateAgentState(agent.id, "paused", {
-        error_message: "Server restarted - agent paused, resume manually",
+        error_message: "Server restarted and this agent's pod was gone — paused; resume to continue.",
       });
+      await queries.insertAgentEvent(agent.id, "message", {
+        role: "system",
+        content: "⚠ Server restarted and this agent's pod was no longer beating — reconciled to **paused**. Resume to continue.",
+      }).catch(() => {});
     }
+    const kept = active.length - interrupted.length;
+    if (kept > 0) logger.info({ kept }, "Restart: left live-pod agents running (fresh heartbeat)");
 
     // Kill orphaned claude processes from a previous server run — but ONLY if the
     // DB shows agents that were mid-flight. The sweep greps for ALL `claude`
