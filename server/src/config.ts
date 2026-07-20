@@ -28,6 +28,12 @@ export const config = {
   // Added as a second container in each agent pod when on. Deterministic/advisory.
   agentSidecar: (process.env.AGENT_SIDECAR || "off") === "on",
   sidecarHeartbeatSeconds: parseInt(process.env.SIDECAR_HEARTBEAT_SECONDS || "15", 10),
+  // Heartbeat reaper: reconcile an agent stuck 'running'/'waiting_*' whose pod's
+  // sidecar stopped beating (dead pod) → paused. staleSeconds past the last beat =
+  // pod is gone; runs every intervalSeconds (independent of the 5-min supervisor,
+  // so orphans clear in ~a minute). Default stale = 6 missed 15s beats.
+  reaperStaleSeconds: parseInt(process.env.DABOSS_REAPER_STALE_SECONDS || "90", 10),
+  reaperIntervalSeconds: parseInt(process.env.DABOSS_REAPER_INTERVAL_SECONDS || "45", 10),
   sidecarTelemetrySeconds: parseInt(process.env.SIDECAR_TELEMETRY_SECONDS || "30", 10),
   // Semantic freeze-lease cycle: recompute the blast radius of the agent's edits
   // and refresh its leases. Heavier (ctags+grep), so runs less often than heartbeat.

@@ -18,6 +18,7 @@ import { reapFinishedAgentPods } from "./agent/pod-dispatcher.js";
 import { startLiveRelay } from "./api/live-relay.js";
 import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
+import { startAgentReaper } from "./supervisor/reaper.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
@@ -122,6 +123,11 @@ async function main() {
   } else {
     startSupervisor(manager);
   }
+
+  // Heartbeat reaper: reconcile any agent whose pod stopped beating (dead pod) to
+  // paused, so DB state never lies about what's actually running. Idempotent + guarded
+  // to pod mode. Runs everywhere the control plane runs; a stray double-run is a no-op.
+  startAgentReaper();
 
   // Start server
   server.listen(config.port, () => {

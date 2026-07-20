@@ -28,7 +28,7 @@ function startOfMonthUtc(): string {
 export async function insertAgent(
   agent: Omit<
     AgentRecord,
-    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id"
+    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id" | "last_heartbeat_at"
   >
 ): Promise<AgentRecord> {
   await getPool().query(
@@ -691,11 +691,15 @@ export async function updateAgentHeartbeat(agentId: string): Promise<void> {
   await getPool().query("UPDATE agents SET last_heartbeat_at = now() WHERE id = $1", [agentId]);
 }
 
-/** Running agents whose sidecar heartbeat has gone stale (hung/dead pod). Only
- *  considers agents that beat at least once, so non-sidecar agents aren't flagged. */
+/** Agents that claim to be alive (running, or waiting on a live pod for permission/
+ *  input) whose sidecar heartbeat has gone stale (hung/dead pod). Only considers
+ *  agents that beat at least once, so a pod still booting (no beat yet) and
+ *  non-sidecar agents aren't flagged. This is the signal the reaper reconciles on. */
 export async function getStaleHeartbeatAgents(cutoffIso: string): Promise<AgentRecord[]> {
   const res = await getPool().query<AgentRecord>(
-    "SELECT * FROM agents WHERE state = 'running' AND last_heartbeat_at IS NOT NULL AND last_heartbeat_at < $1",
+    `SELECT * FROM agents
+       WHERE state IN ('running','waiting_permission','waiting_input')
+         AND last_heartbeat_at IS NOT NULL AND last_heartbeat_at < $1`,
     [cutoffIso]
   );
   return res.rows;
