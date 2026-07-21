@@ -646,6 +646,31 @@ export async function reapFinishedAgentPods(): Promise<void> {
         if (app === "daboss-agent" && agentId) await deleteAgentCredSecret(agentId);
         if (app === "daboss-pipeline") await deleteNamespacedSecretSafe(`${name}-cred`);
         logger.info({ pod: name, phase, app }, "Reaped finished pod");
+        continue;
+      }
+      // Self-heal a pod wedged on VOLUME ATTACH: if a per-user workspace disk gets
+      // deleted out from under its PVC (e.g. a cost-cleanup sweep of "unattached"
+      // disks), every pod stalls in Pending on AttachVolume.Attach failed — forever.
+      // Detect it, delete the broken PVC (da_boss recreates a fresh one), drop the
+      // pod, and re-queue → fresh workspace + a graceful fresh-session resume.
+      if (name && phase === "Pending" && app === "daboss-agent" && agentId) {
+        const created = pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : Date.now();
+        if ((Date.now() - created) / 1000 > 180) { // stuck Pending > 3 min
+          const evs = await api().listNamespacedEvent({ namespace: NAMESPACE, fieldSelector: `involvedObject.name=${name}` }).catch(() => null);
+          const volFail = (evs?.items || []).some((e) => e.reason === "FailedAttachVolume" || /AttachVolume\.Attach failed|Could not find disk|was not found/i.test(e.message || ""));
+          if (volFail) {
+            logger.warn({ pod: name, agentId }, "Agent pod wedged on volume attach — recovering: recreate PVC + re-dispatch");
+            const agent = await queries.getAgent(agentId).catch(() => null);
+            if (agent?.created_by_user_id) {
+              await api().deleteNamespacedPersistentVolumeClaim({ name: userWorkspacePvcName(agent.created_by_user_id), namespace: NAMESPACE }).catch(() => {});
+            }
+            await api().deleteNamespacedPod({ name, namespace: NAMESPACE, gracePeriodSeconds: 0 }).catch(() => {});
+            await deleteAgentCredSecret(agentId).catch(() => {});
+            await queries.insertAgentEvent(agentId, "message", { role: "system", content: "⚠ Workspace volume was lost (its disk is gone) — recreating a fresh workspace and re-dispatching. Session history is lost; committed work on the branch is safe." }).catch(() => {});
+            await queries.updateAgentState(agentId, "queued", {}).catch(() => {});
+            await queries.notifyAgentQueued(agentId).catch(() => {});
+          }
+        }
       }
     }
   } catch (err: unknown) {

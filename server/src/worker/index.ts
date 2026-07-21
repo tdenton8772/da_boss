@@ -529,6 +529,17 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.warn({ agentId: AGENT_ID, err: err instanceof Error ? err.message : String(err) }, "Session restore failed");
     }
+    // If the transcript can't be restored — usually because the workspace volume was
+    // lost — DON'T pass `resume` (the SDK would error on a missing session). Start a
+    // fresh session with a visible warning instead, so a resume always works.
+    if (!(await findSessionFile(sessionId))) {
+      logger.warn({ agentId: AGENT_ID, sessionId }, "Session transcript missing (volume lost?) — resuming fresh");
+      await queries.insertAgentEvent(AGENT_ID!, "message", {
+        role: "system",
+        content: "⚠ Prior session history is gone (the workspace volume was lost) — resuming with **NO history**. Your committed work on the branch is intact; re-orient from there before continuing.",
+      }).catch(() => {});
+      sessionId = undefined; // fresh session, no resume
+    }
   }
 
   const scripted = !!process.env.WORKER_SCRIPT;
