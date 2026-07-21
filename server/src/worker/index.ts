@@ -37,6 +37,9 @@ const execFileAsync = promisify(execFile);
 
 const AGENT_ID = process.env.AGENT_ID;
 const WORK_DIR = process.env.WORK_DIR || "/work";
+// When this run's turn started — plan files older than this are stale (restored by
+// the clone, not written this turn), so they're excluded from the approval box.
+let RUN_STARTED_AT = 0;
 // Per-user shard mount (RWO PVC). When set, agents keep a warm bare mirror here
 // and clone locally from it instead of hitting the internet per dispatch.
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || "";
@@ -256,7 +259,10 @@ async function readLatestPlanFile(): Promise<string | null> {
     const dir = `${WORK_DIR}/.claude/plans`;
     if (!existsSync(dir)) return null;
     const files = (await readdir(dir)).filter((f) => f.endsWith(".md"));
-    let best = "", bestMtime = -1;
+    // ONLY a plan the agent wrote THIS turn (mtime after the run started). Committed
+    // plan files restored by the clone share the clone mtime and would otherwise get
+    // injected as a stale/wrong plan for an unrelated task.
+    let best = "", bestMtime = RUN_STARTED_AT;
     for (const f of files) {
       try { const st = statSync(`${dir}/${f}`); if (st.mtimeMs > bestMtime) { bestMtime = st.mtimeMs; best = `${dir}/${f}`; } } catch { /* skip */ }
     }
@@ -618,6 +624,7 @@ async function main(): Promise<void> {
       currentQuery = q as unknown as { interrupt?: () => Promise<void> };
 
       // Drop any user-uploaded files into /work/uploads so the agent can read them.
+      RUN_STARTED_AT = Date.now(); // mark turn start (after clone) so only THIS turn's plan is captured
       const uploaded = await writeUploadedFiles();
       if (uploaded.length) {
         await queries.insertAgentEvent(AGENT_ID, "message", {
