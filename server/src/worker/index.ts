@@ -256,15 +256,19 @@ async function writeUploadedFiles(): Promise<string[]> {
  *  render it. Best-effort. */
 async function readLatestPlanFile(): Promise<string | null> {
   try {
-    const dir = `${WORK_DIR}/.claude/plans`;
-    if (!existsSync(dir)) return null;
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".md"));
-    // ONLY a plan the agent wrote THIS turn (mtime after the run started). Committed
-    // plan files restored by the clone share the clone mtime and would otherwise get
-    // injected as a stale/wrong plan for an unrelated task.
+    // Claude Code (v2.x) writes the plan to ~/.claude/plans/<session-slug>.md — in HOME,
+    // NOT the repo — when the agent runs in plan mode and calls ExitPlanMode. Some agents
+    // also drop a plan into the repo's own .claude/plans. Check both; newest-this-turn wins.
+    const dirs = [`${process.env.HOME || "/root"}/.claude/plans`, `${WORK_DIR}/.claude/plans`];
+    // ONLY a plan the agent wrote THIS turn (mtime after the run started). Committed plan
+    // files restored by the clone share the clone mtime and would otherwise be injected as
+    // a stale/wrong plan for an unrelated task.
     let best = "", bestMtime = RUN_STARTED_AT;
-    for (const f of files) {
-      try { const st = statSync(`${dir}/${f}`); if (st.mtimeMs > bestMtime) { bestMtime = st.mtimeMs; best = `${dir}/${f}`; } } catch { /* skip */ }
+    for (const dir of dirs) {
+      if (!existsSync(dir)) continue;
+      for (const f of (await readdir(dir)).filter((f) => f.endsWith(".md"))) {
+        try { const st = statSync(`${dir}/${f}`); if (st.mtimeMs > bestMtime) { bestMtime = st.mtimeMs; best = `${dir}/${f}`; } } catch { /* skip */ }
+      }
     }
     return best ? await readFile(best, "utf8") : null;
   } catch { return null; }
@@ -615,6 +619,12 @@ async function main(): Promise<void> {
               `You are a da_boss agent running inside a Kubernetes pod. Your working directory is ${WORK_DIR}. ` +
               `When you finish, da_boss automatically commits any uncommitted changes, pushes your branch, and opens or updates the pull request. ` +
               `So do NOT run \`git push\` and do NOT try to create a PR yourself — the \`gh\` CLI is not installed and no PR token is in your shell, and da_boss handles all of that for you. Just make the changes (committing locally is fine but optional) and stop.` +
+              // Plan capture: da_boss surfaces plans in an approval box by reading the newest
+              // file under ~/.claude/plans. If you use plan mode, ALWAYS Write your complete
+              // plan to a file there FIRST (e.g. ~/.claude/plans/plan.md) BEFORE calling
+              // ExitPlanMode — ExitPlanMode carries no plan text itself, so a plan you don't
+              // write to that file is invisible to the human approving it.
+              ` IMPORTANT — plan mode: whenever you present a plan (ExitPlanMode), you MUST first Write your COMPLETE plan as markdown to \`~/.claude/plans/plan.md\` (create the directory if needed). ExitPlanMode does not carry the plan text, so da_boss shows the human whatever is in that file. Never call ExitPlanMode with the plan only in your message — write it to the file first, then call ExitPlanMode.` +
               projectContext,
           },
           ...(agent.max_turns ? { maxTurns: agent.max_turns } : {}),

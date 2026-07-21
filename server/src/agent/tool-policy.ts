@@ -51,6 +51,10 @@ export function isBashDangerous(command: string): boolean {
 export function isPathSafe(filePath: string, agentCwd: string): boolean {
   if (agentCwd && filePath.startsWith(agentCwd)) return true;
   if (filePath.startsWith("/tmp/") || filePath.startsWith("/private/tmp/")) return true;
+  // The agent's own plan doc: da_boss reads ~/.claude/plans/*.md to surface the plan in
+  // the approval box, so the agent must be able to write it without escalating to a human
+  // (escalating the plan write would stall the plan the human is waiting to approve).
+  if (filePath.includes("/.claude/plans/")) return true;
   return false;
 }
 
