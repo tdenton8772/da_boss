@@ -599,6 +599,17 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_files_agent ON agent_files(agent_id);
     `,
   },
+  {
+    // Per-agent toolchain flavor: a Dockerfile build target (multi-stage) in the
+    // repo's .daboss/agent.Dockerfile. Lets one repo declare several agent
+    // toolchains (e.g. `minimal`, `elixir`) and each agent pick per task — not
+    // every agent needs the full bake. Null → the Dockerfile's final stage.
+    version: 33,
+    name: "agent_toolchain",
+    up: `
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS toolchain TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

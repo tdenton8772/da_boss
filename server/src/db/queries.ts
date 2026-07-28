@@ -32,8 +32,8 @@ export async function insertAgent(
   >
 ): Promise<AgentRecord> {
   await getPool().query(
-    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref, size)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref, size, toolchain)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
     [
       agent.id,
       agent.name,
@@ -57,6 +57,7 @@ export async function insertAgent(
       agent.worker_image,
       agent.adopted_ref,
       agent.size,
+      agent.toolchain,
     ]
   );
   return (await getAgent(agent.id))!;

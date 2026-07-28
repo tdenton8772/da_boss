@@ -27,17 +27,18 @@ export function repoSlug(repoUrl: string): string {
   return path.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || "repo";
 }
 
-/** Content key: hash(base image + the repo's agent Dockerfile). Changing either the
- *  da_boss base (a deploy) or the repo's declaration yields a new key → a rebuild. */
-export function configKey(baseImage: string, dockerfile: string): string {
-  return createHash("sha256").update(`${baseImage}\n${dockerfile}`).digest("hex").slice(0, 16);
+/** Content key: hash(base image + the repo's agent Dockerfile [+ build target]).
+ *  Changing the da_boss base (a deploy), the repo's declaration, or the requested
+ *  stage yields a new key → a rebuild. */
+export function configKey(baseImage: string, dockerfile: string, target?: string): string {
+  return createHash("sha256").update(`${baseImage}\n${dockerfile}${target ? `\n@${target}` : ""}`).digest("hex").slice(0, 16);
 }
 
 /** The agent image ref for a repo's declaration — same registry/project as the base. */
-export function agentImageRef(baseImage: string, repoUrl: string, dockerfile: string): string {
+export function agentImageRef(baseImage: string, repoUrl: string, dockerfile: string, target?: string): string {
   const slash = baseImage.lastIndexOf("/");
   const project = slash > 0 ? baseImage.slice(0, slash) : baseImage; // strip `/da-boss:tag`
-  return `${project}/agent-${repoSlug(repoUrl)}:${configKey(baseImage, dockerfile)}`;
+  return `${project}/agent-${repoSlug(repoUrl)}:${configKey(baseImage, dockerfile, target)}`;
 }
 
 /** Resolve the image an agent for this repo should run in. No `.daboss/agent.Dockerfile`
@@ -48,15 +49,18 @@ export async function resolveAgentImage(opts: {
   ref?: string;
   gitToken: string;
   baseImage: string;
+  /** Optional Dockerfile stage (multi-stage target) — lets one repo declare several
+   *  toolchain flavors (e.g. `minimal`, `elixir`) and agents pick per-task. */
+  target?: string;
   onProgress?: (msg: string) => void;
 }): Promise<string> {
   try {
     const dockerfile = await getFileContents(opts.repoUrl, AGENT_DOCKERFILE, opts.ref, opts.gitToken).catch(() => null);
     if (!dockerfile?.trim()) return opts.baseImage;
-    const image = agentImageRef(opts.baseImage, opts.repoUrl, dockerfile);
+    const image = agentImageRef(opts.baseImage, opts.repoUrl, dockerfile, opts.target);
     await ensureImage(
       image,
-      { context: ".", dockerfile: AGENT_DOCKERFILE, buildArgs: { DABOSS_BASE: opts.baseImage } },
+      { context: ".", dockerfile: AGENT_DOCKERFILE, target: opts.target, buildArgs: { DABOSS_BASE: opts.baseImage } },
       { repoUrl: opts.repoUrl, ref: opts.ref, gitToken: opts.gitToken, onProgress: opts.onProgress }
     );
     return image;
