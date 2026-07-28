@@ -24,6 +24,10 @@ const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
 const KANIKO_IMAGE = process.env.DABOSS_KANIKO_IMAGE || "gcr.io/kaniko-project/executor:latest";
 const BUILD_SA = process.env.DABOSS_BUILD_SERVICE_ACCOUNT || "";
 const KANIKO_MEMORY = process.env.DABOSS_KANIKO_MEMORY || "4Gi";
+// Dep-baking images (warm mix/pip caches) legitimately take 30-40 min to build
+// and want real CPU — both configurable, with defaults sized for them.
+const KANIKO_CPU = process.env.DABOSS_KANIKO_CPU || "4";
+const BUILD_TIMEOUT_MS = Number(process.env.DABOSS_BUILD_TIMEOUT_MS) || 45 * 60 * 1000;
 
 let coreApi: k8s.CoreV1Api | null = null;
 function api(): k8s.CoreV1Api {
@@ -187,7 +191,7 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
         // OOMKills there. Configurable for very large images.
         resources: {
           requests: { cpu: "500m", memory: "2Gi", "ephemeral-storage": "6Gi" },
-          limits: { cpu: "2", memory: KANIKO_MEMORY, "ephemeral-storage": "16Gi" },
+          limits: { cpu: KANIKO_CPU, memory: KANIKO_MEMORY, "ephemeral-storage": "16Gi" },
         },
         // Kaniko clones the git context using these creds (GitHub PAT / installation token).
         env: [
@@ -205,7 +209,7 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
     void e;
   });
   try {
-    await waitForPod(name, 20 * 60 * 1000);
+    await waitForPod(name, BUILD_TIMEOUT_MS);
   } finally {
     await api().deleteNamespacedPod({ name, namespace: NAMESPACE }).catch(() => {});
   }
