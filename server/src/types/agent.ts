@@ -52,6 +52,7 @@ export interface AgentRecord {
   deployed_by_agent_id: string | null;
   adopted_ref: string | null; // display marker when adopting an existing PR/branch
   size: string | null; // t-shirt pod size (s|m|l|xl); null until set by caller or supervisor
+  toolchain: string | null; // Dockerfile build target in .daboss/agent.Dockerfile (toolchain flavor); null → final stage
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -76,6 +77,7 @@ export interface CreateAgentRequest {
   branch?: string; // full override; else computed from the pieces below
   adopted_ref?: string; // display marker: the user's PR/branch reference when adopting
   size?: string; // explicit t-shirt pod size (s|m|l|xl) — skips supervisor assessment
+  toolchain?: string; // Dockerfile build target (toolchain flavor) in .daboss/agent.Dockerfile
   branch_type?: string; // feat | fix | chore | docs | refactor | test
   issue_id?: string;
   service_account?: string; // k8s SA the agent pod runs as (e.g. the deploy identity)

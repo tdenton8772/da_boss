@@ -139,6 +139,7 @@ export async function ensurePipelineImages(
 export interface BuildSpec {
   context: string; // build context dir in the repo ("." = repo root)
   dockerfile?: string; // Dockerfile path relative to context (default "Dockerfile")
+  target?: string; // multi-stage build target (kaniko --target) — toolchain flavors
   buildArgs?: Record<string, string>; // --build-arg K=V (e.g. DABOSS_BASE for agent images)
 }
 export interface BuildOpts { repoUrl: string; ref?: string; gitToken: string; onProgress?: (msg: string) => void }
@@ -169,6 +170,7 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
     // layers in RAM. Without this, kaniko OOMs on toolchain images (python + onnx).
     "--compressed-caching=false",
     ...(cacheRepo ? [`--cache-repo=${cacheRepo}`] : []),
+    ...(spec.target ? [`--target=${spec.target}`] : []),
     ...Object.entries(spec.buildArgs || {}).map(([k, v]) => `--build-arg=${k}=${v}`),
   ];
   const pod: k8s.V1Pod = {
@@ -215,8 +217,25 @@ async function waitForPod(name: string, timeoutMs: number): Promise<void> {
     const pod = (await api().readNamespacedPod({ name, namespace: NAMESPACE })) as { status?: { phase?: string } };
     const phase = pod.status?.phase;
     if (phase === "Succeeded") return;
-    if (phase === "Failed") throw new Error(`image build pod ${name} failed`);
+    if (phase === "Failed") {
+      // Capture the failure BEFORE the caller's finally-delete destroys the evidence.
+      // A parse error killed agent-image builds for 11 days invisibly because failed
+      // pods lived <20s and were deleted on sight — never again.
+      const tail = await podLogTail(name, 2000);
+      logger.error({ pod: name, log: tail }, "Image build pod failed");
+      throw new Error(`image build pod ${name} failed${tail ? `: ${tail.slice(-500)}` : ""}`);
+    }
     if (Date.now() - start > timeoutMs) throw new Error(`image build pod ${name} timed out`);
     await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
+/** Last `maxChars` of the pod's log — best-effort, empty string when unreadable. */
+async function podLogTail(name: string, maxChars: number): Promise<string> {
+  try {
+    const log = await api().readNamespacedPodLog({ name, namespace: NAMESPACE });
+    return String(log ?? "").slice(-maxChars);
+  } catch {
+    return "";
   }
 }

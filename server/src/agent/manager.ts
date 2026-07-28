@@ -109,6 +109,7 @@ export class AgentManager {
       // only mark adoption when a branch override was actually given
       adopted_ref: req.branch?.trim() ? (req.adopted_ref?.trim() || branch) : null,
       size: normalizeSize(req.size), // explicit t-shirt size (else null → supervisor sizes it)
+      toolchain: req.toolchain?.trim() || null, // Dockerfile target (toolchain flavor)
     });
 
     await queries.insertAgentEvent(id, "state_change", {
