@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { repoSlug, configKey, agentImageRef } from "../src/agent/agent-image.js";
+import { repoSlug, configKey, agentImageRef, hashIncludePaths } from "../src/agent/agent-image.js";
 
 const BASE = "us-central1-docker.pkg.dev/proj/daboss/da-boss:sometag";
 
@@ -32,5 +32,25 @@ describe("agentImageRef", () => {
     const b = agentImageRef(BASE, "https://github.com/o/r.git", "RUN b");
     expect(a).not.toBe(b);
     expect(a.split(":")[0]).toBe(b.split(":")[0]); // same repository, different tag
+  });
+});
+
+describe("hashIncludePaths", () => {
+  it("parses a single directive line into paths", () => {
+    const df = "FROM x\n# daboss-hash-include: web/mix.lock workers/pyproject.toml\nRUN y";
+    expect(hashIncludePaths(df)).toEqual(["web/mix.lock", "workers/pyproject.toml"]);
+  });
+  it("merges multiple directive lines and dedups", () => {
+    const df = "# daboss-hash-include: a b\nFROM x\n#daboss-hash-include: b c";
+    expect(hashIncludePaths(df)).toEqual(["a", "b", "c"]);
+  });
+  it("returns empty for a Dockerfile without the directive", () => {
+    expect(hashIncludePaths("FROM x\nRUN y")).toEqual([]);
+  });
+  it("changing an included file's content changes the image tag", () => {
+    const df = "FROM ${DABOSS_BASE}\n# daboss-hash-include: web/mix.lock";
+    const a = agentImageRef(BASE, "https://github.com/o/r.git", df + "\n--- web/mix.lock ---\nlock-v1");
+    const b = agentImageRef(BASE, "https://github.com/o/r.git", df + "\n--- web/mix.lock ---\nlock-v2");
+    expect(a).not.toBe(b);
   });
 });

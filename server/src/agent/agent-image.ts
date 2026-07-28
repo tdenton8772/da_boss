@@ -21,6 +21,18 @@ import { logger } from "../utils/logger.js";
 
 export const AGENT_DOCKERFILE = ".daboss/agent.Dockerfile";
 
+/** Extra repo files the Dockerfile folds into the image cache key, declared as
+ *  `# daboss-hash-include: path [path…]` comment lines. Lets an image that BAKES
+ *  from repo files (dep caches from mix.lock / pyproject.toml) rebuild when those
+ *  files change — not just when the Dockerfile itself does. */
+export function hashIncludePaths(dockerfile: string): string[] {
+  const out: string[] = [];
+  for (const m of dockerfile.matchAll(/^#\s*daboss-hash-include:\s*(.+)$/gm)) {
+    out.push(...m[1].trim().split(/\s+/).filter(Boolean));
+  }
+  return [...new Set(out)].slice(0, 20); // bounded; dedup keeps the key stable
+}
+
 /** org-repo slug for the agent image name (sanitized, bounded). */
 export function repoSlug(repoUrl: string): string {
   const path = normalizeGitUrl(repoUrl).replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "");
@@ -57,7 +69,16 @@ export async function resolveAgentImage(opts: {
   try {
     const dockerfile = await getFileContents(opts.repoUrl, AGENT_DOCKERFILE, opts.ref, opts.gitToken).catch(() => null);
     if (!dockerfile?.trim()) return opts.baseImage;
-    const image = agentImageRef(opts.baseImage, opts.repoUrl, dockerfile, opts.target);
+    // Fold declared extra files (dep lockfiles the image bakes from) into the
+    // cache key so the image rebuilds when THEY change. A missing/unreadable
+    // file hashes as empty — stable, and the build itself will surface real
+    // problems.
+    let keyInput = dockerfile;
+    for (const path of hashIncludePaths(dockerfile)) {
+      const content = await getFileContents(opts.repoUrl, path, opts.ref, opts.gitToken).catch(() => "");
+      keyInput += `\n--- ${path} ---\n${content ?? ""}`;
+    }
+    const image = agentImageRef(opts.baseImage, opts.repoUrl, keyInput, opts.target);
     await ensureImage(
       image,
       { context: ".", dockerfile: AGENT_DOCKERFILE, target: opts.target, buildArgs: { DABOSS_BASE: opts.baseImage } },
