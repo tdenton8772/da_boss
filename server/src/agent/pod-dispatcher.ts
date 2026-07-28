@@ -185,6 +185,7 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
       ref: agent.repo_ref || undefined,
       gitToken: secretData.GIT_TOKEN,
       baseImage: WORKER_IMAGE,
+      target: agent.toolchain || undefined,
       onProgress: (msg) => { void queries.insertAgentEvent(agentId, "message", { role: "system", content: `🧱 ${msg}` }).catch(() => {}); },
     });
   }
