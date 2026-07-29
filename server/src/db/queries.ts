@@ -150,6 +150,22 @@ export async function updateAgentState(
 
   params.push(id);
   await getPool().query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $${n}`, params);
+
+  // Terminal/parked states release the agent's leases. A dead pod can't edit,
+  // so holding symbols past this point only manufactures stale-lease advisories
+  // (a completed deploy agent once held 16 immortal leases). A resumed agent
+  // re-acquires at edit time via the sidecar's freeze-set cycle.
+  if (state === "completed" || state === "failed" || state === "paused") {
+    await releaseAgentLeases(id).catch(() => {});
+  }
+}
+
+/** Release every active lease an agent holds (terminal-state cleanup). */
+export async function releaseAgentLeases(agentId: string): Promise<void> {
+  await getPool().query(
+    "UPDATE leases SET state = 'released', released_at = now() WHERE holder_agent_id = $1 AND state = 'active'",
+    [agentId]
+  );
 }
 
 export async function deleteAgent(id: string): Promise<void> {
@@ -614,19 +630,31 @@ export interface LeaseRow {
   holder_agent_id: string;
 }
 
-/** Acquire exclusive leases on symbols not already held-active by this agent. */
+/** Acquire exclusive leases on symbols not already held-active by this agent.
+ *  Every lease gets a hard expiry (default 6h, LEASE_TTL_SECONDS) so an
+ *  abnormally-dead holder can never freeze symbols forever; heartbeatLeases
+ *  extends it while the agent is actually alive. */
 export async function acquireLeases(agentId: string, repoKey: string, symbols: string[]): Promise<void> {
+  const expiresAt = leaseExpiry();
   for (const s of symbols) {
     const ref = `${repoKey}#${s}`;
     await getPool().query(
-      `INSERT INTO leases (id, holder_agent_id, resource_ref, predicate_kind, exclusive, state, heartbeat_at)
-       SELECT $1, $2, $3, 'symbol', true, 'active', now()
+      `INSERT INTO leases (id, holder_agent_id, resource_ref, predicate_kind, exclusive, state, heartbeat_at, expires_at)
+       SELECT $1, $2, $3, 'symbol', true, 'active', now(), $4::timestamptz
        WHERE NOT EXISTS (
          SELECT 1 FROM leases WHERE holder_agent_id = $2 AND resource_ref = $3 AND state = 'active'
        )`,
-      [`lease_${nanoid(12)}`, agentId, ref]
+      [`lease_${nanoid(12)}`, agentId, ref, expiresAt]
     );
   }
+}
+
+/** Lease hard-expiry timestamp: now + LEASE_TTL_SECONDS (default 6h). Computed
+ *  in JS (not SQL interval arithmetic) and passed as a Date so both real
+ *  Postgres and the pg-mem test harness type it as timestamptz. */
+function leaseExpiry(): Date {
+  const ttl = parseInt(process.env.LEASE_TTL_SECONDS || "21600", 10);
+  return new Date(Date.now() + ttl * 1000);
 }
 
 /** Active leases on any of these symbols held by a DIFFERENT agent = conflicts. */
@@ -639,7 +667,8 @@ export async function getLeaseConflicts(
   const refs = symbols.map((s) => `${repoKey}#${s}`);
   const res = await getPool().query<LeaseRow>(
     `SELECT resource_ref, holder_agent_id FROM leases
-     WHERE state = 'active' AND holder_agent_id <> $1 AND resource_ref = ANY($2)`,
+     WHERE state = 'active' AND holder_agent_id <> $1 AND resource_ref = ANY($2)
+       AND (expires_at IS NULL OR expires_at > now())`,
     [excludeAgentId, refs]
   );
   return res.rows;
@@ -647,8 +676,8 @@ export async function getLeaseConflicts(
 
 export async function heartbeatLeases(agentId: string): Promise<void> {
   await getPool().query(
-    "UPDATE leases SET heartbeat_at = now() WHERE holder_agent_id = $1 AND state = 'active'",
-    [agentId]
+    "UPDATE leases SET heartbeat_at = now(), expires_at = $2::timestamptz WHERE holder_agent_id = $1 AND state = 'active'",
+    [agentId, leaseExpiry()]
   );
 }
 
