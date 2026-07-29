@@ -155,10 +155,25 @@ export async function ensureImage(image: string, spec: BuildSpec, opts: BuildOpt
     opts.onProgress?.(`✓ image ${image} already exists — reusing`);
     return;
   }
+  // Single-flight per image: concurrent resolves (two agents spawning in the
+  // same window) share ONE build instead of racing. Without this, the second
+  // caller's create-conflict handling deleted the first caller's healthy
+  // in-flight build pod — busy days turned into builds serially murdering
+  // each other and every agent falling back to the base image.
+  const inflight = inflightBuilds.get(image);
+  if (inflight) {
+    opts.onProgress?.(`⏳ build for ${image} already in flight — waiting on it`);
+    return inflight;
+  }
   opts.onProgress?.(`🔨 building ${image} from ${spec.context} (kaniko)…`);
-  await buildImage(image, spec, opts.repoUrl, opts.ref, opts.gitToken);
+  const p = buildImage(image, spec, opts.repoUrl, opts.ref, opts.gitToken)
+    .finally(() => inflightBuilds.delete(image));
+  inflightBuilds.set(image, p);
+  await p;
   opts.onProgress?.(`✓ built + pushed ${image}`);
 }
+
+const inflightBuilds = new Map<string, Promise<void>>();
 
 async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: string | undefined, gitToken: string): Promise<void> {
   const gitUrl = normalizeGitUrl(repoUrl).replace(/^https:\/\//, "");
@@ -202,7 +217,17 @@ async function buildImage(image: string, spec: BuildSpec, repoUrl: string, ref: 
     },
   };
   await api().createNamespacedPod({ namespace: NAMESPACE, body: pod }).catch(async (e: unknown) => {
-    // Re-run after a stale pod from a previous attempt.
+    // Name conflict: a pod for this exact image already exists. ADOPT it if it's
+    // alive (another process/restart started it — killing a healthy in-flight
+    // build only wastes its progress); replace it only when it's terminal.
+    const existing = (await api().readNamespacedPod({ name, namespace: NAMESPACE }).catch(() => null)) as
+      | { status?: { phase?: string } }
+      | null;
+    const phase = existing?.status?.phase;
+    if (phase === "Running" || phase === "Pending") {
+      logger.info({ pod: name, phase }, "Build pod already in flight — adopting instead of recreating");
+      return;
+    }
     await api().deleteNamespacedPod({ name, namespace: NAMESPACE }).catch(() => {});
     await new Promise((r) => setTimeout(r, 2000));
     await api().createNamespacedPod({ namespace: NAMESPACE, body: pod });
