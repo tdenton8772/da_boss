@@ -837,6 +837,36 @@ async function main(): Promise<void> {
         await queries.insertAgentEvent(AGENT_ID, "error", { error: `PR creation failed: ${detail.slice(0, 400)}` });
       }
     }
+  } else if (agent.repo_url && (isDeployAgent || isReviewAgent)) {
+    // Deploy/review agents are excluded from the normal push-on-complete — but a
+    // dirty tree here means someone edited during the session (a steer, a hot-fix
+    // while testing a deploy). Workspaces are pod-ephemeral emptyDirs: anything
+    // uncommitted dies with the pod (a hand-edit in a deploy pod once had to be
+    // recovered from the node's kubelet volumes). Preserve it on a wip/ branch —
+    // never on the agent's own branch, never opening a PR. Best-effort.
+    try {
+      await writeFile(`${WORK_DIR}/.git/info/exclude`, "\n.daboss/log\n.daboss/exit\n.daboss/artifact\n", { flag: "a" }).catch(() => {});
+      const { stdout: status } = await execFileAsync("git", ["-C", WORK_DIR, "status", "--porcelain"], { timeout: 30_000 });
+      if (status.trim()) {
+        const wipBranch = `wip/${AGENT_ID}`;
+        await execFileAsync("git", ["-C", WORK_DIR, "add", "-A"], { timeout: 60_000 });
+        await execFileAsync(
+          "git",
+          ["-C", WORK_DIR, "-c", "user.email=agent@daboss.local", "-c", "user.name=da_boss agent",
+           "commit", "-m", `wip: uncommitted workspace changes at session end (${AGENT_ID}: ${agent.name})`],
+          { timeout: 60_000 }
+        );
+        await execFileAsync("git", ["-C", WORK_DIR, "push", "origin", `HEAD:${wipBranch}`], { timeout: 180_000 });
+        await queries.insertAgentEvent(AGENT_ID, "message", {
+          role: "system",
+          content: `💾 Workspace had uncommitted changes at session end — preserved on \`${wipBranch}\` (pod workspaces are ephemeral).`,
+        });
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.warn({ agentId: AGENT_ID, error: detail }, "wip-preserve push failed");
+      await queries.insertAgentEvent(AGENT_ID, "error", { error: `wip-preserve push failed: ${detail.slice(0, 400)}` }).catch(() => {});
+    }
   }
 
   if (hadError) {
