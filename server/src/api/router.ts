@@ -471,7 +471,7 @@ export function createRouter(manager: AgentManager): Router {
           return;
         }
       }
-      const validModels = ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"];
+      const validModels = ["claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"];
       if (body.model && !validModels.includes(body.model)) {
         res.status(400).json({ error: `Invalid model. Must be one of: ${validModels.join(", ")}` });
         return;

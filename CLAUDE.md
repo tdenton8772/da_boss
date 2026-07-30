@@ -155,7 +155,7 @@ CLAUDE_PATH=             # path to claude CLI (default: ~/.local/bin/claude)
 ## What's Working
 
 - Create agents via UI with priority, model, budget, turn limits
-- **Agent templates** — 6 built-in templates (Implementer, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer) with pre-filled prompts and settings
+- **Agent templates** — 6 built-in templates (PR Adopter, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer) with pre-filled prompts and settings
 - Real-time message streaming via WebSocket
 - **Enhanced permission system** — auto-approves 15+ safe tools including `AskUserQuestion`, `WebFetch`, `Task`, `Skill`, etc. with **beautiful permission dialog** showing formatted tool input (syntax-highlighted Bash commands, file diffs, etc.)
 - Token budget management with priority-based enforcement
