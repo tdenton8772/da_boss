@@ -12,14 +12,14 @@ export interface AgentTemplate {
 
 export const AGENT_TEMPLATES: AgentTemplate[] = [
   {
-    id: "implementer",
-    name: "Implementer",
-    description: "Builds features from specs or descriptions. Writes code, creates files, runs tests.",
-    prompt: "Implement the following feature. Write clean, well-tested code. Run any existing tests after your changes to make sure nothing is broken.\n\nFeature: ",
+    id: "pr-adopter",
+    name: "PR Adopter",
+    description: "Takes over an existing PR or branch — addresses feedback, finishes the work, gets tests green. Fill in 'Adopt existing PR or branch' below.",
+    prompt: "You are taking over an existing pull request — the branch is already checked out. First run `git log` and `git diff` against the base branch to understand what the original author built and how far they got. Preserve their approach and style unless something is genuinely broken; finish the work, don't rewrite it.\n\nThen: address the feedback below, complete anything half-done, and run the tests until they pass. Commit on this same branch.\n\nFeedback / what still needs doing: ",
     model: "claude-sonnet-5",
     max_turns: null,
     permission_policy: "auto",
-    supervisor_instructions: "If the agent completes, verify tests pass. If tests fail, send it back with the failures. If it's stuck or confused, notify me.",
+    supervisor_instructions: "If the agent completes, verify tests pass and each feedback item was addressed. If tests fail or feedback was skipped, send it back with the specifics. If it wants to rewrite the PR from scratch, notify me first.",
     priority: "medium",
   },
   {

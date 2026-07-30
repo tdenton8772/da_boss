@@ -94,7 +94,7 @@ export class AgentManager {
       priority: req.priority || "medium",
       permission_mode: req.permission_mode || "default",
       sdk_session_id: null,
-      model: req.model || "claude-opus-4-8", // code work defaults to Opus
+      model: req.model || "claude-opus-5", // code work defaults to Opus
       max_turns: req.max_turns || null,
       max_budget_usd: req.max_budget_usd || null,
       error_message: null,
