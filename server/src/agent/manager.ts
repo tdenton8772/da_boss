@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { nanoid } from "nanoid";
+import { DEFAULT_MODEL } from "../models.js";
 import type {
   AgentRecord,
   AgentState,
@@ -94,7 +95,7 @@ export class AgentManager {
       priority: req.priority || "medium",
       permission_mode: req.permission_mode || "default",
       sdk_session_id: null,
-      model: req.model || "claude-opus-5", // code work defaults to Opus
+      model: req.model || DEFAULT_MODEL, // code work defaults to Opus
       max_turns: req.max_turns || null,
       max_budget_usd: req.max_budget_usd || null,
       error_message: null,
