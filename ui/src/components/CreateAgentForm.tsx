@@ -289,11 +289,24 @@ export function CreateAgentForm({
                 }
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm"
               >
-                <option value="claude-opus-5">Opus 5 (default — code work)</option>
-                <option value="claude-opus-4-8">Opus 4.8</option>
-                <option value="claude-fable-5">Fable 5</option>
-                <option value="claude-sonnet-5">Sonnet 5</option>
-                <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                {/* Keep in sync with server/src/models.ts (SUPPORTED_MODELS). */}
+                <optgroup label="Opus">
+                  <option value="claude-opus-5">Opus 5 (default — code work)</option>
+                  <option value="claude-opus-4-8">Opus 4.8</option>
+                  <option value="claude-opus-4-7">Opus 4.7</option>
+                  <option value="claude-opus-4-6">Opus 4.6</option>
+                </optgroup>
+                <optgroup label="Fable">
+                  <option value="claude-fable-5">Fable 5</option>
+                </optgroup>
+                <optgroup label="Sonnet">
+                  <option value="claude-sonnet-5">Sonnet 5</option>
+                  <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                  <option value="claude-sonnet-4-5-20250929">Sonnet 4.5</option>
+                </optgroup>
+                <optgroup label="Haiku">
+                  <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                </optgroup>
               </select>
             </div>
           </div>

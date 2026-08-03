@@ -5,6 +5,7 @@
  * (ReviewDispatcher there) lets tests run the orchestration without a cluster.
  */
 import type { AgentRecord, CreateAgentRequest } from "../types/agent.js";
+import { DEFAULT_MODEL } from "../models.js";
 
 export type Verdict = "merge" | "fix" | "hold";
 
@@ -66,7 +67,7 @@ export function buildReviewConfig(reviewed: AgentRecord, testInfo: string): Crea
     repo_url: reviewed.repo_url ?? undefined,
     repo_ref: repoRef, // the branch / PR-head under review
     branch_type: "chore", // makes no changes → nothing pushed, no PR
-    model: reviewed.model || "claude-opus-5", // review is code work → Opus
+    model: reviewed.model || DEFAULT_MODEL, // review is code work → Opus
     max_budget_usd: 5,
     // Untrusted external code does NOT get bypassPermissions — keep the escalation
     // so an injected push/curl pauses for a human instead of running silently.
