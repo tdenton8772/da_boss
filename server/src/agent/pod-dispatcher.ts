@@ -11,7 +11,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { deleteRemoteBranch, normalizeGitUrl, authedUrl } from "../utils/git.js";
 import type { AgentRecord } from "../types/agent.js";
 import { config } from "../config.js";
-import { resolvePresetConfigured } from "./sizing.js";
+import { resolvePresetConfigured, normalizeSize } from "./sizing.js";
 import { resolveAgentImage } from "./agent-image.js";
 import { logger } from "../utils/logger.js";
 
@@ -647,6 +647,14 @@ export async function reapFinishedAgentPods(): Promise<void> {
         if (app === "daboss-agent" && agentId) await deleteAgentCredSecret(agentId);
         if (app === "daboss-pipeline") await deleteNamespacedSecretSafe(`${name}-cred`);
         logger.info({ pod: name, phase, app }, "Reaped finished pod");
+        // A FAILED agent pod means the worker died before recording a terminal
+        // state — reconcile the agent NOW, with the pod's actual death reason
+        // (OOMKilled etc.), instead of waiting for the heartbeat reaper to write
+        // a generic "no heartbeat" message that loses the cause.
+        if (phase === "Failed" && app === "daboss-agent" && agentId) {
+          await reconcileFailedAgentPod(agentId, podFailureReason(pod)).catch((err) =>
+            logger.warn({ agentId, err: err instanceof Error ? err.message : String(err) }, "Failed-pod reconcile failed"));
+        }
         continue;
       }
       // Self-heal a pod wedged on VOLUME ATTACH: if a per-user workspace disk gets
@@ -676,5 +684,54 @@ export async function reapFinishedAgentPods(): Promise<void> {
     }
   } catch (err: unknown) {
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Pod reap failed");
+  }
+}
+
+/** Why a finished pod died, from its container statuses. Keeps the literal
+ *  "OOMKilled"/"exit code N" tokens the dispatcher's resource-failure regex
+ *  keys on, so a requeue auto-bumps the size. */
+export function podFailureReason(pod: k8s.V1Pod): string {
+  const statuses = [...(pod.status?.containerStatuses ?? []), ...(pod.status?.initContainerStatuses ?? [])];
+  for (const cs of statuses) {
+    const t = cs.state?.terminated ?? cs.lastState?.terminated;
+    if (t && (t.exitCode !== 0 || t.reason === "OOMKilled")) {
+      const reason = t.reason && t.reason !== "Error" ? `${t.reason} ` : "";
+      return `container ${cs.name} ${reason}(exit code ${t.exitCode})`;
+    }
+  }
+  return pod.status?.reason || "unknown failure";
+}
+
+const RESOURCE_DEATH = /OOMKilled|Evicted|out of memory|exit code 137/i;
+
+/** The worker died without recording a terminal state (its pod went Failed).
+ *  Resource deaths below XL self-heal: requeue, and the dispatcher bumps the
+ *  size one up off the reason we record here. Everything else parks as paused
+ *  with the real cause; a dead REVIEWER also closes out its review so the
+ *  reviewed agent can't stick on "In review" forever. */
+async function reconcileFailedAgentPod(agentId: string, reason: string): Promise<void> {
+  const agent = await queries.getAgent(agentId);
+  if (!agent || !["running", "waiting_permission", "waiting_input"].includes(agent.state)) return;
+  const size = normalizeSize(agent.size);
+  if (RESOURCE_DEATH.test(reason) && size && size !== "xl") {
+    await queries.updateAgentState(agentId, "queued", { error_message: `Pod failed: ${reason}` });
+    await queries.insertAgentEvent(agentId, "state_change", { from: agent.state, to: "queued" });
+    await queries.insertAgentEvent(agentId, "message", {
+      role: "system",
+      content: `⚠ Pod died: ${reason}. Re-dispatching automatically at the next size up.`,
+    });
+    await queries.notifyAgentQueued(agentId);
+    logger.warn({ agentId, reason, size }, "Agent pod died on resources — requeued for a size bump");
+  } else {
+    await queries.updateAgentState(agentId, "paused", {
+      error_message: `Pod failed: ${reason}. Reconciled to paused; resume to continue.`,
+    });
+    await queries.insertAgentEvent(agentId, "state_change", { from: agent.state, to: "paused" });
+    await queries.insertAgentEvent(agentId, "message", {
+      role: "system",
+      content: `⚠ Pod failed: ${reason} — reconciled to **paused**. Resume to continue.`,
+    });
+    await queries.interruptReviewForDeadReviewer(agentId, `its pod failed: ${reason}`).catch(() => {});
+    logger.warn({ agentId, reason }, "Agent pod failed — reconciled to paused");
   }
 }

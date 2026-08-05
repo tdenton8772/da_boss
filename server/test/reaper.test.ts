@@ -55,4 +55,20 @@ describe("heartbeat reaper — reconciles dead-pod agents by their sidecar heart
     expect(reaped).not.toContain("ag_done");
     expect((await queries.getAgent("ag_done"))!.state).toBe("completed");
   });
+
+  it("a dead REVIEWER also closes out its review — row errored, reviewed agent holds", async () => {
+    await mkAgent("ag_target", "completed");
+    await mkAgent("ag_reviewer", "running");
+    await queries.setAgentReviewOf("ag_reviewer", "ag_target");
+    await queries.createReview({ reviewed_agent_id: "ag_target", review_agent_id: "ag_reviewer", status: "running" });
+    await setHeartbeat("ag_reviewer", new Date(Date.now() - 10 * 60 * 1000).toISOString());
+
+    await reconcileOrphanedAgents();
+
+    expect((await queries.getAgent("ag_reviewer"))!.state).toBe("paused");
+    const row = await queries.getReviewByReviewAgent("ag_reviewer");
+    expect(row!.status).toBe("error");
+    const target = await queries.getAgent("ag_target");
+    expect(target!.recommendation).toBe("hold"); // not stuck "In review"
+  });
 });
