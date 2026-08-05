@@ -71,6 +71,11 @@ describe("review-logic (pure)", () => {
     expect(cfg.prompt).not.toContain("UNTRUSTED");
   });
 
+  it("review pods are at least M — S (512Mi) OOMs under a repo's in-pod MCP servers", async () => {
+    const cfg = buildReviewConfig(await seedReviewed(), "test passed");
+    expect(cfg.size).toBe("m");
+  });
+
   it("verdict survives a long assessment (no 4000-char clip) and parses at the end", () => {
     const long = "X".repeat(9000) + "\nRECOMMENDATION: hold";
     const a = gatherAssessment([{ type: "message", data: JSON.stringify({ role: "assistant", content: long }) }]);
@@ -172,5 +177,64 @@ describe("reviews entity (first-class record)", () => {
     const row = await queries.getReviewByReviewAgent(revId!);
     expect(row!.status).toBe("error");
     expect(row!.recommendation).toBe("hold");
+  });
+});
+
+describe("interruptReviewForDeadReviewer — a dead reviewer can't wedge 'In review'", () => {
+  it("flips the running review row to error and holds the reviewed agent", async () => {
+    const reviewed = await seedReviewed({ id: "ag_src" });
+    const { dispatcher } = makeFakeDispatcher();
+    const revId = await dispatchReviewAgent(dispatcher, reviewed);
+
+    const out = await queries.interruptReviewForDeadReviewer(revId!, "its pod failed: container agent OOMKilled (exit code 137)");
+    expect(out).toBe("ag_src");
+
+    const row = await queries.getReviewByReviewAgent(revId!);
+    expect(row!.status).toBe("error");
+    expect(row!.rationale).toContain("OOMKilled");
+    const after = await queries.getAgent("ag_src");
+    expect(after!.recommendation).toBe("hold"); // card reads "Review: hold", not a forever-spinning "In review"
+    expect(after!.review).toContain("Review interrupted");
+  });
+
+  it("never clobbers a verdict the review already produced", async () => {
+    const reviewed = await seedReviewed({ id: "ag_src" });
+    const { dispatcher } = makeFakeDispatcher();
+    const revId = await dispatchReviewAgent(dispatcher, reviewed);
+    await queries.setAgentReview("ag_src", "real assessment", "merge");
+    await queries.interruptReviewForDeadReviewer(revId!, "pod gone");
+    const after = await queries.getAgent("ag_src");
+    expect(after!.recommendation).toBe("merge");
+    expect(after!.review).toBe("real assessment");
+  });
+
+  it("no-op for an agent that isn't a reviewer", async () => {
+    const notReviewer = await seedReviewed({ id: "ag_plain" });
+    expect(await queries.interruptReviewForDeadReviewer(notReviewer.id, "pod gone")).toBeNull();
+  });
+
+  it("a resumed reviewer's real verdict overwrites the interrupt hold", async () => {
+    const reviewed = await seedReviewed({ id: "ag_src" });
+    const { dispatcher } = makeFakeDispatcher();
+    const revId = await dispatchReviewAgent(dispatcher, reviewed);
+    await queries.interruptReviewForDeadReviewer(revId!, "pod gone");
+    // reviewer resumes, finishes, and applyReviewResult runs as normal:
+    await queries.insertAgentEvent(revId!, "message", {
+      role: "assistant", content: "finished after resume\nRECOMMENDATION: merge\nASSESSMENT: all good",
+    });
+    await applyReviewResult(revId!);
+    const after = await queries.getAgent("ag_src");
+    expect(after!.recommendation).toBe("merge");
+    const row = await queries.getReviewByReviewAgent(revId!);
+    expect(row!.status).toBe("done");
+  });
+
+  it("a paused reviewer does not block dispatching a fresh review", async () => {
+    const reviewed = await seedReviewed({ id: "ag_src" });
+    const { dispatcher } = makeFakeDispatcher();
+    const revId = await dispatchReviewAgent(dispatcher, reviewed);
+    await queries.updateAgentState(revId!, "paused", { error_message: "pod gone" });
+    expect(await queries.hasActiveReviewAgent("ag_src")).toBe(false);
+    expect(await dispatchReviewAgent(dispatcher, reviewed)).toBeTruthy();
   });
 });

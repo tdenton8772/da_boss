@@ -64,14 +64,27 @@ export async function assessSize(agent: AgentRecord): Promise<TShirtSize> {
 
 async function dispatchQueued(agent: AgentRecord): Promise<void> {
   let size = normalizeSize(agent.size);
-  if (!size) {
-    size = await assessSize(agent);
-    await queries.setAgentSize(agent.id, size);
-    const p = resolvePreset(size);
-    await queries.insertAgentEvent(agent.id, "message", {
-      role: "system",
-      content: `📏 Supervisor sized this **${size.toUpperCase()}** — ${p.limits.memory} mem, ${p.limits["ephemeral-storage"]} disk.`,
-    });
+  // Reassess when unsized OR when the previous pod died on resources — assessSize
+  // bumps one size up on a resource failure even if a size is already set. Without
+  // the second condition an OOM-killed agent redispatches at the exact size that
+  // just killed it.
+  const resourceDeath = size !== null && RESOURCE_FAILURE.test(agent.error_message || "");
+  if (!size || resourceDeath) {
+    const assessed = await assessSize(agent);
+    if (assessed !== size) {
+      size = assessed;
+      await queries.setAgentSize(agent.id, size);
+      const p = resolvePreset(size);
+      await queries.insertAgentEvent(agent.id, "message", {
+        role: "system",
+        content: resourceDeath
+          ? `📏 Previous pod died on resources — bumped to **${size.toUpperCase()}** (${p.limits.memory} mem).`
+          : `📏 Supervisor sized this **${size.toUpperCase()}** — ${p.limits.memory} mem, ${p.limits["ephemeral-storage"]} disk.`,
+      });
+    }
+    // Consume the failure marker so the next requeue doesn't bump again off a
+    // stale message (each bump must be earned by a fresh resource death).
+    if (resourceDeath) await queries.updateAgentState(agent.id, "queued", { error_message: null });
   }
   await createAgentPod(agent.id); // the pod build — owned by the supervisor
 }

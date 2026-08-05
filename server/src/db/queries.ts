@@ -1273,12 +1273,40 @@ export async function hasActiveReviewAgent(reviewedAgentId: string): Promise<boo
   // Only a review that's still in flight blocks dispatching another. A COMPLETED (or
   // verified) review must NOT block a fresh one — otherwise, after the change is
   // re-worked and re-tested, no new review ever runs and the change is stuck with a
-  // stale/empty verdict (it never re-enters the Reviews queue).
+  // stale/empty verdict (it never re-enters the Reviews queue). A PAUSED reviewer
+  // (pod died mid-review) isn't reviewing either — blocking on it would wedge
+  // re-review behind a corpse.
   const res = await getPool().query(
-    "SELECT 1 FROM agents WHERE review_of_agent_id = $1 AND state NOT IN ('failed','aborted','completed','verified') LIMIT 1",
+    "SELECT 1 FROM agents WHERE review_of_agent_id = $1 AND state NOT IN ('failed','aborted','completed','verified','paused') LIMIT 1",
     [reviewedAgentId]
   );
   return res.rows.length > 0;
+}
+
+/** A reviewer died mid-review (pod gone). Close out everything that would
+ *  otherwise stick forever: flip its running review row to 'error', and give the
+ *  reviewed agent a HOLD verdict (mirroring applyReviewResult's crash path) so
+ *  its card stops spinning "In review". If the reviewer is later resumed and
+ *  completes, applyReviewResult overwrites all of this with the real verdict.
+ *  Returns the reviewed agent id, or null if this agent isn't a reviewer. */
+export async function interruptReviewForDeadReviewer(reviewAgentId: string, reason: string): Promise<string | null> {
+  const reviewer = await getAgent(reviewAgentId);
+  const reviewedId = reviewer?.review_of_agent_id ?? null;
+  if (!reviewedId) return null;
+  await getPool().query(
+    `UPDATE reviews SET status = 'error', rationale = $2, completed_at = now()
+      WHERE review_agent_id = $1 AND status = 'running'`,
+    [reviewAgentId, `Review interrupted — ${reason}`]
+  );
+  const reviewed = await getAgent(reviewedId);
+  if (reviewed && !reviewed.recommendation) {
+    await setAgentReview(reviewedId, `⚠️ Review interrupted — ${reason}. Resume the reviewer to finish it, or request a new review.`, "hold");
+    await insertAgentEvent(reviewedId, "message", {
+      role: "system",
+      content: `⚠ The review agent died mid-review (${reason}). Resume it to finish the review, or request a new one.`,
+    });
+  }
+  return reviewedId;
 }
 
 /** Claim the merged changes currently on the repo's main into a deploy's manifest:

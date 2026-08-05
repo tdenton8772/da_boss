@@ -29,6 +29,9 @@ export async function reconcileOrphanedAgents(): Promise<string[]> {
       role: "system",
       content: `⚠ Heartbeat monitor: no pod heartbeat for ${ageSec}s — the pod is gone, so this agent was stuck showing "${a.state}". Reconciled to **paused**. Resume to continue.`,
     }).catch(() => {});
+    // A dead REVIEWER would otherwise leave its review 'running' and the reviewed
+    // agent spinning "In review" forever — close both out (no-op for non-reviewers).
+    await queries.interruptReviewForDeadReviewer(a.id, `its pod stopped heartbeating (${ageSec}s)`).catch(() => {});
   }
   return stale.map((a) => a.id);
 }
