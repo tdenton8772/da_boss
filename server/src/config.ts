@@ -34,6 +34,9 @@ export const config = {
   // so orphans clear in ~a minute). Default stale = 6 missed 15s beats.
   reaperStaleSeconds: parseInt(process.env.DABOSS_REAPER_STALE_SECONDS || "90", 10),
   reaperIntervalSeconds: parseInt(process.env.DABOSS_REAPER_INTERVAL_SECONDS || "45", 10),
+  // Main watcher: how often to check each active repo's main HEAD for un-tested
+  // merges (manual GitHub merges bypass da_boss entirely).
+  mainWatchIntervalSeconds: parseInt(process.env.DABOSS_MAIN_WATCH_INTERVAL_SECONDS || "600", 10),
   sidecarTelemetrySeconds: parseInt(process.env.SIDECAR_TELEMETRY_SECONDS || "30", 10),
   // Semantic freeze-lease cycle: recompute the blast radius of the agent's edits
   // and refresh its leases. Heavier (ctags+grep), so runs less often than heartbeat.

@@ -779,6 +779,22 @@ export async function completeCommand(id: number, status: "done" | "failed"): Pr
 
 // ── App settings (generic singleton key/value) ─────────────
 
+/** Repos the main-watcher should poll: every repo an agent has worked in, each
+ *  attributed to its most recent owner that still has a git credential. Ordered
+ *  scan + JS dedupe (DISTINCT ON is not pg-mem-safe). */
+export async function getWatchedRepos(): Promise<Array<{ repo_url: string; user_id: string }>> {
+  const res = await getPool().query<{ repo_url: string; user_id: string }>(
+    `SELECT a.repo_url, a.created_by_user_id AS user_id
+       FROM agents a
+       JOIN user_git_credentials g ON g.user_id = a.created_by_user_id
+      WHERE a.repo_url IS NOT NULL AND a.created_by_user_id IS NOT NULL
+      ORDER BY a.created_at DESC`
+  );
+  const seen = new Map<string, { repo_url: string; user_id: string }>();
+  for (const row of res.rows) if (!seen.has(row.repo_url)) seen.set(row.repo_url, row);
+  return [...seen.values()];
+}
+
 export async function getAppSetting(key: string): Promise<string | null> {
   const res = await getPool().query<{ value: string | null }>(
     "SELECT value FROM app_settings WHERE key = $1",

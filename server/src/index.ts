@@ -19,6 +19,7 @@ import { startLiveRelay } from "./api/live-relay.js";
 import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
 import { startAgentReaper } from "./supervisor/reaper.js";
+import { startMainWatch } from "./pipeline/main-watch.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
@@ -128,6 +129,10 @@ async function main() {
   // paused, so DB state never lies about what's actually running. Idempotent + guarded
   // to pod mode. Runs everywhere the control plane runs; a stray double-run is a no-op.
   startAgentReaper();
+
+  // Main watcher: re-test each active repo's main when its HEAD moves (manual
+  // GitHub merges bypass da_boss) and notify loudly when main goes red.
+  startMainWatch();
 
   // Start server
   server.listen(config.port, () => {
