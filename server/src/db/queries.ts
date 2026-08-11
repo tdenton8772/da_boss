@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { getPool, withTx } from "./index.js";
+import { normalizeGitUrl } from "../utils/git.js";
 import type {
   AgentRecord,
   AgentState,
@@ -781,7 +782,9 @@ export async function completeCommand(id: number, status: "done" | "failed"): Pr
 
 /** Repos the main-watcher should poll: every repo an agent has worked in, each
  *  attributed to its most recent owner that still has a git credential. Ordered
- *  scan + JS dedupe (DISTINCT ON is not pg-mem-safe). */
+ *  scan + JS dedupe (DISTINCT ON is not pg-mem-safe). Dedupe key is the
+ *  normalized URL sans `.git` — agents rows carry both forms of the same repo,
+ *  which double-launched the watcher's main tests until deduped here. */
 export async function getWatchedRepos(): Promise<Array<{ repo_url: string; user_id: string }>> {
   const res = await getPool().query<{ repo_url: string; user_id: string }>(
     `SELECT a.repo_url, a.created_by_user_id AS user_id
@@ -791,7 +794,10 @@ export async function getWatchedRepos(): Promise<Array<{ repo_url: string; user_
       ORDER BY a.created_at DESC`
   );
   const seen = new Map<string, { repo_url: string; user_id: string }>();
-  for (const row of res.rows) if (!seen.has(row.repo_url)) seen.set(row.repo_url, row);
+  for (const row of res.rows) {
+    const key = normalizeGitUrl(row.repo_url).replace(/\.git$/, "");
+    if (!seen.has(key)) seen.set(key, { repo_url: key, user_id: row.user_id });
+  }
   return [...seen.values()];
 }
 

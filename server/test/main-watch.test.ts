@@ -84,7 +84,18 @@ describe("getWatchedRepos — active repos with a credentialed owner", () => {
 
     const repos = await queries.getWatchedRepos();
     expect(repos).toHaveLength(1);
-    expect(repos[0].repo_url).toBe("https://github.com/o/r1.git");
+    expect(repos[0].repo_url).toBe("https://github.com/o/r1");
     expect(repos[0].user_id).toBe("usr_b");
+  });
+
+  it("collapses URL variants of the same repo — .git and bare forms double-launched the watcher", async () => {
+    await mkUser("usr_a", true);
+    await mkAgent("ag_g1", "https://github.com/o/same.git", "usr_a");
+    await mkAgent("ag_g2", "https://github.com/o/same", "usr_a");
+    await mkAgent("ag_g3", "git@github.com:o/same.git", "usr_a");
+
+    const repos = await queries.getWatchedRepos();
+    expect(repos).toHaveLength(1);
+    expect(repos[0].repo_url).toBe("https://github.com/o/same");
   });
 });
