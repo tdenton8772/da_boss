@@ -40,6 +40,19 @@ phases:
     expect(p.phases["test-elixir"].artifact_from).toBe("snapshot");
   });
 
+  it("parses expose_to_agents (default false)", () => {
+    const p = parsePipeline(`
+phases:
+  snapshot:
+    command: ./scripts/make-snapshot.sh
+    expose_to_agents: true
+  test:
+    command: mix test
+`);
+    expect(p.phases.snapshot.expose_to_agents).toBe(true);
+    expect(p.phases.test.expose_to_agents).toBe(false);
+  });
+
   it("rejects unknown schedule values", () => {
     expect(() => parsePipeline(`phases:\n  s:\n    command: x\n    schedule: hourly\n`))
       .toThrow(/schedule must be "nightly"/);

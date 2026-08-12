@@ -58,6 +58,11 @@ export interface PipelinePhase {
   // command's business — da_boss just delivers bytes. E.g. a test phase declares
   // artifact_from: snapshot to seed its service DB with last night's sample.
   artifact_from?: string;
+  // Deliver this phase's latest PASSED artifact into every AGENT pod for the
+  // repo as the $DABOSS_SEED file — so agents work against real data (e.g. a
+  // nightly DB snapshot) instead of improvising blank databases. At most one
+  // phase per pipeline should set this; the first declaring phase wins.
+  expose_to_agents?: boolean;
 }
 
 export interface Pipeline {
@@ -171,6 +176,7 @@ export function parsePipeline(yamlText: string): Pipeline {
         }
         return p.artifact_from;
       })(),
+      expose_to_agents: p.expose_to_agents === true,
     };
   }
   for (const [name, ph] of Object.entries(phases)) {
