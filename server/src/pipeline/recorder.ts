@@ -21,6 +21,9 @@ const RUN_ID = process.env.RUN_ID;
 const WORK_DIR = process.env.WORK_DIR || "/work";
 const DIR = `${WORK_DIR}/.daboss`;
 const MAX = 200_000;
+// Artifacts cap higher than logs: an artifact may seed a downstream phase
+// (artifact_from) — truncation would corrupt it. Matches MAX_SEED_BYTES.
+const MAX_ARTIFACT = 900_000;
 const TIMEOUT_MS = (Number(process.env.PIPELINE_TIMEOUT_MINUTES) || 60) * 60_000;
 
 async function main(): Promise<void> {
@@ -41,7 +44,7 @@ async function main(): Promise<void> {
 
   const exitCode = Number((await readFile(`${DIR}/exit`, "utf8").catch(() => "1")).trim()) || 0;
   const log = existsSync(`${DIR}/log`) ? (await readFile(`${DIR}/log`, "utf8").catch(() => "")).slice(-MAX) : "";
-  let artifact = existsSync(`${DIR}/artifact`) ? (await readFile(`${DIR}/artifact`, "utf8").catch(() => "")).slice(0, MAX) : "";
+  let artifact = existsSync(`${DIR}/artifact`) ? (await readFile(`${DIR}/artifact`, "utf8").catch(() => "")).slice(0, MAX_ARTIFACT) : "";
   if (!artifact) artifact = log.slice(-8000);
 
   await queries.updatePipelineRun(RUN_ID, {

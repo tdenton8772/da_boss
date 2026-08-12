@@ -49,6 +49,15 @@ export interface PipelinePhase {
   // interpret results + roll back on failure. da_boss supplies its own agent-capable
   // image (config: deployAgentImage); the phase keeps supplying command + identity.
   agent?: boolean;
+  // Boss-triggered recurrence: "nightly" runs the phase on main roughly once every
+  // 24h with no human trigger (e.g. a data-snapshot or drift-check phase). The
+  // phase failing IS the alert — no extra config.
+  schedule?: "nightly";
+  // Inject the named phase's LATEST PASSED artifact as a file; the command reads
+  // it at $DABOSS_SEED. How to consume it (psql restore, diff input, …) is the
+  // command's business — da_boss just delivers bytes. E.g. a test phase declares
+  // artifact_from: snapshot to seed its service DB with last night's sample.
+  artifact_from?: string;
 }
 
 export interface Pipeline {
@@ -152,7 +161,22 @@ export function parsePipeline(yamlText: string): Pipeline {
       services,
       service_account: typeof p.service_account === "string" ? p.service_account : undefined,
       agent: p.agent === true,
+      schedule: p.schedule === undefined ? undefined : (() => {
+        if (p.schedule !== "nightly") throw new Error(`phase '${name}'.schedule must be "nightly"`);
+        return "nightly" as const;
+      })(),
+      artifact_from: p.artifact_from === undefined ? undefined : (() => {
+        if (typeof p.artifact_from !== "string" || !p.artifact_from.trim()) {
+          throw new Error(`phase '${name}'.artifact_from must be a phase name`);
+        }
+        return p.artifact_from;
+      })(),
     };
+  }
+  for (const [name, ph] of Object.entries(phases)) {
+    if (ph.artifact_from && !phases[ph.artifact_from]) {
+      throw new Error(`phase '${name}'.artifact_from names unknown phase '${ph.artifact_from}'`);
+    }
   }
   if (!Object.keys(phases).length) throw new Error("pipeline has no phases");
   return { version: typeof d.version === "number" ? d.version : undefined, phases };

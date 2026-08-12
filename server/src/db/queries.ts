@@ -1129,6 +1129,23 @@ export async function updatePipelineRun(
   }
 }
 
+/** The newest PASSED run's artifact for a repo phase — the seed a phase with
+ *  `artifact_from` consumes. Matches both URL forms of the repo (.git / bare). */
+export async function getLatestPassedArtifact(
+  repoUrl: string,
+  phase: string
+): Promise<{ artifact: string; created_at: string } | undefined> {
+  const bare = repoUrl.replace(/\.git$/, "");
+  const res = await getPool().query<{ artifact: string | null; created_at: string }>(
+    `SELECT artifact, created_at FROM pipeline_runs
+      WHERE (repo_url = $1 OR repo_url = $2) AND phase = $3 AND status = 'passed'
+      ORDER BY created_at DESC LIMIT 1`,
+    [bare, `${bare}.git`, phase]
+  );
+  const row = res.rows[0];
+  return row?.artifact ? { artifact: row.artifact, created_at: row.created_at } : undefined;
+}
+
 export async function getPipelineRun(id: string): Promise<PipelineRun | undefined> {
   const res = await getPool().query<PipelineRun>("SELECT * FROM pipeline_runs WHERE id = $1", [id]);
   return res.rows[0];

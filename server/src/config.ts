@@ -37,6 +37,8 @@ export const config = {
   // Main watcher: how often to check each active repo's main HEAD for un-tested
   // merges (manual GitHub merges bypass da_boss entirely).
   mainWatchIntervalSeconds: parseInt(process.env.DABOSS_MAIN_WATCH_INTERVAL_SECONDS || "600", 10),
+  // Phase scheduler: how often to sweep repos for due `schedule:` phases.
+  scheduleSweepIntervalSeconds: parseInt(process.env.DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS || "300", 10),
   sidecarTelemetrySeconds: parseInt(process.env.SIDECAR_TELEMETRY_SECONDS || "30", 10),
   // Semantic freeze-lease cycle: recompute the blast radius of the agent's edits
   // and refresh its leases. Heavier (ctags+grep), so runs less often than heartbeat.

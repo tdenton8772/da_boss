@@ -20,6 +20,7 @@ import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
 import { startAgentReaper } from "./supervisor/reaper.js";
 import { startMainWatch } from "./pipeline/main-watch.js";
+import { startScheduler } from "./pipeline/scheduler.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
@@ -133,6 +134,10 @@ async function main() {
   // Main watcher: re-test each active repo's main when its HEAD moves (manual
   // GitHub merges bypass da_boss) and notify loudly when main goes red.
   startMainWatch();
+
+  // Phase scheduler: run repo phases declaring `schedule:` (e.g. a nightly data
+  // snapshot whose artifact seeds test phases via `artifact_from`).
+  startScheduler();
 
   // Start server
   server.listen(config.port, () => {
