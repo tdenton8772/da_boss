@@ -33,6 +33,9 @@ const GIT_TOKEN = process.env.GIT_TOKEN || "";
 const WORK_DIR = process.env.WORK_DIR || "/work";
 const ARTIFACT_PATH = `${WORK_DIR}/.daboss-artifact`;
 const MAX_LOG = 200_000; // cap what we persist
+// Artifacts cap higher than logs: an artifact may be a downstream phase's seed
+// (artifact_from), and truncation would corrupt it. Matches MAX_SEED_BYTES.
+const MAX_ARTIFACT = 900_000;
 
 async function main(): Promise<void> {
   if (!RUN_ID) throw new Error("RUN_ID is required");
@@ -77,7 +80,7 @@ async function main(): Promise<void> {
   // Artifact: the file the script wrote, else the captured output.
   let artifact = "";
   if (existsSync(ARTIFACT_PATH)) {
-    artifact = (await readFile(ARTIFACT_PATH, "utf8").catch(() => "")).slice(0, MAX_LOG);
+    artifact = (await readFile(ARTIFACT_PATH, "utf8").catch(() => "")).slice(0, MAX_ARTIFACT);
   }
   if (!artifact) artifact = log.slice(-8000);
 

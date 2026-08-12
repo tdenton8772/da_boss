@@ -20,7 +20,14 @@ export interface ResolvedPhase {
   ph: PipelinePhase;
   secrets: Record<string, string>;
   gitToken: string;
+  /** Latest passed artifact of the phase named by `artifact_from`, if declared —
+   *  delivered to the command as the $DABOSS_SEED file. */
+  seedArtifact?: string;
 }
+
+// The seed rides in the pod's ephemeral k8s Secret (etcd caps secrets at ~1MiB
+// total) — a snapshot phase must keep its artifact under this.
+export const MAX_SEED_BYTES = 900_000;
 
 export async function resolvePhase(
   userId: string,
@@ -57,7 +64,18 @@ export async function resolvePhase(
     if (!s) throw { status: 400, message: `Missing required secret '${nm}' — add it in Settings.` };
     secrets[secretEnvName(nm)] = await getCipher().decrypt({ ciphertext: s.ciphertext, nonce: s.nonce, keyRef: s.key_ref });
   }
-  return { ph, secrets, gitToken };
+  let seedArtifact: string | undefined;
+  if (ph.artifact_from) {
+    const latest = await queries.getLatestPassedArtifact(repoUrl, ph.artifact_from);
+    if (!latest) {
+      throw { status: 400, message: `Phase '${phaseName}' needs an artifact from '${ph.artifact_from}', but that phase has no passed run yet — run it once first.` };
+    }
+    if (Buffer.byteLength(latest.artifact, "utf8") > MAX_SEED_BYTES) {
+      throw { status: 400, message: `'${ph.artifact_from}' artifact exceeds ${MAX_SEED_BYTES} bytes — too large to inject as a seed. Shrink the snapshot.` };
+    }
+    seedArtifact = latest.artifact;
+  }
+  return { ph, secrets, gitToken, seedArtifact };
 }
 
 export async function launchResolved(runId: string, repoUrl: string, ref: string | undefined, r: ResolvedPhase): Promise<void> {
@@ -73,6 +91,7 @@ export async function launchResolved(runId: string, repoUrl: string, ref: string
     runId, repoUrl, ref, command: r.ph.command, image: r.ph.image ?? null,
     params: r.ph.params || {}, secrets: r.secrets, gitToken: r.gitToken,
     services: r.ph.services, serviceAccount: r.ph.service_account,
+    seedArtifact: r.seedArtifact,
   });
 }
 

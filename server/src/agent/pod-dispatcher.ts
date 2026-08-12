@@ -469,6 +469,9 @@ export async function launchPipelineRunner(opts: {
   gitToken?: string;
   services?: Array<{ image: string; name?: string; port?: number; env?: Record<string, string> }>;
   serviceAccount?: string; // KSA the pod runs as (Workload Identity for deploy phases)
+  // Bytes for the $DABOSS_SEED file (an upstream phase's artifact — e.g. a data
+  // snapshot). Rides in the pod Secret, surfaced as a mounted file, never env.
+  seedArtifact?: string;
 }): Promise<void> {
   const name = `daboss-pl-${rfc1123(opts.runId)}`;
   const secretName = `${name}-cred`;
@@ -476,8 +479,17 @@ export async function launchPipelineRunner(opts: {
   if (opts.gitToken) secretData.GIT_TOKEN = opts.gitToken;
   // authed clone URL is a secret (carries the token) — used by the split init container
   if (opts.image && opts.repoUrl) secretData.CLONE_URL = authedUrl(normalizeGitUrl(opts.repoUrl), opts.gitToken || "");
+  if (opts.seedArtifact) secretData.DABOSS_SEED = opts.seedArtifact;
   const hasSecret = Object.keys(secretData).length > 0;
   if (hasSecret) await upsertAgentCredSecret(secretName, secretData);
+
+  // Seed file mount: the secret key surfaces at /daboss-seed/seed; the command
+  // reads it via $DABOSS_SEED. (A file, not env — seeds can approach 1MiB.)
+  const seedVolume = opts.seedArtifact
+    ? [{ name: "seed", secret: { secretName, items: [{ key: "DABOSS_SEED", path: "seed" }] } }]
+    : [];
+  const seedMount = opts.seedArtifact ? [{ name: "seed", mountPath: "/daboss-seed", readOnly: true }] : [];
+  const seedEnv = opts.seedArtifact ? [{ name: "DABOSS_SEED", value: "/daboss-seed/seed" }] : [];
 
   const dbEnv = { name: "DATABASE_URL", valueFrom: { secretKeyRef: { name: APP_SECRET, key: "DATABASE_URL" } } };
   const paramEnv = Object.entries(opts.params).map(([k, v]) => ({ name: k, value: v }));
@@ -545,10 +557,11 @@ export async function launchPipelineRunner(opts: {
             command: ["sh", "-c", wrapped],
             env: [
               { name: "DABOSS_ARTIFACT", value: "/work/.daboss/artifact" },
+              ...seedEnv,
               ...paramEnv,
               ...secretEnv,
             ],
-            volumeMounts: [{ name: "work", mountPath: "/work" }],
+            volumeMounts: [{ name: "work", mountPath: "/work" }, ...seedMount],
             resources: { requests: { cpu: "250m", memory: "512Mi" }, limits: { memory: "2Gi" } },
           },
           {
@@ -561,7 +574,7 @@ export async function launchPipelineRunner(opts: {
             resources: { requests: { cpu: "50m", memory: "128Mi" }, limits: { memory: "256Mi" } },
           },
         ],
-        volumes: [{ name: "work", emptyDir: {} }],
+        volumes: [{ name: "work", emptyDir: {} }, ...seedVolume],
       },
     };
   } else {
@@ -584,15 +597,16 @@ export async function launchPipelineRunner(opts: {
               ...(opts.repoUrl ? [{ name: "PIPELINE_REPO_URL", value: opts.repoUrl }] : []),
               ...(opts.ref ? [{ name: "PIPELINE_REF", value: opts.ref }] : []),
               dbEnv,
+              ...seedEnv,
               ...paramEnv,
               ...secretEnv,
               ...(opts.gitToken ? [{ name: "GIT_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "GIT_TOKEN" } } }] : []),
             ],
-            volumeMounts: [{ name: "work", mountPath: "/work" }],
+            volumeMounts: [{ name: "work", mountPath: "/work" }, ...seedMount],
             resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "1Gi" } },
           },
         ],
-        volumes: [{ name: "work", emptyDir: {} }],
+        volumes: [{ name: "work", emptyDir: {} }, ...seedVolume],
       },
     };
   }
