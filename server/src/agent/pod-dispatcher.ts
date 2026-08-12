@@ -13,6 +13,8 @@ import type { AgentRecord } from "../types/agent.js";
 import { config } from "../config.js";
 import { resolvePresetConfigured, normalizeSize } from "./sizing.js";
 import { resolveAgentImage } from "./agent-image.js";
+import { getFileContents } from "../forge/github.js";
+import { parsePipeline, PIPELINE_PATH } from "../pipeline/config.js";
 import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
@@ -175,6 +177,31 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     hasGit = true;
   }
 
+  // Repo-declared data seed for agents: a phase marked `expose_to_agents: true`
+  // has its latest PASSED artifact delivered into the pod as the $DABOSS_SEED
+  // file (e.g. last night's DB snapshot), so agents work against real data
+  // instead of improvising blank databases. Best-effort: no pipeline config, no
+  // marked phase, or no artifact yet → no seed, never a dispatch failure.
+  let hasSeed = false;
+  if (agent.repo_url && hasGit) {
+    try {
+      const yamlText = await getFileContents(agent.repo_url, PIPELINE_PATH, "main", secretData.GIT_TOKEN);
+      const phaseName = yamlText
+        ? Object.entries(parsePipeline(yamlText).phases).find(([, ph]) => ph.expose_to_agents)?.[0]
+        : undefined;
+      if (phaseName) {
+        const latest = await queries.getLatestPassedArtifact(agent.repo_url, phaseName);
+        // Rides in the pod Secret (etcd ~1MiB cap) — same bound as phase seeds.
+        if (latest && Buffer.byteLength(latest.artifact, "utf8") <= 900_000) {
+          secretData.DABOSS_SEED = latest.artifact;
+          hasSeed = true;
+        }
+      }
+    } catch (err) {
+      logger.warn({ agentId, err: err instanceof Error ? err.message : String(err) }, "agent seed resolution failed — dispatching without");
+    }
+  }
+
   // Self-provisioning agent image: if the repo declares `.daboss/agent.Dockerfile`,
   // build it once (kaniko, keyed by base+Dockerfile) and run the agent in it; else the
   // generic base. A deploy/custom agent (worker_image already set) keeps its image.
@@ -282,10 +309,12 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
             ...(hasGit
               ? [{ name: "GIT_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "GIT_TOKEN" } } }]
               : []),
+            ...(hasSeed ? [{ name: "DABOSS_SEED", value: "/daboss-seed/seed" }] : []),
           ],
           volumeMounts: [
             { name: "work", mountPath: "/work" },
             { name: "workspace", mountPath: "/ws" },
+            ...(hasSeed ? [{ name: "seed", mountPath: "/daboss-seed", readOnly: true }] : []),
           ],
           resources: { requests: agentPreset.requests, limits: agentPreset.limits },
         },
@@ -314,13 +343,14 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
       volumes: [
         { name: "work", emptyDir: {} },
         { name: "workspace", persistentVolumeClaim: { claimName: wsPvc } },
+        ...(hasSeed ? [{ name: "seed", secret: { secretName, items: [{ key: "DABOSS_SEED", path: "seed" }] } }] : []),
       ],
     },
   };
 
   try {
     await api().createNamespacedPod({ namespace: NAMESPACE, body: pod });
-    logger.info({ agentId, pod: name, credKind: cred.kind }, "Created agent pod with dispatcher's credential");
+    logger.info({ agentId, pod: name, credKind: cred.kind, hasSeed }, "Created agent pod with dispatcher's credential");
   } catch (err: unknown) {
     const e = err as { code?: number; statusCode?: number };
     if (e.code === 409 || e.statusCode === 409) {
