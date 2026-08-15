@@ -1,357 +1,190 @@
 # da_boss
 
-A web-based manager for spawning, monitoring, and controlling multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agent instances. Built on the `@anthropic-ai/claude-agent-sdk`.
+An open-source control plane for fleets of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents. Built on the `@anthropic-ai/claude-agent-sdk`.
+
+da_boss runs each agent in its own Kubernetes pod on the dispatching user's own Claude credentials, then shepherds the agent's work through a full change lifecycle: branch → draft PR → tests → agent-driven code review → gated merge → gated deploy. A supervisor watches everything, unsticks stuck agents, sizes pods, heals dead ones, and re-tests `main` when it moves.
+
+It is domain-neutral: da_boss knows nothing about your application. Target repos declare their own toolchain and pipeline in a `.daboss/` directory, and deploy identity is injected via service accounts — never baked in.
+
+## How it works
+
+```
+Browser (React)  ──REST + WebSocket──▶  Boss (Express :3847)  ──▶  Kubernetes API
+MCP clients      ──POST /mcp────────▶       │                        ├─ agent pods (1 per agent, per-user creds + workspace PVC)
+                                            │                        ├─ pipeline pods (tests, deploys)
+                                        Postgres  ◀──LISTEN/NOTIFY── ├─ kaniko pods (image builds)
+                                            │                        └─ optional native sidecar (heartbeat, git telemetry, leases)
+                                       Supervisor (cron + dispatch queue)
+```
+
+- **One pod per agent.** The worker (`server/src/worker/`) clones the target repo into a per-user workspace volume, runs the SDK loop, and on each turn end auto-commits, pushes, and opens/updates a draft PR. Permissions, steering commands, and live events flow between pod and boss exclusively through Postgres LISTEN/NOTIFY — no shared memory.
+- **Per-user everything.** Each user stores their own Claude credential (API key or OAuth token) and git token, encrypted at rest (AES-256-GCM). Agents run and bill on the credentials of whoever dispatched them.
+- **The pipeline is the repo's contract.** A repo declares phases in `.daboss/pipeline.yaml` (exit code = verdict, stdout streamed, artifact file for human review). da_boss just runs them.
 
 ## Features
 
-- **Spawn agents** with a prompt, working directory, model, priority, and budget
-- **6 built-in agent templates** — Implementer, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer
-- **Real-time message streaming** via WebSocket
-- **Interactive tool permissions** — auto-approves safe tools, escalates risky ones to UI with syntax-highlighted diffs and formatted bash commands
-- **AskUserQuestion support** — agents can ask you multiple-choice or free-text questions through the UI
-- **Plan mode** — agents propose plans, you review and approve/reject with feedback before they code
-- **Task tracking** — agent todos render as checklists, not raw JSON
-- **Token budget management** — daily/monthly limits with priority-based enforcement
-- **Subagent tracking** — see spawned subagents, their types, and process trees
-- **Process management** — PID tracking, SIGKILL entire process trees, Kill All button
-- **Input queue** — messages queue when agent is busy, combine into single message on delivery
-- **Supervisor** — cron every 5 minutes, auto-resolves stale questions/plans using Claude
-- **Session discovery** — find and import existing Claude Code sessions from any repo
-- **Push notifications** via [ntfy.sh](https://ntfy.sh) — get notified on your phone when agents need attention
-- **Runs as a macOS service** — survives terminal closes, starts on login
-- **Dashboard search/filter/sort** — by name, prompt, status, date, cost
+**Agents**
+- Create agents with a prompt, repo/ref, model, priority, budget, turn limit, and pod size — or adopt an existing PR/branch
+- Built-in templates: PR Adopter, Code Reviewer, Test Writer, Bug Fixer, Refactorer, Doc Writer
+- Real-time message streaming, tool-permission dialogs, plan-mode review (approve/reject with feedback), file upload into the pod, activity traces linking every related run and child agent
+- T-shirt pod sizes (s/m/l/xl) with supervisor auto-sizing and automatic size bump-up after OOM kills
+- Input queue: messages sent while an agent is busy combine and deliver on the next turn
 
-## Quick Start
+**Change lifecycle**
+- Auto-commit + draft PR per agent branch; PR-gating test phases run on demand or on completion (opt-in)
+- On-demand review agents that read the diff and return a verdict: `merge`, `fix`, or `hold` — with a merge-anyway override guard in the UI
+- Land gate: merge rebases the branch on `main`, re-runs tests, and merges only on green (409 on conflict — the agent resolves it)
+- Branch deploys to staging that bypass the main-only gate, run by a conversable deploy agent whose outcome feeds back to the originating change
+- Main watcher: re-runs test phases when `main` moves outside da_boss (manual merges included)
+- Scheduled (`nightly`) phases with artifact seeding — e.g. a nightly DB snapshot whose artifact seeds test phases and agent pods
 
-Requires Node.js 22+ and the Claude CLI.
+**Governance & safety**
+- Tool policy shared by boss and pod worker: auto-approves safe tools, escalates risky ones to the UI (`auto`/`ask`/`strict` per agent)
+- Advisory semantic freeze-leases: a native sidecar computes the symbol-level blast radius of each agent's edits (git diff + universal-ctags + git grep) and flags agents that trample each other's functions
+- Token budgets (daily/monthly) with priority-tier enforcement; per-agent USD budgets and turn limits
+- Audit log of all agent actions with user and IP
 
-```bash
-nvm use 22
-git clone <repo-url> da_boss
-cd da_boss
-npm run install-service
-```
+**Multi-user**
+- Local auth (scrypt, first registered user becomes admin) or provider-neutral OIDC (JWKS or static key, configurable claims, role/access gates, pending-approval holding pen)
+- Encrypted per-user credential vaults plus named secrets that pipeline phases request by name
+- One-click offboarding: kills agents, deletes remote branches and the workspace volume, wipes credentials, tombstones the identity
 
-The installer builds the project, generates `.env` with a random password, and installs a launchd service.
+**Operations**
+- Supervisor cron: stuck detection, stale permission resolution, Claude-powered evaluation of idle/completed agents, steer/block of off-track agents
+- Self-healing: heartbeat reaper for dead pods, OOM reason capture, lost-volume recovery with graceful fresh-resume
+- MCP server (20 tools) so other agents can drive da_boss; scoped API tokens for headless access
+- Push notifications via [ntfy.sh](https://ntfy.sh); Claude account usage widget (5h/7d windows)
+- 287 offline tests (vitest + pg-mem in-memory Postgres)
 
-```bash
-# Start the service
-npm run service:start
+## Quick start (local development)
 
-# Open the dashboard
-open http://localhost:3847
-
-# View logs
-npm run service:logs
-```
-
-### Development Mode
+Requires Node 22, Postgres, and a Claude credential (Claude subscription OAuth token or Anthropic API key).
 
 ```bash
-npm run dev    # server on :3847, Vite UI on :3848
-npm run test   # 67 tests
-npm run build  # production build
+git clone <repo-url> da_boss && cd da_boss
+npm install
+cp .env.example .env
+# In .env, set at minimum:
+#   DATABASE_URL=postgres://daboss:daboss@localhost:5432/daboss
+#   SESSION_SECRET=$(openssl rand -base64 32)
+#   DABOSS_CIPHER_KEY=$(openssl rand -base64 32)   # encrypts user credentials at rest
+
+npm run dev     # server on :3847, Vite UI on :3848
+npm run test    # 287 tests, fully offline (pg-mem)
+npm run build   # production build (server tsc + ui vite)
 ```
+
+Open the UI, register — the **first registered user becomes admin** — then add your Claude credential and git token under Settings. Agents run on *your* stored credentials.
+
+In dev mode agents execute in-process on the host (`AGENT_EXECUTION=inprocess`). This is fine for trying it out, but the in-process runner manages `claude` processes via the host process table and can interfere with unrelated Claude sessions. **Run agents in Kubernetes for real use.**
+
+## Deploying to Kubernetes
+
+The `Dockerfile` builds a single image containing the boss, the pod worker, the sidecar, and the supervisor — pods differ only by `command`. A deployment needs:
+
+1. **Postgres** (StatefulSet or managed).
+2. **The boss Deployment** with `AGENT_EXECUTION=pod`, `AGENT_SIDECAR=on`, `WORKER_IMAGE=<this image>`, `POD_NAMESPACE`, and a ServiceAccount allowed to create/delete pods, secrets (ephemeral per-agent credentials), and PVCs (per-user workspaces) in its namespace.
+3. Optionally the **supervisor as its own Deployment** (`command: node dist/orchestrator/index.js`).
+4. For repo-declared image builds, a **kaniko build identity** with push access to your registry (`DABOSS_BUILD_SERVICE_ACCOUNT`); without it, agents fall back to the generic base image.
+
+Cluster manifests are environment-specific and not committed, but **[`k8s/gke/RUNBOOK.md`](k8s/gke/RUNBOOK.md)** walks an end-to-end GKE deployment — Artifact Registry, secrets, Postgres, control plane, network policies, reverse-proxy wiring, and the least-privilege build/deploy identities. [`k8s/gke/deploy-manager-prompt.md`](k8s/gke/deploy-manager-prompt.md) documents the deploy-agent setup.
+
+## Configuring a target repo
+
+Everything a repo needs lives in its own `.daboss/` directory.
+
+### `.daboss/agent.Dockerfile` — agent toolchain
+
+Declare what agents working on this repo need installed:
+
+```dockerfile
+FROM ${DABOSS_BASE}
+# daboss-hash-include: mix.lock
+RUN apt-get update && apt-get install -y elixir ...
+```
+
+da_boss builds it once with kaniko, content-addressed by hash of the base image + Dockerfile (+ any `daboss-hash-include` files), and runs the repo's agents in it. Named build targets in the same file act as per-agent **toolchain flavors**. Falls back to the generic base image on any failure.
+
+### `.daboss/pipeline.yaml` — phases
+
+```yaml
+phases:
+  test:                      # "test" / "test-*" phases gate PRs
+    command: mix test
+    image: daboss-elixir-test:1.18
+    services:                # backing services as localhost sidecars
+      - image: postgres:16
+        port: 5432
+        env: { POSTGRES_PASSWORD: postgres }
+  deploy:
+    command: ./deploy.sh
+    only_ref: main           # main-only
+    gate: human              # requires approval in the UI
+    agent: true              # approval dispatches a managed agent (streams live, can roll back)
+    service_account: deployer  # Workload-Identity-bound KSA — identity is injected, never baked in
+    requires: [gcp-sa]       # named vault secrets injected as env
+```
+
+Other phase fields: `build` (kaniko-build the image from the repo), `params`, `adapter`, `lease` (phase concurrency, e.g. terraform state), `schedule: nightly`, `artifact_from` (inject another phase's latest passed artifact at `$DABOSS_SEED`), `expose_to_agents` (deliver that artifact into every agent pod for the repo).
+
+The runner contract is deliberately dumb: env in, **exit code = verdict**, stdout streamed to the UI, and a file at `$DABOSS_ARTIFACT` becomes the human-review artifact. A live-validated builder for this file is in the UI (Settings → Pipeline).
+
+## The change lifecycle
+
+```
+agent works on branch ──▶ draft PR ──▶ test phases ──▶ review agent ──▶ verdict: merge | fix | hold
+                                                                            │
+        merge (land gate): rebase on main ──▶ re-test ──▶ merge on green ◀──┘ (hold/fix require explicit override)
+                                                │
+                     deploy phase on main (gate: human) ──▶ deploy agent ──▶ outcome fed back to the change
+```
+
+The Reviews page is the shared queue across all developers: deploys awaiting approval and changes awaiting merge, grouped by repo. Branch deploys to staging are available per-agent when you need to validate before merging.
+
+## MCP server
+
+`POST /mcp` (Streamable HTTP) exposes da_boss to other agents — an agent in one Claude session can spawn, steer, review, and deploy through it:
+
+`create_agent`, `get_agent`, `list_agents`, `start_agent`, `pause_agent`, `resume_agent`, `kill_agent`, `send_input`, `get_agent_events`, `resize_agent`, `list_reviewable_changes`, `request_review`, `get_verdict`, `run_checks`, `sync_main`, `deploy_branch`, `list_deploys`, `get_deploy_verdict`, `list_pending_permissions`, `resolve_permission`
+
+Mint a scoped API token (`dbt_…`) in Settings; tokens are default-deny with scopes like `mcp`, `agent:create`, `review:create`, `review:read`.
 
 ## Configuration
 
-All config lives in `.env` at the project root:
+All config is environment variables (see `.env.example`). The important ones:
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTH_PASSWORD` | (generated) | Dashboard login password |
-| `SESSION_SECRET` | (generated) | Express session secret (min 32 chars) |
+| `DATABASE_URL` | `postgres://daboss:daboss@localhost:5432/daboss` | Postgres connection (required) |
+| `SESSION_SECRET` | dev value | Express session secret — set it |
+| `DABOSS_CIPHER_KEY` | — | **Required.** Key for the AES-256-GCM credential vault |
 | `PORT` | `3847` | Server HTTP port |
-| `NTFY_TOPIC` | (empty) | ntfy.sh topic for push notifications |
-| `ANTHROPIC_ADMIN_API_KEY` | (empty) | Anthropic admin API key for org-level usage tracking |
-| `CLAUDE_PATH` | `~/.local/bin/claude` | Path to claude CLI binary |
-| `MAX_CONCURRENT_AGENTS` | `3` | Max agents running simultaneously |
-| `SUPERVISOR_INTERVAL_MINUTES` | `5` | How often the supervisor checks agents |
-| `PERMISSION_TIMEOUT_MINUTES` | `30` | Tool approval timeout before auto-deny |
-| `STUCK_THRESHOLD_MINUTES` | `15` | Time before an idle agent is flagged |
-| `DB_PATH` | `../da_boss.db` | SQLite database file location |
-| `NODE_ID` | hostname | Fleet node identifier |
-| `NODE_ROLE` | `boss` | Fleet role: `boss` or `worker` |
-
-## Service Management
-
-```bash
-npm run service:start       # launchctl load
-npm run service:stop        # launchctl unload
-npm run service:logs        # tail stderr log
-npm run install-service     # rebuild and reinstall plist
-npm run uninstall-service   # remove plist
-
-# Or directly via launchctl
-launchctl kickstart -k gui/$(id -u)/com.daboss.agent-manager  # restart
-launchctl list | grep daboss                                    # check status
-```
-
-The service auto-restarts on crash (KeepAlive) and starts on login (RunAtLoad). Logs are at `~/Library/Logs/da_boss/`.
-
-## Authentication: Claude Max vs API Key
-
-da_boss works with both Claude Max (interactive login) and Anthropic API keys.
-
-### Claude Max (default)
-
-Run `claude login` on the machine. The CLI stores auth in `~/.claude/`. This is what you use for local development — flat monthly rate, unlimited usage.
-
-### API Key
-
-Set the `ANTHROPIC_API_KEY` environment variable. No login needed. The CLI and agent SDK check for this env var first.
-
-```bash
-# In .env
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Or export directly
-export ANTHROPIC_API_KEY=sk-ant-...
-claude  # works without login
-```
-
-For the launchd service, add it to the plist's EnvironmentVariables or to `.env`. The server passes the environment to child claude processes automatically.
-
-### Which to use
-
-| | Claude Max | API Key |
-|---|---|---|
-| Billing | Flat monthly ($100) | Pay per token |
-| Auth | Interactive `claude login` per machine | Env var, no login |
-| Fleet | One machine only (per-user auth) | Any machine, scalable |
-| Best for | Local development, single machine | Fleet workers, CI/CD, cloud deployment |
-
-For **fleet deployment** (Phase 2+), API keys are the only scalable option. You can't run `claude login` on ephemeral workers. Set `ANTHROPIC_API_KEY` in the worker's environment and da_boss works without any code changes.
-
-**Cost consideration**: A single agent running continuously can use significant tokens. Compare your typical daily token usage against API pricing before switching from Max.
-
-## Remote Access with Tailscale
-
-da_boss listens on localhost by default. To access it from your phone or other devices, use [Tailscale](https://tailscale.com):
-
-### Setup
-
-1. Install Tailscale on your Mac and sign in:
-   ```bash
-   brew install tailscale
-   # Or download from https://tailscale.com/download
-   ```
-
-2. Install the Tailscale app on your phone/tablet.
-
-3. Expose da_boss via Tailscale Serve (private, only your Tailnet):
-   ```bash
-   tailscale serve --bg 3847
-   ```
-   This makes da_boss available at `https://your-machine-name.your-tailnet.ts.net` with automatic HTTPS.
-
-4. To expose publicly (e.g., for webhooks):
-   ```bash
-   tailscale funnel 3847
-   ```
-
-### Verify
-
-```bash
-tailscale serve status
-# Should show: https://your-machine-name.ts.net -> http://127.0.0.1:3847
-```
-
-Now open `https://your-machine-name.ts.net` from any device on your Tailnet. Login with the `AUTH_PASSWORD` from `.env`.
-
-### Tailscale + ntfy for Mobile Monitoring
-
-With Tailscale for remote access and ntfy for push notifications, you can:
-- Monitor agent status from your phone via the web UI
-- Get push notifications when agents need permission approval or are stuck
-- Approve/deny tool calls and answer agent questions from anywhere
-
-## Push Notifications (ntfy)
-
-[ntfy.sh](https://ntfy.sh) sends push notifications to your phone when agents need attention.
-
-### Setup
-
-1. Install the ntfy app on your phone ([iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy))
-
-2. Subscribe to a topic in the app (e.g., `da-boss-tyler`)
-
-3. Set the same topic in `.env`:
-   ```
-   NTFY_TOPIC=da-boss-tyler
-   ```
-
-4. Restart the service:
-   ```bash
-   launchctl kickstart -k gui/$(id -u)/com.daboss.agent-manager
-   ```
-
-### What triggers notifications
-
-- Agent needs attention (supervisor detects stuck/idle state)
-- Stale permission requests (agent waiting for approval > 5 min, no supervisor instructions)
-- Agent errors that require manual intervention
-
-### Test it
-
-```bash
-curl -d "Test notification from da_boss" https://ntfy.sh/your-topic
-```
-
-### Private ntfy server (optional)
-
-For sensitive environments, self-host ntfy instead of using the public server:
-
-```bash
-docker run -p 8080:80 binwiederhier/ntfy serve
-```
-
-Then set `NTFY_TOPIC=http://your-server:8080/your-topic` (the code uses `https://ntfy.sh/{topic}` — you'd need to modify `server/src/notifications/ntfy.ts` to support custom base URLs).
-
-## Architecture
-
-```
-Browser (React/Vite :3848) ──WebSocket + REST──> Express (:3847) ──> Claude Agent SDK
-                                                      |
-                                                   SQLite (da_boss.db)
-                                                      |
-                                                Supervisor (cron 5min)
-                                                      |
-                                                ntfy.sh (push notifications)
-```
-
-### Key Components
-
-| Module | Purpose |
-|---|---|
-| `server/src/agent/runner.ts` | Wraps SDK `query()`, streams messages, tracks PIDs, handles lifecycle |
-| `server/src/agent/manager.ts` | Orchestrates runners, input queue, max concurrency, session restore |
-| `server/src/agent/permissions.ts` | `canUseTool` callback — auto-approves safe tools, routes AskUserQuestion/ExitPlanMode to UI |
-| `server/src/tokens/budget.ts` | Token budget enforcement with priority tiers |
-| `server/src/supervisor/checks.ts` | Stuck detection, budget enforcement, stale permission auto-resolution |
-| `server/src/notifications/ntfy.ts` | Push notifications |
-| `server/src/api/router.ts` | REST endpoints |
-| `server/src/api/websocket.ts` | Real-time event broadcasting |
-| `ui/src/components/PermissionDialog.tsx` | AskUserQuestion cards, ExitPlanMode plan review, standard approve/deny |
-| `ui/src/components/MessageStream.tsx` | Scrollable real-time message list |
-| `ui/src/pages/AgentDetail.tsx` | Full message stream, subagent panel, controls, queue indicator |
-
-### Agent States
-
-```
-PENDING → RUNNING → COMPLETED → VERIFIED
-              ↓ ↑       ↓ ↑
-         WAITING_*    RUNNING (restart)
-              ↓
-           PAUSED → RUNNING (resume)
-
-Any non-terminal → ABORTED (kill)
-FAILED → RUNNING (retry via queued input)
-```
-
-### Permission System
-
-Tools are classified as:
-
-- **Always safe** (auto-approved): Read, Grep, Glob, Edit/Write within cwd, safe Bash, Agent, Task*, WebFetch, WebSearch, Skill, TodoRead/Write, EnterPlanMode, ToolSearch, TaskOutput, TaskStop
-- **Interactive** (routed to UI): AskUserQuestion (question card with options), ExitPlanMode (plan review with approve/reject/feedback)
-- **Risky** (escalated to UI): Bash with dangerous patterns, Edit/Write outside cwd, Config, KillShell, MCP tools
-
-### Process Management
-
-Every agent tracks the PIDs of claude processes it spawns (including subagents). On kill or error:
-- SIGKILL the entire process tree (children first, then parent)
-- Orphan cleanup on server startup
-- `Kill All` button on dashboard for emergencies
-- `/api/agents/kill-all` endpoint
-- `/api/processes` endpoint for visibility
-
-### Input Queue
-
-Messages from the user queue per-agent and drain one at a time:
-- Only delivers when agent is in `waiting_input` or `completed` state
-- Multiple queued messages combine into a single message
-- Failed/paused agents auto-transition when input arrives
-- Resume drains queued messages immediately
-- Prevents duplicate runners (the source of orphaned processes)
-
-### Supervisor
-
-Runs every 5 minutes. For agents with supervisor instructions:
-- **Stale AskUserQuestion** (>5 min): Supervisor answers using Claude (Haiku) based on task context
-- **Stale ExitPlanMode** (>5 min): Supervisor approves/rejects based on original task alignment
-- **Completed agents**: Evaluates if work is actually done or needs continuation
-- **Idle waiting_input** (>2 min): Provides input to unblock
-
-Cooldowns prevent runaway loops: 15-minute cooldown between actions, max 3 interventions per agent.
-
-## Deployment Checklist
-
-### Prerequisites
-
-- [ ] macOS (launchd service)
-- [ ] Node.js 22 (`nvm install 22`)
-- [ ] Claude CLI installed (`~/.local/bin/claude` or specify `CLAUDE_PATH`)
-- [ ] Anthropic API access (for the agents to use)
-
-### Install
-
-```bash
-nvm use 22
-cd da_boss
-npm run install-service
-```
-
-### Post-Install
-
-- [ ] Verify `.env` has strong `AUTH_PASSWORD` and `SESSION_SECRET`
-- [ ] Set `NTFY_TOPIC` if you want push notifications
-- [ ] Set `ANTHROPIC_ADMIN_API_KEY` if you want org-level usage tracking
-- [ ] Verify service is running: `launchctl list | grep daboss`
-- [ ] Open `http://localhost:3847` and log in
-
-### Optional: Remote Access
-
-- [ ] Install Tailscale
-- [ ] `tailscale serve --bg 3847`
-- [ ] Access from phone: `https://your-machine.ts.net`
-
-### Optional: Mobile Notifications
-
-- [ ] Install ntfy app on phone
-- [ ] Subscribe to your topic
-- [ ] Set `NTFY_TOPIC` in `.env`
-- [ ] Restart service
-
-## API
-
-### Authentication
-
-```bash
-# Login
-curl -c cookies.txt -X POST http://localhost:3847/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"password":"your-password"}'
-
-# Use cookies for subsequent requests
-curl -b cookies.txt http://localhost:3847/api/agents
-```
-
-### Key Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/agents` | Create agent |
-| GET | `/api/agents` | List all agents |
-| POST | `/api/agents/:id/start` | Start agent |
-| POST | `/api/agents/:id/input` | Send message (queued) |
-| POST | `/api/agents/:id/kill` | Kill agent + process tree |
-| POST | `/api/agents/kill-all` | Kill everything |
-| GET | `/api/processes` | Process tree per agent |
-| GET | `/api/queue` | Queued messages per agent |
-| POST | `/api/permissions/:id/resolve` | Approve/deny/answer |
-| GET | `/api/agents/:id/subagents` | List subagents |
-| WS | `/ws` | Real-time event stream |
+| `AGENT_EXECUTION` | `inprocess` | `pod` (Kubernetes, recommended) or `inprocess` (host, dev only) |
+| `AGENT_SIDECAR` | `off` | `on` enables the native sidecar (heartbeat, telemetry, leases) |
+| `WORKER_IMAGE` | `da-boss:local` | Image for agent pods (keep in sync with the deployed boss image) |
+| `POD_NAMESPACE` | `daboss` | Namespace for agent/pipeline/build pods |
+| `WORKSPACE_PVC_SIZE` | `20Gi` | Per-user workspace volume size |
+| `MAX_CONCURRENT_AGENTS` | `3` | Dispatch-queue slot count |
+| `AUTH_MODE` | `local` | `local` or `oidc` (see `OIDC_*` vars in `.env.example`) |
+| `SUPERVISOR_INTERVAL_MINUTES` | `5` | Supervisor cron cadence |
+| `SUPERVISOR_CREDENTIAL_USER` | — | Whose Claude credential powers headless supervisor/review calls (also settable in the admin UI) |
+| `LEASE_MODE` | `advisory` | Freeze-leases: `advisory`, `enforce`, or `off` |
+| `DABOSS_AUTO_TEST` | `false` | Auto-run test phases when an agent completes |
+| `DABOSS_BUILD_SERVICE_ACCOUNT` | — | KSA for kaniko pushes (with `DABOSS_KANIKO_*` resource knobs) |
+| `NTFY_TOPIC` | — | ntfy.sh topic for push notifications |
+| `TRUST_PROXY` | — | Set behind a load balancer so rate limiting and audit IPs see the real client |
+| `DABOSS_SIZE_PRESETS` | built-in s/m/l/xl | JSON override of pod size presets (also editable in the admin UI) |
+
+## Architecture notes
+
+- **Server** (`server/src/`): `agent/` (manager, pod dispatcher, image builders, sizing, tool policy), `pipeline/` (config, phase runner, review agents, deploy agents, main-watch, scheduler), `worker/` (pod-side agent loop), `sidecar/` (heartbeat + leases), `supervisor/` (checks, dispatch queue, reaper), `leasing/` (freeze-set computation), `forge/` (GitHub REST), `api/` (REST router, MCP, auth, tokens, WebSocket, PG live relay), `db/` (33 migrations, all SQL in `queries.ts`), `crypto/` (cipher seam — `local` AES-GCM today, KMS/Vault pluggable).
+- **UI** (`ui/src/`): Dashboard, Agent detail (stream, plans, files, activity trace, size/merge/deploy controls), Reviews queue, Discover (import existing local Claude sessions), Settings (credentials, secrets, tokens, admin panels, pipeline builder).
+- **Statuses** roll up agent + pipeline + review + deploy state into one canonical value: `pending → queued → running → … → testing → reviewing → ready → landing → merged → deploying → deployed/done`, with `waiting_*`, `fix`, `hold`, `paused`, `failed` along the way.
+- **Design docs**: [`da_boss-distributed-plan.md`](da_boss-distributed-plan.md) is the architecture rationale (leases, intents, merge queue, neutrality seams); the phase-0 and review-platform plans are historical design records.
+
+## Legacy single-machine mode
+
+The original macOS launchd service (`npm run install-service`, `service:start|stop|logs`) still works and runs agents in-process on the host. It predates the Kubernetes architecture: no pods, no per-user isolation, and host-level `claude` process management that can interfere with other Claude sessions on the machine. Prefer the Kubernetes deployment for anything beyond a quick trial.
 
 ## License
 
