@@ -220,10 +220,11 @@ export async function runChecks(
   // The requesting agent cannot approve its own tool calls — that's the point of
   // escalation. After 5 min with no human response, a SECOND agent (the
   // supervisor, on its own credential) judges the request against the original
-  // task and supervisor_instructions. This covers ALL escalated tools (Bash,
-  // risky edits, MCP…), not just the interactive ones. Opt-in per agent via
-  // supervisor_instructions; without them (or without a credential / a
-  // resolvePermission dep) requests fall through to notify/timeout findings.
+  // task. This covers ALL escalated tools (Bash, risky edits, MCP…), not just
+  // the interactive ones, and does NOT require per-agent opt-in: the supervisor
+  // IS the approver of record when no human answers. supervisor_instructions,
+  // when present, refine that judgment. Without a credential or a
+  // resolvePermission dep, requests fall through to notify/timeout findings.
   const pending = await queries.getPendingPermissions();
   for (const perm of pending) {
     const minutes = minutesSince(perm.created_at, now);
@@ -232,7 +233,7 @@ export async function runChecks(
     const interactive = perm.tool_name === "AskUserQuestion" || perm.tool_name === "ExitPlanMode";
     const agent = await queries.getAgent(perm.agent_id);
 
-    if (agent?.supervisor_instructions && deps.resolvePermission && credEnv.ok) {
+    if (agent && deps.resolvePermission && credEnv.ok) {
       // Deliberately NOT gated on canActOnAgent: resolving a permission is
       // unblocking, not intervening — the 15-min cooldown / lifetime action cap
       // would strand an agent that legitimately needs several approvals in a
@@ -244,7 +245,8 @@ export async function runChecks(
           perm.agent_id,
           agent.name,
           agent.prompt,
-          agent.supervisor_instructions,
+          agent.supervisor_instructions ||
+            "(none — judge against the original task and whether this action clearly serves it)",
           perm.tool_name,
           perm.tool_input,
           credEnv.env
