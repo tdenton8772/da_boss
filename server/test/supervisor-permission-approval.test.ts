@@ -130,6 +130,20 @@ describe("supervisor resolves stale tool permissions (the second-agent approval)
     expect(findings.find((f) => f.type === "permission_timeout")).toBeUndefined();
   });
 
+  it("stamps resolved_by on the row (the audit dimension)", async () => {
+    await queries.insertAgent({ ...agentBase, id: "ag_attr" });
+    const perm = await queries.insertPermissionRequest("ag_attr", "Bash", { command: "ls" }, "tu_attr");
+    await queries.resolvePermission(perm.id, "approved", "fine", "supervisor");
+    const row = await queries.getPermission(perm.id);
+    expect(row!.status).toBe("approved");
+    expect(row!.resolved_by).toBe("supervisor");
+    expect(row!.resolution_answer).toBe("fine");
+
+    const perm2 = await queries.insertPermissionRequest("ag_attr", "Bash", { command: "ls" }, "tu_attr2");
+    await queries.resolvePermission(perm2.id, "denied", "Permission timed out", "timeout");
+    expect((await queries.getPermission(perm2.id))!.resolved_by).toBe("timeout");
+  });
+
   it("falls through to permission_timeout when no credential is configured", async () => {
     // No designateSupervisorCredential() — credEnv.ok is false.
     await queries.insertAgent({ ...agentBase, id: "ag_nocred" });

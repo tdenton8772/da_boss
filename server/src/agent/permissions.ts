@@ -81,14 +81,16 @@ export async function resolvePermissionRequest(
   requestId: number,
   decision: "approved" | "denied",
   eventBus: EventEmitter,
-  answer?: string
+  answer?: string,
+  resolvedBy?: string
 ): Promise<boolean> {
   const request = await queries.getPermission(requestId);
   if (!request || request.status !== "pending") return false;
 
   const toolInput = JSON.parse(request.tool_input) as Record<string, unknown>;
-  // Persist decision + answer so a pod worker (polling this row) can read it too.
-  await queries.resolvePermission(requestId, decision, answer);
+  // Persist decision + answer + resolver so a pod worker (polling this row) can
+  // read the outcome AND its provenance (human user id / supervisor / timeout).
+  await queries.resolvePermission(requestId, decision, answer, resolvedBy);
 
   // In-process agents (non-pod mode) resolve via the in-memory promise.
   const pending = pendingResolvers.get(request.tool_use_id);

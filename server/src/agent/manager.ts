@@ -409,9 +409,10 @@ export class AgentManager {
   async resolvePermission(
     requestId: number,
     decision: "approved" | "denied",
-    answer?: string
+    answer?: string,
+    resolvedBy?: string
   ): Promise<boolean> {
-    return resolvePermissionRequest(requestId, decision, this.eventBus, answer);
+    return resolvePermissionRequest(requestId, decision, this.eventBus, answer, resolvedBy);
   }
 
   /**

@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     // supervisor_instructions + a loaded credential). Resolution is just the DB
     // row update: the blocked worker polls the row and continues within seconds.
     resolvePermission: async (id, decision, answer) => {
-      await queries.resolvePermission(id, decision, answer);
+      await queries.resolvePermission(id, decision, answer, "supervisor");
       return true;
     },
 
