@@ -13,6 +13,7 @@ import {
   ShieldQuestion,
   Rocket,
   GitMerge,
+  Eye,
 } from "lucide-react";
 
 const STATE_CONFIG: Record<
@@ -78,6 +79,7 @@ const ICON_BY_KEY: Record<string, React.ReactNode> = {
   running: <Loader size={14} className="animate-spin" />,
   testing: <Loader size={14} className="animate-spin" />,
   reviewing: <Loader size={14} className="animate-spin" />,
+  needs_review: <Eye size={14} />,
   waiting_permission: <ShieldQuestion size={14} />,
   waiting_input: <AlertTriangle size={14} />,
   paused: <Pause size={14} />,
