@@ -114,16 +114,20 @@ describe("supervisor resolves stale tool permissions (the second-agent approval)
     expect(findings.find((f) => f.type === "permission_timeout")).toBeUndefined();
   });
 
-  it("falls through to permission_timeout when the agent has no supervisor_instructions", async () => {
+  it("resolves even when the agent has NO supervisor_instructions (judged against the task)", async () => {
+    // Supervision is not opt-in: the supervisor is the approver of record when
+    // no human answers; instructions refine the judgment, they don't enable it.
     await designateSupervisorCredential();
     await queries.insertAgent({ ...agentBase, id: "ag_noinstr", supervisor_instructions: "" });
-    await insertStalePermission("ag_noinstr", "Bash", { command: "npm test" }, 45);
+    const permId = await insertStalePermission("ag_noinstr", "Bash", { command: "npm test" }, 6);
 
+    claude.result = "DECISION: approved\nANSWER: serves the task";
     const resolvePermission = vi.fn(async () => true);
-    const { findings } = await runChecks(deps({ resolvePermission }));
+    const { actions, findings } = await runChecks(deps({ resolvePermission }));
 
-    expect(resolvePermission).not.toHaveBeenCalled();
-    expect(findings.find((f) => f.type === "permission_timeout" && f.agentId === "ag_noinstr")).toBeDefined();
+    expect(resolvePermission).toHaveBeenCalledWith(permId, "approved", "serves the task");
+    expect(actions.find((a) => a.type === "supervisor_permission")).toBeDefined();
+    expect(findings.find((f) => f.type === "permission_timeout")).toBeUndefined();
   });
 
   it("falls through to permission_timeout when no credential is configured", async () => {
