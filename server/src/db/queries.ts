@@ -1308,6 +1308,16 @@ export async function completeReview(
 
 /** True if this agent already has a live/finished review agent — so we don't
  *  dispatch a second one for the same completion. */
+/** Reviewed-agent ids that have a review agent still in flight — the batch
+ *  (list-endpoint) counterpart of hasActiveReviewAgent below; keep the two
+ *  non-terminal state lists identical or the card and detail header disagree. */
+export async function getAgentsWithActiveReview(): Promise<string[]> {
+  const res = await getPool().query<{ review_of_agent_id: string }>(
+    "SELECT DISTINCT review_of_agent_id FROM agents WHERE review_of_agent_id IS NOT NULL AND state NOT IN ('failed','aborted','completed','verified','paused')"
+  );
+  return res.rows.map((r) => r.review_of_agent_id);
+}
+
 export async function hasActiveReviewAgent(reviewedAgentId: string): Promise<boolean> {
   // Only a review that's still in flight blocks dispatching another. A COMPLETED (or
   // verified) review must NOT block a fresh one — otherwise, after the change is

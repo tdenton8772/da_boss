@@ -18,6 +18,9 @@ export function deriveStatus(agent: {
   status?: StatusView | null;
   testing?: boolean;
   landing?: boolean;
+  // A review agent is ACTIVELY reviewing this change (vs. merely having an open PR
+  // that's waiting for a review — those are distinct statuses).
+  reviewing?: boolean;
   recommendation?: string | null;
   pr_number?: number | null;
   deployed_by_agent_id?: string | null;
@@ -72,12 +75,16 @@ export function deriveStatus(agent: {
   if (agent.state === "completed") {
     // Refine the "completed" lifecycle by what's actually happening in the pipeline.
     if (agent.testing) return { key: "testing", label: "Testing", color: "text-blue-400", spin: true };
+    // An ACTIVE review beats a stale verdict (fix→re-review keeps the old
+    // recommendation until the new review lands — show the live review).
+    if (agent.reviewing) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
     switch (agent.recommendation) {
       case "merge": return { key: "ready", label: "Ready: merge", color: "text-green-400" };
       case "fix": return { key: "fix", label: "Review: fix", color: "text-amber-400" };
       case "hold": return { key: "hold", label: "Review: hold", color: "text-amber-400" };
     }
-    if (agent.pr_number) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
+    // Open PR, no live reviewer, no verdict — waiting for a review, not in one.
+    if (agent.pr_number) return { key: "needs_review", label: "Needs review", color: "text-amber-400" };
     return { key: "done", label: "Done", color: "text-blue-400" };
   }
   return { key: agent.state, label: agent.state, color: "text-gray-400" };

@@ -21,10 +21,25 @@ describe("computeAgentStatus", () => {
     expect(computeAgentStatus({ state: "completed", recommendation: "merge" }).key).toBe("ready");
     expect(computeAgentStatus({ state: "completed", recommendation: "fix" }).key).toBe("fix");
     expect(computeAgentStatus({ state: "completed", recommendation: "hold" }).key).toBe("hold");
-    // an open PR with no verdict yet = still under review
-    expect(computeAgentStatus({ state: "completed", pr_number: 7 }).key).toBe("reviewing");
     // nothing else = done
     expect(computeAgentStatus({ state: "completed" }).key).toBe("done");
+  });
+
+  it("splits needs-review from in-review", () => {
+    // A review agent actively working = In review (spins)
+    const inReview = computeAgentStatus({ state: "completed", reviewing: true, pr_number: 7 });
+    expect(inReview.key).toBe("reviewing");
+    expect(inReview.spin).toBe(true);
+    // An open PR with no live reviewer and no verdict = Needs review (does NOT spin —
+    // nothing is happening; the old conflated status lied with a spinner here)
+    const needs = computeAgentStatus({ state: "completed", pr_number: 7 });
+    expect(needs.key).toBe("needs_review");
+    expect(needs.spin).toBeUndefined();
+    // An ACTIVE re-review beats the stale verdict from the previous round
+    expect(computeAgentStatus({ state: "completed", reviewing: true, recommendation: "fix", pr_number: 7 }).key).toBe("reviewing");
+    // but testing/landing still outrank an active review
+    expect(computeAgentStatus({ state: "completed", testing: true, reviewing: true }).key).toBe("testing");
+    expect(computeAgentStatus({ state: "completed", landing: true, reviewing: true }).key).toBe("landing");
   });
 
   it("verified follows the claiming deploy agent's state first", () => {

@@ -20,6 +20,7 @@ export interface StatusInputs {
   state: string;
   testing?: boolean | null; // a test phase is running on this agent's branch
   landing?: boolean | null; // a Merge is landing (rebase-on-main + retest) right now
+  reviewing?: boolean | null; // a review AGENT is actively reviewing this change right now
   recommendation?: string | null;
   pr_number?: number | null;
   deployed_by_agent_id?: string | null;
@@ -61,12 +62,17 @@ export function computeAgentStatus(a: StatusInputs): StatusView {
   if (a.state === "completed") {
     if (a.landing) return { key: "landing", label: "Landing…", color: "text-blue-400", spin: true };
     if (a.testing) return { key: "testing", label: "Testing", color: "text-blue-400", spin: true };
+    // An ACTIVE review beats a stale verdict: after a fix→re-review cycle the old
+    // recommendation lingers until the new review lands — show the live review.
+    if (a.reviewing) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
     switch (a.recommendation) {
       case "merge": return { key: "ready", label: "Ready: merge", color: "text-green-400" };
       case "fix": return { key: "fix", label: "Review: fix", color: "text-amber-400" };
       case "hold": return { key: "hold", label: "Review: hold", color: "text-amber-400" };
     }
-    if (a.pr_number) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
+    // Open PR, no reviewer running, no verdict — the change is WAITING for a
+    // review, not in one. Distinct from "In review" (spinner) on purpose.
+    if (a.pr_number) return { key: "needs_review", label: "Needs review", color: "text-amber-400" };
     return { key: "done", label: "Done", color: "text-blue-400" };
   }
   return { key: a.state, label: a.state, color: "text-gray-400" };

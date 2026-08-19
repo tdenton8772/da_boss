@@ -365,6 +365,7 @@ export function createRouter(manager: AgentManager): Router {
     const summaryMap = new Map(tokenSummaries.map((s) => [s.agent_id, s]));
     const testing = new Set(await queries.getAgentsWithActiveTestRuns());
     const landing = new Set(await queries.getAgentsWithLandInFlight());
+    const inReview = new Set(await queries.getAgentsWithActiveReview());
     // In-flight deploy per repo/ref (the pre-claim gate) + the state of each change's
     // deploy agent (once claimed) → one coherent deploy status per change.
     const deployStatus = await queries.getActiveDeployStatusByRepoRef();
@@ -375,17 +376,19 @@ export function createRouter(manager: AgentManager): Router {
     const enriched = agents.map((a) => {
       const testingA = testing.has(a.id);
       const landingA = landing.has(a.id);
+      const reviewingA = inReview.has(a.id);
       const deploy_status = a.repo_url ? deployStatus.get(`${a.repo_url.replace(/\.git$/, "")}@${a.repo_ref || "main"}`) ?? null : null;
       const deploy_agent_state = a.deployed_by_agent_id ? deployAgentStates.get(a.deployed_by_agent_id) ?? null : null;
       return {
         ...a,
         testing: testingA, // so the card shows one coherent status
         landing: landingA,
+        reviewing: reviewingA,
         deploy_status,
         deploy_agent_state,
         is_deploy_agent: deployAgentIds.has(a.id), // hide change-actions on deploy agents
         // THE canonical status — same function + same inputs the detail endpoint uses.
-        status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, deploy_status, deploy_agent_state }),
+        status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, reviewing: reviewingA, deploy_status, deploy_agent_state }),
         tokens: summaryMap.get(a.id) || {
           total_input_tokens: 0,
           total_output_tokens: 0,
@@ -545,13 +548,16 @@ export function createRouter(manager: AgentManager): Router {
       : null;
     // Link to the review agent (its live trace) so the UI can offer "watch the review".
     const review_agent_id = await queries.getReviewAgentIdFor(agent.id);
+    // A review agent actively working right now → "In review"; an open PR with no
+    // live reviewer → "Needs review". Same signal the list endpoint batches.
+    const reviewing = await queries.hasActiveReviewAgent(agent.id);
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
     // THE canonical status — identical function + inputs to the list endpoint, so the
     // detail header and the dashboard card can never disagree.
-    const status = computeAgentStatus({ ...agent, testing, landing, deploy_status, deploy_agent_state });
+    const status = computeAgentStatus({ ...agent, testing, landing, reviewing, deploy_status, deploy_agent_state });
     const is_deploy_agent = await queries.isDeployAgent(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, reviewing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
   });
 
   // Upload a file for the agent (screenshot, doc, etc.). Stored in PG; the worker
