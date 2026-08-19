@@ -1528,11 +1528,12 @@ export function createRouter(manager: AgentManager): Router {
       return;
     }
     const id = parseInt(req.params.id);
-    const ok = await manager.resolvePermission(id, decision, answer);
+    const ok = await manager.resolvePermission(id, decision, answer, req.user!.userId);
     if (!ok) {
       res.status(404).json({ error: "Permission request not found or already resolved" });
       return;
     }
+    await queries.insertAuditLog(req.ip ?? null, `permission.${decision}`, "permission", String(id), answer, req.user!.userId);
     res.json({ ok: true });
   });
 

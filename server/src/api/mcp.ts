@@ -321,7 +321,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     },
     async ({ permission_id, decision, answer }) => {
       const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
-      const ok = await manager.resolvePermission(permission_id, decision === "approve" ? "approved" : "denied", answer);
+      const ok = await manager.resolvePermission(permission_id, decision === "approve" ? "approved" : "denied", answer, principal.userId);
       return ok ? asText({ ok: true }) : asError("Permission request not found or already resolved.");
     }
   );

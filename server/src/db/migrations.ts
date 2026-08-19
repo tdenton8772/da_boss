@@ -610,6 +610,16 @@ const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS toolchain TEXT;
     `,
   },
+  {
+    version: 34,
+    name: "permission_resolved_by",
+    // Who resolved a permission request: a user id (human click via UI/MCP),
+    // 'supervisor' (the second-agent auto-approval), or 'timeout' (the worker's
+    // own auto-deny). NULL on rows resolved before this migration.
+    up: `
+      ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

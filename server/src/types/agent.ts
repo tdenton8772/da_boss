@@ -108,6 +108,9 @@ export interface PermissionRequest {
   tool_use_id: string;
   status: "pending" | "approved" | "denied";
   resolution_answer: string | null;
+  /** Who resolved it: a user id (human), 'supervisor' (auto-approval), or
+   *  'timeout' (worker auto-deny). NULL on legacy rows. */
+  resolved_by: string | null;
   resolved_at: string | null;
   created_at: string;
 }

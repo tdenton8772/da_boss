@@ -13,7 +13,7 @@ export function depsFromManager(manager: AgentManager): SupervisorDeps {
   return {
     getAgentsToPause: () => manager.budgetManager.getAgentsToPause(),
     pauseAgent: (id) => manager.pauseAgent(id),
-    resolvePermission: (id, decision, answer) => manager.resolvePermission(id, decision, answer),
+    resolvePermission: (id, decision, answer) => manager.resolvePermission(id, decision, answer, "supervisor"),
     sendInput: (id, message) => manager.sendInput(id, message),
     queueTestCycle: async (id) => {
       const agent = await queries.getAgent(id);

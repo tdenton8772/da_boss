@@ -472,19 +472,31 @@ async function main(): Promise<void> {
   const waitForResolution = async (
     requestId: number,
     signal: AbortSignal
-  ): Promise<{ decision: "approved" | "denied"; answer: string | null }> => {
+  ): Promise<{ decision: "approved" | "denied"; answer: string | null; resolvedBy: string | null }> => {
     const start = Date.now();
     while (Date.now() - start < PERMISSION_TIMEOUT_MS) {
-      if (signal?.aborted) return { decision: "denied", answer: "Aborted" };
+      if (signal?.aborted) return { decision: "denied", answer: "Aborted", resolvedBy: null };
       const p = await queries.getPermission(requestId);
       if (p && p.status !== "pending") {
-        return { decision: p.status as "approved" | "denied", answer: p.resolution_answer };
+        return { decision: p.status as "approved" | "denied", answer: p.resolution_answer, resolvedBy: p.resolved_by };
       }
       await new Promise((r) => setTimeout(r, 1000));
     }
-    // Timed out with no human — auto-deny and record it so the UI stops waiting too.
-    await queries.resolvePermission(requestId, "denied", "Permission timed out").catch(() => {});
-    return { decision: "denied", answer: "Permission timed out" };
+    // Timed out with nobody resolving — auto-deny and record it (attributed) so
+    // the UI stops waiting too.
+    await queries.resolvePermission(requestId, "denied", "Permission timed out", "timeout").catch(() => {});
+    return { decision: "denied", answer: "Permission timed out", resolvedBy: "timeout" };
+  };
+
+  // Render the resolver for the agent's event stream: the supervisor and the
+  // timeout are named directly; a user id becomes their email when we can look
+  // it up. NULL (legacy rows / abort) renders as nothing.
+  const resolverLabel = async (resolvedBy: string | null): Promise<string> => {
+    if (!resolvedBy) return "";
+    if (resolvedBy === "supervisor") return " by 🤖 supervisor";
+    if (resolvedBy === "timeout") return " by timeout";
+    const u = await queries.getUserById(resolvedBy).catch(() => null);
+    return ` by ${u?.email || resolvedBy}`;
   };
 
   const canUseTool = async (
@@ -514,10 +526,10 @@ async function main(): Promise<void> {
       role: "system",
       content: `⏸ Waiting for your approval — **${toolName}**`,
     });
-    const { decision, answer } = await waitForResolution(request.id, options.signal);
+    const { decision, answer, resolvedBy } = await waitForResolution(request.id, options.signal);
     await queries.insertAgentEvent(AGENT_ID!, "message", {
       role: "system",
-      content: `▶ ${toolName} ${decision === "approved" ? "approved" : "denied"}${answer ? `: ${answer}` : ""}`,
+      content: `▶ ${toolName} ${decision === "approved" ? "approved" : "denied"}${await resolverLabel(resolvedBy)}${answer ? ` — ${answer}` : ""}`,
     });
     // The agent is about to continue working — flip the state back to running so the
     // UI stops showing "Needs Approval/Input" while it's actively producing. (The

@@ -402,14 +402,17 @@ export async function insertPermissionRequest(
 export async function resolvePermission(
   id: number,
   decision: "approved" | "denied",
-  answer?: string | null
+  answer?: string | null,
+  resolvedBy?: string | null
 ): Promise<void> {
-  // Store the human's answer so a WORKER in a different pod can read the outcome
-  // (the in-process handler resolves via an in-memory promise; the pod worker polls
-  // this row). resolved_at flips the row out of 'pending' — the poll's exit signal.
+  // Store the answer AND the resolver so a WORKER in a different pod can read the
+  // outcome (the in-process handler resolves via an in-memory promise; the pod
+  // worker polls this row). resolved_at flips the row out of 'pending' — the
+  // poll's exit signal. resolved_by is the audit dimension: a user id (human),
+  // 'supervisor' (second-agent auto-approval), or 'timeout' (worker auto-deny).
   await getPool().query(
-    "UPDATE permission_requests SET status = $1, resolution_answer = $2, resolved_at = now() WHERE id = $3",
-    [decision, answer ?? null, id]
+    "UPDATE permission_requests SET status = $1, resolution_answer = $2, resolved_by = $3, resolved_at = now() WHERE id = $4",
+    [decision, answer ?? null, resolvedBy ?? null, id]
   );
 }
 
