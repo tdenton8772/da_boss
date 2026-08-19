@@ -217,45 +217,59 @@ export async function runChecks(
   }
 
   // ── Check stale permission requests ───────────────────
+  // The requesting agent cannot approve its own tool calls — that's the point of
+  // escalation. After 5 min with no human response, a SECOND agent (the
+  // supervisor, on its own credential) judges the request against the original
+  // task and supervisor_instructions. This covers ALL escalated tools (Bash,
+  // risky edits, MCP…), not just the interactive ones. Opt-in per agent via
+  // supervisor_instructions; without them (or without a credential / a
+  // resolvePermission dep) requests fall through to notify/timeout findings.
   const pending = await queries.getPendingPermissions();
   for (const perm of pending) {
     const minutes = minutesSince(perm.created_at, now);
+    if (minutes <= 5) continue;
 
-    // Interactive tools (AskUserQuestion, ExitPlanMode): let supervisor handle after 5 min
-    if (
-      (perm.tool_name === "AskUserQuestion" || perm.tool_name === "ExitPlanMode") &&
-      minutes > 5
-    ) {
-      const agent = await queries.getAgent(perm.agent_id);
-      if (agent?.supervisor_instructions && deps.resolvePermission && canActOnAgent(perm.agent_id) && credEnv.ok) {
-        try {
-          const decision = await evaluatePermission(
-            perm.agent_id,
-            agent.name,
-            agent.prompt,
-            agent.supervisor_instructions,
-            perm.tool_name,
-            perm.tool_input,
-            credEnv.env
-          );
+    const interactive = perm.tool_name === "AskUserQuestion" || perm.tool_name === "ExitPlanMode";
+    const agent = await queries.getAgent(perm.agent_id);
 
-          await deps.resolvePermission(perm.id, decision.decision, decision.answer);
-          recordAction(perm.agent_id);
-          actions.push({
-            agentId: perm.agent_id,
-            type: "supervisor_permission",
-            detail: `Supervisor ${decision.decision} ${perm.tool_name}: ${(decision.answer || "").substring(0, 100)}`,
-          });
-          logger.info(
-            { agentId: perm.agent_id, tool: perm.tool_name, decision: decision.decision },
-            "Supervisor resolved interactive permission"
-          );
-          continue;
-        } catch (err) {
-          logger.error({ agentId: perm.agent_id, err }, "Supervisor permission evaluation failed");
-        }
+    if (agent?.supervisor_instructions && deps.resolvePermission && credEnv.ok) {
+      // Deliberately NOT gated on canActOnAgent: resolving a permission is
+      // unblocking, not intervening — the 15-min cooldown / lifetime action cap
+      // would strand an agent that legitimately needs several approvals in a
+      // session. The worker blocks on its request, so there is at most one
+      // pending per agent; a deny→re-ask loop is bounded by the 5-min staleness
+      // window per round.
+      try {
+        const decision = await evaluatePermission(
+          perm.agent_id,
+          agent.name,
+          agent.prompt,
+          agent.supervisor_instructions,
+          perm.tool_name,
+          perm.tool_input,
+          credEnv.env
+        );
+
+        await deps.resolvePermission(perm.id, decision.decision, decision.answer);
+        actions.push({
+          agentId: perm.agent_id,
+          type: "supervisor_permission",
+          detail: `Supervisor ${decision.decision} ${perm.tool_name}: ${(decision.answer || "").substring(0, 100)}`,
+        });
+        logger.info(
+          { agentId: perm.agent_id, tool: perm.tool_name, decision: decision.decision },
+          "Supervisor resolved permission"
+        );
+        continue;
+      } catch (err) {
+        logger.error({ agentId: perm.agent_id, err }, "Supervisor permission evaluation failed");
       }
-      // No supervisor instructions — notify user
+    }
+
+    // Couldn't (or wasn't allowed to) auto-resolve. Interactive tools are a
+    // conversation the agent can't progress without — flag those loudly;
+    // everything else gets the timeout finding once it's truly overdue.
+    if (interactive) {
       findings.push({
         agentId: perm.agent_id,
         type: "permission_needs_attention",
@@ -567,6 +581,10 @@ async function evaluatePermission(
       }).join("\n\n");
     } else if (toolName === "ExitPlanMode" && parsed.plan) {
       toolContext = `PLAN:\n${String(parsed.plan).substring(0, 2000)}`;
+    } else if (toolName === "Bash" && parsed.command) {
+      toolContext = `COMMAND:\n${String(parsed.command).substring(0, 1500)}${parsed.description ? `\nSTATED PURPOSE: ${parsed.description}` : ""}`;
+    } else {
+      toolContext = `INPUT:\n${JSON.stringify(parsed, null, 2).substring(0, 1500)}`;
     }
   } catch {
     toolContext = toolInputJson.substring(0, 1000);
@@ -593,7 +611,8 @@ Evaluate whether this plan aligns with the original task and supervisor instruct
   Then on the next line: ANSWER: <specific feedback on what to change>
 
 Respond with ONLY the DECISION and ANSWER lines.`
-    : `You are a supervisor managing an AI coding agent. The agent has asked a question and is waiting for user input, but the user hasn't responded.
+    : toolName === "AskUserQuestion"
+    ? `You are a supervisor managing an AI coding agent. The agent has asked a question and is waiting for user input, but the user hasn't responded.
 
 AGENT: "${agentName}"
 ORIGINAL TASK: ${originalPrompt.substring(0, 500)}
@@ -613,6 +632,32 @@ Then on the next line: ANSWER: <your answer to the question, picking the most ap
 
 If you genuinely cannot determine the right answer, respond with: DECISION: denied
 Then on the next line: ANSWER: <explain why this needs human attention>
+
+Respond with ONLY the DECISION and ANSWER lines.`
+    : `You are a supervisor managing an AI coding agent. The agent wants to use a tool that requires approval, and no human has responded. The agent cannot approve its own tool calls — you decide on the human's behalf.
+
+AGENT: "${agentName}"
+ORIGINAL TASK: ${originalPrompt.substring(0, 500)}
+
+SUPERVISOR INSTRUCTIONS:
+${instructions}
+
+RECENT AGENT OUTPUT:
+${recentMessages || "(no messages)"}
+
+REQUESTED TOOL: ${toolName}
+${toolContext}
+
+Approve only if the action clearly serves the original task and the supervisor instructions.
+DENY if it is destructive or irreversible beyond the task's evident scope (deleting data,
+force-pushing, wiping directories, dropping tables), touches credentials or secrets,
+targets systems unrelated to the task, or you cannot tell what it actually does.
+When in doubt, deny — a denied agent adapts; a bad approval can't be taken back.
+
+- To approve, respond with: DECISION: approved
+  Then on the next line: ANSWER: <optional note for the agent>
+- To deny, respond with: DECISION: denied
+  Then on the next line: ANSWER: <why, and what the agent should do instead>
 
 Respond with ONLY the DECISION and ANSWER lines.`;
 

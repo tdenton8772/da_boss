@@ -61,8 +61,14 @@ async function main(): Promise<void> {
         await createAgentPod(agentId, message);
       }
     },
-    // resolvePermission intentionally omitted — permission round-trips stay a
-    // human decision; those surface as "needs attention" findings instead.
+    // The requesting agent can't approve its own tool calls — the supervisor is
+    // the second set of eyes that can (gated in checks.ts on the agent having
+    // supervisor_instructions + a loaded credential). Resolution is just the DB
+    // row update: the blocked worker polls the row and continues within seconds.
+    resolvePermission: async (id, decision, answer) => {
+      await queries.resolvePermission(id, decision, answer);
+      return true;
+    },
 
     // Block a misbehaving agent: stop its pod and mark it paused (recoverable) so
     // a human can review. Same pod-delete authority as the budget pause.
