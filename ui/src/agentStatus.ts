@@ -78,10 +78,11 @@ export function deriveStatus(agent: {
     // An ACTIVE review beats a stale verdict (fix→re-review keeps the old
     // recommendation until the new review lands — show the live review).
     if (agent.reviewing) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
+    // Review DONE, verdict in hand — awaiting the human approval stage.
     switch (agent.recommendation) {
-      case "merge": return { key: "ready", label: "Ready: merge", color: "text-green-400" };
-      case "fix": return { key: "fix", label: "Review: fix", color: "text-amber-400" };
-      case "hold": return { key: "hold", label: "Review: hold", color: "text-amber-400" };
+      case "merge": return { key: "ready", label: "Reviewed · ready to merge", color: "text-green-400" };
+      case "fix": return { key: "fix", label: "Reviewed · fix requested", color: "text-amber-400" };
+      case "hold": return { key: "hold", label: "Reviewed · hold", color: "text-amber-400" };
     }
     // Open PR, no live reviewer, no verdict — waiting for a review, not in one.
     if (agent.pr_number) return { key: "needs_review", label: "Needs review", color: "text-amber-400" };

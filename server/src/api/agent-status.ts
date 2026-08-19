@@ -65,10 +65,13 @@ export function computeAgentStatus(a: StatusInputs): StatusView {
     // An ACTIVE review beats a stale verdict: after a fix→re-review cycle the old
     // recommendation lingers until the new review lands — show the live review.
     if (a.reviewing) return { key: "reviewing", label: "In review", color: "text-blue-400", spin: true };
+    // Review DONE, verdict in hand — the change now sits in the approval stage
+    // (the Reviews queue) waiting for a human to act on it. All three read
+    // "Reviewed" so the stage is obvious; the suffix carries the verdict.
     switch (a.recommendation) {
-      case "merge": return { key: "ready", label: "Ready: merge", color: "text-green-400" };
-      case "fix": return { key: "fix", label: "Review: fix", color: "text-amber-400" };
-      case "hold": return { key: "hold", label: "Review: hold", color: "text-amber-400" };
+      case "merge": return { key: "ready", label: "Reviewed · ready to merge", color: "text-green-400" };
+      case "fix": return { key: "fix", label: "Reviewed · fix requested", color: "text-amber-400" };
+      case "hold": return { key: "hold", label: "Reviewed · hold", color: "text-amber-400" };
     }
     // Open PR, no reviewer running, no verdict — the change is WAITING for a
     // review, not in one. Distinct from "In review" (spinner) on purpose.

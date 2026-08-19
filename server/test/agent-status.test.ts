@@ -17,10 +17,15 @@ describe("computeAgentStatus", () => {
     expect(computeAgentStatus({ state: "completed", landing: true, testing: true, recommendation: "merge" }).key).toBe("landing");
     // then a running test
     expect(computeAgentStatus({ state: "completed", testing: true, recommendation: "merge" }).key).toBe("testing");
-    // then the review recommendation
-    expect(computeAgentStatus({ state: "completed", recommendation: "merge" }).key).toBe("ready");
+    // then the review verdict — all three read as the "Reviewed" stage (the
+    // change is in the approval queue), suffixed with the verdict
+    const ready = computeAgentStatus({ state: "completed", recommendation: "merge" });
+    expect(ready.key).toBe("ready");
+    expect(ready.label).toMatch(/^Reviewed/);
     expect(computeAgentStatus({ state: "completed", recommendation: "fix" }).key).toBe("fix");
+    expect(computeAgentStatus({ state: "completed", recommendation: "fix" }).label).toMatch(/^Reviewed/);
     expect(computeAgentStatus({ state: "completed", recommendation: "hold" }).key).toBe("hold");
+    expect(computeAgentStatus({ state: "completed", recommendation: "hold" }).label).toMatch(/^Reviewed/);
     // nothing else = done
     expect(computeAgentStatus({ state: "completed" }).key).toBe("done");
   });
