@@ -53,6 +53,19 @@ export function resetAgentCooldown(agentId: string): void {
   supervisorActionCount.delete(agentId);
 }
 
+/** Minutes elapsed since a DB timestamp. The pg type parser (db/index.ts)
+ *  returns ISO strings that already end in "Z"; pg-mem in tests hands back Date
+ *  objects; only a zone-less string (the old SQLite format) needs "Z" appended.
+ *  Appending unconditionally produced "…ZZ" → Invalid Date → NaN, which made
+ *  every threshold comparison below silently false. */
+export function minutesSince(ts: string | Date, now: number): number {
+  const d =
+    ts instanceof Date
+      ? ts
+      : new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(ts) ? ts : ts + "Z");
+  return (now - d.getTime()) / 60_000;
+}
+
 /** What runChecks needs from its host. The boss supplies all of it; the
  *  standalone orchestrator pod supplies only the pod-translatable actions
  *  (getAgentsToPause/pauseAgent) and omits the Claude-powered ones — those paths
@@ -185,8 +198,7 @@ export async function runChecks(
   for (const agent of running) {
     const lastEvent = await queries.getLatestEventTime(agent.id);
     if (lastEvent) {
-      const elapsed = now - new Date(lastEvent + "Z").getTime();
-      const minutes = elapsed / 60_000;
+      const minutes = minutesSince(lastEvent, now);
 
       if (minutes > config.stuckThresholdMinutes) {
         findings.push({
@@ -207,8 +219,7 @@ export async function runChecks(
   // ── Check stale permission requests ───────────────────
   const pending = await queries.getPendingPermissions();
   for (const perm of pending) {
-    const elapsed = now - new Date(perm.created_at + "Z").getTime();
-    const minutes = elapsed / 60_000;
+    const minutes = minutesSince(perm.created_at, now);
 
     // Interactive tools (AskUserQuestion, ExitPlanMode): let supervisor handle after 5 min
     if (
@@ -340,8 +351,7 @@ export async function runChecks(
     const lastEvent = await queries.getLatestEventTime(agent.id);
     if (!lastEvent) continue;
 
-    const elapsed = now - new Date(lastEvent + "Z").getTime();
-    const minutes = elapsed / 60_000;
+    const minutes = minutesSince(lastEvent, now);
 
     // If agent has supervisor instructions and has been idle > 2 min, evaluate —
     // but only when a Claude credential is actually loaded (else the SDK call
