@@ -73,30 +73,78 @@ export class TokenBudgetManager {
   }
 
   /**
-   * Returns list of agent IDs that should be paused based on budget.
+   * Agents that should be paused, with WHY. Two tiers:
+   *  - GLOBAL fleet ceiling (budget_config daily): the priority ladder below.
+   *  - PER-USER caps (user override ?? config default; NULL = uncapped): each
+   *    user's spend on their OWN credential vs their own cap — one user's burn
+   *    never pauses another user's agents at this tier.
    */
-  async getAgentsToPause(): Promise<string[]> {
+  async getAgentsToPause(): Promise<Array<{ agentId: string; reason: string }>> {
     const status = await this.getStatus();
-    const toPause: string[] = [];
-
-    if (status.daily_percent < 90) return toPause;
+    const toPause = new Map<string, string>();
 
     const runningAgents = await queries.getAgentsByState("running");
 
-    for (const agent of runningAgents) {
-      if (status.daily_percent >= 110) {
-        // Emergency: pause all
-        toPause.push(agent.id);
-      } else if (status.daily_percent >= 100 && agent.priority !== "high") {
-        // Over budget: pause low + medium
-        toPause.push(agent.id);
-      } else if (status.daily_percent >= 90 && agent.priority === "low") {
-        // Approaching: pause low only
-        toPause.push(agent.id);
+    // ── Global fleet ceiling (priority ladder) ──
+    if (status.daily_percent >= 90) {
+      for (const agent of runningAgents) {
+        if (status.daily_percent >= 110) {
+          toPause.set(agent.id, `global daily budget emergency (${Math.round(status.daily_percent)}% of $${status.config.daily_budget_usd})`);
+        } else if (status.daily_percent >= 100 && agent.priority !== "high") {
+          toPause.set(agent.id, `global daily budget reached ($${status.config.daily_budget_usd})`);
+        } else if (status.daily_percent >= 90 && agent.priority === "low") {
+          toPause.set(agent.id, `approaching global daily budget (${Math.round(status.daily_percent)}% of $${status.config.daily_budget_usd})`);
+        }
       }
     }
 
-    return toPause;
+    // ── Per-user caps ──
+    const overrides = await queries.getUserBudgetOverrides();
+    const spend = new Map((await queries.getSpendByUser()).map((s) => [s.user_id, s]));
+    for (const u of overrides) {
+      const dailyCap = u.daily_budget_usd ?? status.config.user_daily_default_usd;
+      const monthlyCap = u.monthly_budget_usd ?? status.config.user_monthly_default_usd;
+      if (dailyCap == null && monthlyCap == null) continue;
+      const s = spend.get(u.id);
+      if (!s) continue;
+      let reason: string | null = null;
+      if (dailyCap != null && s.daily >= dailyCap) {
+        reason = `${u.email}'s daily budget reached ($${s.daily.toFixed(2)} of $${dailyCap})`;
+      } else if (monthlyCap != null && s.monthly >= monthlyCap) {
+        reason = `${u.email}'s monthly budget reached ($${s.monthly.toFixed(2)} of $${monthlyCap})`;
+      }
+      if (!reason) continue;
+      for (const agent of runningAgents) {
+        if (agent.created_by_user_id === u.id && !toPause.has(agent.id)) {
+          toPause.set(agent.id, reason);
+        }
+      }
+    }
+
+    return [...toPause.entries()].map(([agentId, reason]) => ({ agentId, reason }));
+  }
+
+  /** Admin view: every user's spend vs their effective caps. */
+  async getUserBudgets(): Promise<import("../types/token.js").UserBudget[]> {
+    const [config, overrides, spendRows] = await Promise.all([
+      queries.getBudgetConfig(),
+      queries.getUserBudgetOverrides(),
+      queries.getSpendByUser(),
+    ]);
+    const spend = new Map(spendRows.map((s) => [s.user_id, s]));
+    return overrides.map((u) => {
+      const s = spend.get(u.id);
+      return {
+        user_id: u.id,
+        email: u.email,
+        daily_spend_usd: s?.daily ?? 0,
+        monthly_spend_usd: s?.monthly ?? 0,
+        daily_budget_usd: u.daily_budget_usd,
+        monthly_budget_usd: u.monthly_budget_usd,
+        effective_daily_usd: u.daily_budget_usd ?? config.user_daily_default_usd,
+        effective_monthly_usd: u.monthly_budget_usd ?? config.user_monthly_default_usd,
+      };
+    });
   }
 
   async getStatus(): Promise<BudgetStatus> {

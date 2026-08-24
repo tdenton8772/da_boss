@@ -70,7 +70,10 @@ export function ControlBar({
   const showResume = !testing && ["paused", "completed", "failed"].includes(state);
   const showPause = state === "running" || state === "waiting_input";
   const showKill = ["running", "paused", "waiting_permission", "waiting_input"].includes(state);
-  const showInput = ["running", "waiting_input", "completed", "paused", "failed"].includes(state);
+  // Every non-terminal state takes input — the queue holds it and delivers on the
+  // next turn. Hiding the field in waiting_permission/queued left the page a
+  // dead-end ("waiting on input" with nowhere to type) when a pod died mid-ask.
+  const showInput = ["running", "waiting_input", "waiting_permission", "queued", "pending", "completed", "paused", "failed"].includes(state);
 
   return (
     <div className="space-y-3">

@@ -435,18 +435,56 @@ export async function getPermission(id: number): Promise<PermissionRequest | und
 
 export async function getBudgetConfig(): Promise<BudgetConfig> {
   const res = await getPool().query<BudgetConfig>(
-    "SELECT daily_budget_usd, monthly_budget_usd, updated_at FROM budget_config WHERE id = 1"
+    "SELECT daily_budget_usd, monthly_budget_usd, user_daily_default_usd, user_monthly_default_usd, updated_at FROM budget_config WHERE id = 1"
   );
   return res.rows[0];
 }
 
 export async function updateBudgetConfig(
   dailyBudgetUsd: number,
-  monthlyBudgetUsd: number
+  monthlyBudgetUsd: number,
+  userDailyDefaultUsd?: number | null,
+  userMonthlyDefaultUsd?: number | null
 ): Promise<void> {
   await getPool().query(
-    "UPDATE budget_config SET daily_budget_usd = $1, monthly_budget_usd = $2, updated_at = now() WHERE id = 1",
-    [dailyBudgetUsd, monthlyBudgetUsd]
+    `UPDATE budget_config SET daily_budget_usd = $1, monthly_budget_usd = $2,
+       user_daily_default_usd = $3, user_monthly_default_usd = $4, updated_at = now() WHERE id = 1`,
+    [dailyBudgetUsd, monthlyBudgetUsd, userDailyDefaultUsd ?? null, userMonthlyDefaultUsd ?? null]
+  );
+}
+
+/** Per-user spend (their agents' usage on their own credential): daily + monthly
+ *  in one pass. CASE (not FILTER) for pg-mem compatibility. */
+export async function getSpendByUser(): Promise<Array<{ user_id: string; daily: number; monthly: number }>> {
+  const res = await getPool().query<{ user_id: string; daily: number; monthly: number }>(
+    `SELECT a.created_by_user_id AS user_id,
+            COALESCE(SUM(CASE WHEN t.recorded_at >= $1 THEN t.cost_usd ELSE 0 END), 0)::double precision AS daily,
+            COALESCE(SUM(t.cost_usd), 0)::double precision AS monthly
+       FROM token_usage t
+       JOIN agents a ON a.id = t.agent_id
+      WHERE t.recorded_at >= $2 AND a.created_by_user_id IS NOT NULL
+      GROUP BY a.created_by_user_id`,
+    [startOfDayUtc(), startOfMonthUtc()]
+  );
+  return res.rows;
+}
+
+/** Users with their per-user budget overrides (NULL = inherit the default). */
+export async function getUserBudgetOverrides(): Promise<Array<{ id: string; email: string; daily_budget_usd: number | null; monthly_budget_usd: number | null }>> {
+  const res = await getPool().query<{ id: string; email: string; daily_budget_usd: number | null; monthly_budget_usd: number | null }>(
+    "SELECT id, email, daily_budget_usd, monthly_budget_usd FROM users"
+  );
+  return res.rows;
+}
+
+export async function updateUserBudget(
+  userId: string,
+  dailyBudgetUsd: number | null,
+  monthlyBudgetUsd: number | null
+): Promise<void> {
+  await getPool().query(
+    "UPDATE users SET daily_budget_usd = $2, monthly_budget_usd = $3 WHERE id = $1",
+    [userId, dailyBudgetUsd, monthlyBudgetUsd]
   );
 }
 

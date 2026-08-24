@@ -120,12 +120,14 @@ export const api = {
 
   // Budget
   getBudget: () => request<BudgetStatus>("/budget"),
-  updateBudget: (daily: number, monthly: number) =>
+  updateBudget: (daily: number, monthly: number, userDailyDefault?: number | null, userMonthlyDefault?: number | null) =>
     request<BudgetStatus>("/budget", {
       method: "PUT",
       body: JSON.stringify({
         daily_budget_usd: daily,
         monthly_budget_usd: monthly,
+        user_daily_default_usd: userDailyDefault ?? null,
+        user_monthly_default_usd: userMonthlyDefault ?? null,
       }),
     }),
 
@@ -485,7 +487,12 @@ export interface PermissionReq {
 }
 
 export interface BudgetStatus {
-  config: { daily_budget_usd: number; monthly_budget_usd: number };
+  config: {
+    daily_budget_usd: number;
+    monthly_budget_usd: number;
+    user_daily_default_usd: number | null;
+    user_monthly_default_usd: number | null;
+  };
   daily_spend_usd: number;
   monthly_spend_usd: number;
   daily_remaining_usd: number;

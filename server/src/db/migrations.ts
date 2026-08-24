@@ -620,6 +620,19 @@ const migrations: Migration[] = [
       ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS resolved_by TEXT;
     `,
   },
+  {
+    version: 35,
+    name: "per_user_budgets",
+    // Two-tier budgets: agents bill to the DISPATCHING user's own credential, so
+    // caps must exist per user (default in budget_config, per-user override on
+    // users) alongside the global fleet ceiling. NULL = uncapped at that tier.
+    up: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_budget_usd DOUBLE PRECISION;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_budget_usd DOUBLE PRECISION;
+      ALTER TABLE budget_config ADD COLUMN IF NOT EXISTS user_daily_default_usd DOUBLE PRECISION;
+      ALTER TABLE budget_config ADD COLUMN IF NOT EXISTS user_monthly_default_usd DOUBLE PRECISION;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {
