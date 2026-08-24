@@ -60,11 +60,12 @@ async function main(): Promise<void> {
   const budget = new TokenBudgetManager(new EventEmitter());
   const deps: SupervisorDeps = {
     getAgentsToPause: () => budget.getAgentsToPause(),
-    // pod-aware pause: stop the agent's pod (+ its cred secret) and mark it paused
-    pauseAgent: async (agentId) => {
+    // pod-aware pause: stop the agent's pod (+ its cred secret) and mark it paused,
+    // with WHICH budget tripped (global vs whose per-user cap) in the error message.
+    pauseAgent: async (agentId, reason) => {
       await deleteAgentPod(agentId);
       await queries.updateAgentState(agentId, "paused", {
-        error_message: "Paused by orchestrator (budget threshold)",
+        error_message: `Paused by orchestrator: ${reason || "budget threshold"}`,
       });
     },
     // Supervisor "continue" → resume the agent with the next instruction. In pod

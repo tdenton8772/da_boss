@@ -71,8 +71,8 @@ export function minutesSince(ts: string | Date, now: number): number {
  *  (getAgentsToPause/pauseAgent) and omits the Claude-powered ones — those paths
  *  degrade to "notify a human" when the dep is absent. */
 export interface SupervisorDeps {
-  getAgentsToPause(): Promise<string[]>;
-  pauseAgent(agentId: string): Promise<void>;
+  getAgentsToPause(): Promise<Array<{ agentId: string; reason: string }>>;
+  pauseAgent(agentId: string, reason?: string): Promise<void>;
   resolvePermission?(id: number, decision: "approved" | "denied", answer?: string): Promise<boolean>;
   sendInput?(agentId: string, message: string): Promise<void>;
   /** Stop a misbehaving agent (off-track / repeatedly ignoring advisories). */
@@ -296,21 +296,21 @@ export async function runChecks(
 
   // ── Check budget enforcement ──────────────────────────
   const toPause = await deps.getAgentsToPause();
-  for (const agentId of toPause) {
+  for (const { agentId, reason } of toPause) {
     const agent = await queries.getAgent(agentId);
     if (!agent) continue;
 
     try {
-      await deps.pauseAgent(agentId);
+      await deps.pauseAgent(agentId, reason);
       actions.push({
         agentId,
         type: "budget_pause",
-        detail: `Paused ${agent.priority} priority agent due to budget`,
+        detail: `Paused ${agent.priority} priority agent: ${reason}`,
       });
 
       await sendNotification(
         `Agent "${agent.name}" paused (budget)`,
-        `${agent.priority} priority agent paused due to daily budget threshold`,
+        reason,
         "high"
       );
     } catch (err) {

@@ -97,7 +97,7 @@ describe("TokenBudgetManager", () => {
       await queries.insertAgent({ ...agentBase, id: "ag_hi", priority: "high" as const, state: "running" as const });
       await queries.insertTokenUsage("ag_lo", 10000, 5000, 0, 0, 0.91);
 
-      const toPause = await budget.getAgentsToPause();
+      const toPause = (await budget.getAgentsToPause()).map((p) => p.agentId);
       expect(toPause).toContain("ag_lo");
       expect(toPause).not.toContain("ag_hi");
     });
@@ -109,7 +109,7 @@ describe("TokenBudgetManager", () => {
       await queries.insertAgent({ ...agentBase, id: "ag_hi2", priority: "high" as const, state: "running" as const });
       await queries.insertTokenUsage("ag_lo2", 10000, 5000, 0, 0, 1.01);
 
-      const toPause = await budget.getAgentsToPause();
+      const toPause = (await budget.getAgentsToPause()).map((p) => p.agentId);
       expect(toPause).toContain("ag_lo2");
       expect(toPause).toContain("ag_md");
       expect(toPause).not.toContain("ag_hi2");
@@ -121,9 +121,59 @@ describe("TokenBudgetManager", () => {
       await queries.insertAgent({ ...agentBase, id: "ag_e2", priority: "low" as const, state: "running" as const });
       await queries.insertTokenUsage("ag_e1", 10000, 5000, 0, 0, 1.11);
 
-      const toPause = await budget.getAgentsToPause();
+      const toPause = (await budget.getAgentsToPause()).map((p) => p.agentId);
       expect(toPause).toContain("ag_e1");
       expect(toPause).toContain("ag_e2");
+    });
+
+    it("per-user cap pauses ONLY that user's agents, with an attributed reason", async () => {
+      await queries.updateBudgetConfig(1000, 5000, 5, null); // roomy global; $5/day per-user default
+      await queries.createUser({ id: "usr_paul", email: "paul@x.io" });
+      await queries.createUser({ id: "usr_tyler", email: "tyler@x.io" });
+      await queries.insertAgent({ ...agentBase, id: "ag_paul1", created_by_user_id: "usr_paul" });
+      await queries.insertAgent({ ...agentBase, id: "ag_paul2", created_by_user_id: "usr_paul" });
+      await queries.insertAgent({ ...agentBase, id: "ag_ty", created_by_user_id: "usr_tyler" });
+      await queries.insertTokenUsage("ag_paul1", 1000, 500, 0, 0, 5.5); // Paul over his $5
+      await queries.insertTokenUsage("ag_ty", 1000, 500, 0, 0, 1.0); // Tyler well under
+
+      const toPause = await budget.getAgentsToPause();
+      const ids = toPause.map((p) => p.agentId);
+      expect(ids).toContain("ag_paul1");
+      expect(ids).toContain("ag_paul2"); // ALL of the over-cap user's running agents
+      expect(ids).not.toContain("ag_ty"); // another user's spend never pauses yours
+      expect(toPause.find((p) => p.agentId === "ag_paul1")!.reason).toMatch(/paul@x.io's daily budget/);
+    });
+
+    it("per-user override beats the default; NULL everywhere = uncapped", async () => {
+      await queries.updateBudgetConfig(1000, 5000, 5, null);
+      await queries.createUser({ id: "usr_vip", email: "vip@x.io" });
+      await queries.updateUserBudget("usr_vip", 50, null); // personal override above default
+      await queries.insertAgent({ ...agentBase, id: "ag_vip", created_by_user_id: "usr_vip" });
+      await queries.insertTokenUsage("ag_vip", 1000, 500, 0, 0, 7); // over $5 default, under $50 override
+
+      expect((await budget.getAgentsToPause()).map((p) => p.agentId)).not.toContain("ag_vip");
+
+      // no default + no override → uncapped regardless of spend (global kept far
+      // away so only the per-user tier is under test)
+      await queries.updateBudgetConfig(100000, 500000, null, null);
+      await queries.createUser({ id: "usr_free", email: "free@x.io" });
+      await queries.insertAgent({ ...agentBase, id: "ag_free", created_by_user_id: "usr_free" });
+      await queries.insertTokenUsage("ag_free", 1000, 500, 0, 0, 999);
+      expect((await budget.getAgentsToPause()).map((p) => p.agentId)).not.toContain("ag_free");
+    });
+
+    it("getUserBudgets reports spend vs effective caps", async () => {
+      await queries.updateBudgetConfig(1000, 5000, 10, 100);
+      await queries.createUser({ id: "usr_a", email: "a@x.io" });
+      await queries.updateUserBudget("usr_a", 25, null);
+      await queries.insertAgent({ ...agentBase, id: "ag_a1", created_by_user_id: "usr_a" });
+      await queries.insertTokenUsage("ag_a1", 1000, 500, 0, 0, 3);
+
+      const rows = await budget.getUserBudgets();
+      const a = rows.find((r) => r.user_id === "usr_a")!;
+      expect(a.daily_spend_usd).toBeCloseTo(3);
+      expect(a.effective_daily_usd).toBe(25); // override wins
+      expect(a.effective_monthly_usd).toBe(100); // default inherited
     });
   });
 

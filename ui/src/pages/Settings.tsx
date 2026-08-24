@@ -62,6 +62,9 @@ export function Settings() {
   // Budget form state
   const [dailyBudget, setDailyBudget] = useState("");
   const [monthlyBudget, setMonthlyBudget] = useState("");
+  // Per-user default caps ("" = disabled — users are uncapped unless overridden)
+  const [userDailyDefault, setUserDailyDefault] = useState("");
+  const [userMonthlyDefault, setUserMonthlyDefault] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -74,6 +77,8 @@ export function Settings() {
       setAuditEntries(auditData.entries || []);
       setDailyBudget(budgetData.config.daily_budget_usd.toString());
       setMonthlyBudget(budgetData.config.monthly_budget_usd.toString());
+      setUserDailyDefault(budgetData.config.user_daily_default_usd?.toString() ?? "");
+      setUserMonthlyDefault(budgetData.config.user_monthly_default_usd?.toString() ?? "");
       setLoading(false);
     }).catch((err) => {
       toast.error("Failed to load settings", err.message);
@@ -90,7 +95,13 @@ export function Settings() {
         toast.error("Invalid budget", "Budget values must be positive numbers");
         return;
       }
-      const updatedBudget = await api.updateBudget(daily, monthly);
+      const userDaily = userDailyDefault.trim() === "" ? null : parseFloat(userDailyDefault);
+      const userMonthly = userMonthlyDefault.trim() === "" ? null : parseFloat(userMonthlyDefault);
+      if ((userDaily !== null && (isNaN(userDaily) || userDaily <= 0)) || (userMonthly !== null && (isNaN(userMonthly) || userMonthly <= 0))) {
+        toast.error("Invalid per-user default", "Leave blank to disable, or use a positive number");
+        return;
+      }
+      const updatedBudget = await api.updateBudget(daily, monthly, userDaily, userMonthly);
       setBudget(updatedBudget);
       toast.success("Budget updated successfully");
     } catch (err: any) {
@@ -264,6 +275,36 @@ export function Settings() {
             />
             <div className="text-xs text-gray-600 mt-1">
               Current spend: ${budget.monthly_spend_usd.toFixed(2)} ({budget.monthly_percent.toFixed(1)}%)
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Per-user Daily Default (USD)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="blank = uncapped"
+              value={userDailyDefault}
+              onChange={(e) => setUserDailyDefault(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 focus:outline-none focus:border-blue-500"
+            />
+            <div className="text-xs text-gray-600 mt-1">
+              Each user's own spend vs their own cap — one user can't pause another
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Per-user Monthly Default (USD)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="blank = uncapped"
+              value={userMonthlyDefault}
+              onChange={(e) => setUserMonthlyDefault(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 focus:outline-none focus:border-blue-500"
+            />
+            <div className="text-xs text-gray-600 mt-1">
+              Admins can override per user via the user roster
             </div>
           </div>
         </div>

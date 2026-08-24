@@ -1543,9 +1543,11 @@ export function createRouter(manager: AgentManager): Router {
   });
 
   router.put("/api/budget", async (req, res) => {
-    const { daily_budget_usd, monthly_budget_usd } = req.body as {
+    const { daily_budget_usd, monthly_budget_usd, user_daily_default_usd, user_monthly_default_usd } = req.body as {
       daily_budget_usd?: number;
       monthly_budget_usd?: number;
+      user_daily_default_usd?: number | null;
+      user_monthly_default_usd?: number | null;
     };
     if (
       typeof daily_budget_usd !== "number" ||
@@ -1556,8 +1558,33 @@ export function createRouter(manager: AgentManager): Router {
       });
       return;
     }
-    await queries.updateBudgetConfig(daily_budget_usd, monthly_budget_usd);
+    const numOrNull = (v: unknown) => (typeof v === "number" && v > 0 ? v : null);
+    await queries.updateBudgetConfig(
+      daily_budget_usd,
+      monthly_budget_usd,
+      numOrNull(user_daily_default_usd),
+      numOrNull(user_monthly_default_usd)
+    );
     res.json(await manager.budgetManager.getStatus());
+  });
+
+  // Per-user budgets (each user's spend on their OWN credential vs their cap).
+  router.get("/api/admin/user-budgets", requireAdmin, async (_req, res) => {
+    res.json(await manager.budgetManager.getUserBudgets());
+  });
+
+  router.put("/api/admin/users/:id/budget", requireAdmin, async (req, res) => {
+    const userId = String(req.params.id);
+    const user = await queries.getUserById(userId);
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    const { daily_budget_usd, monthly_budget_usd } = req.body as {
+      daily_budget_usd?: number | null;
+      monthly_budget_usd?: number | null;
+    };
+    const numOrNull = (v: unknown) => (typeof v === "number" && v > 0 ? v : null);
+    await queries.updateUserBudget(userId, numOrNull(daily_budget_usd), numOrNull(monthly_budget_usd));
+    await queries.insertAuditLog(req.ip ?? null, "user.budget_updated", "user", userId, JSON.stringify(req.body).slice(0, 100), req.user?.userId);
+    res.json({ ok: true });
   });
 
   // ── Supervisor ────────────────────────────────────────
