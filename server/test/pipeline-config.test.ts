@@ -76,4 +76,18 @@ phases:
     expect(() => parsePipeline("phases: []\n")).toThrow(/phases must be a map/);
     expect(() => parsePipeline("phases: {}\n")).toThrow(/no phases/);
   });
+
+  it("parses agents.auto_approve_tools (repo-declared permission trust)", () => {
+    const p = parsePipeline(
+      "phases:\n  test:\n    command: pytest\nagents:\n  auto_approve_tools:\n    - mcp__odyssey-memory__search_knowledge_base\n    - mcp__schema-oracle__lookup\n"
+    );
+    expect(p.agents?.auto_approve_tools).toEqual([
+      "mcp__odyssey-memory__search_knowledge_base",
+      "mcp__schema-oracle__lookup",
+    ]);
+    // absent section stays undefined; malformed shapes are rejected loudly
+    expect(parsePipeline("phases:\n  test:\n    command: pytest\n").agents).toBeUndefined();
+    expect(() => parsePipeline("phases:\n  t:\n    command: x\nagents: [a]\n")).toThrow(/agents must be a mapping/);
+    expect(() => parsePipeline("phases:\n  t:\n    command: x\nagents:\n  auto_approve_tools: nope\n")).toThrow(/must be a list of strings/);
+  });
 });
