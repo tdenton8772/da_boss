@@ -77,13 +77,14 @@ describe("review-logic (pure)", () => {
   });
 
   it("decision trail: user messages amend the task in the review prompt", async () => {
+    const reviewed = await seedReviewed();
     const trail = "Owner ruling: the write tool IS intended scope.\n---\nAlso expose Slack.";
-    const cfg = buildReviewConfig(await seedReviewed(), "test passed", trail);
+    const cfg = buildReviewConfig(reviewed, "test passed", trail);
     expect(cfg.prompt).toContain("OWNER DECISIONS SINCE");
     expect(cfg.prompt).toContain("the write tool IS intended scope");
     expect(cfg.prompt).toContain("as amended");
     // and without a trail the section is absent entirely
-    const bare = buildReviewConfig(await seedReviewed(), "test passed");
+    const bare = buildReviewConfig(reviewed, "test passed");
     expect(bare.prompt).not.toContain("OWNER DECISIONS SINCE");
   });
 
