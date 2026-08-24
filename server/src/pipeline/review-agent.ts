@@ -11,7 +11,7 @@ import type { AgentRecord, CreateAgentRequest } from "../types/agent.js";
 import { resolveSupervisorCredentialEnv } from "../supervisor/credential.js";
 import { logger } from "../utils/logger.js";
 import { sendNotification } from "../notifications/ntfy.js";
-import { buildReviewConfig, gatherAssessment, extractVerdictFromText, type Verdict } from "./review-logic.js";
+import { buildReviewConfig, gatherAssessment, gatherDecisionTrail, extractVerdictFromText, type Verdict } from "./review-logic.js";
 
 const REVIEW_MODEL = "claude-sonnet-5";
 
@@ -65,7 +65,12 @@ export async function dispatchReviewAgent(
   const t = await queries.getLatestTestRunForAgent(reviewed.id);
   const testInfo = t ? `${t.phase} ${t.status}${t.exit_code !== null ? ` (exit ${t.exit_code})` : ""}` : "(no test result)";
 
-  const agent = await dispatcher.createAgent(buildReviewConfig(reviewed, testInfo), reviewed.created_by_user_id, null);
+  // The owner's amendment history (request-changes feedback, scope rulings) —
+  // fed to the reviewer so a re-review judges the task AS AMENDED instead of
+  // re-holding scope the owner already blessed against the day-one prompt.
+  const decisionTrail = gatherDecisionTrail(await queries.getAgentEvents(reviewed.id, 200));
+
+  const agent = await dispatcher.createAgent(buildReviewConfig(reviewed, testInfo, decisionTrail), reviewed.created_by_user_id, null);
   // Set review-of BEFORE starting the pod: the worker reads it at runtime to gate
   // itself read-only (never push). Ordering matters — do not reorder past start.
   await queries.setAgentReviewOf(agent.id, reviewed.id);
