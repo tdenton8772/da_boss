@@ -24,7 +24,24 @@ export function resolveReviewTarget(
   };
 }
 
-export function reviewPrompt(reviewed: AgentRecord, testInfo: string, untrusted: boolean): string {
+/** The owner's decision trail: every user message sent to the reviewed agent
+ *  (request-changes feedback, answers, scope rulings), oldest-first. This is the
+ *  running amendment history of the task — without it, every fresh reviewer
+ *  re-judges the branch against the day-one prompt and re-holds scope the owner
+ *  already blessed. Pure over the stored event list (newest-first). */
+export function gatherDecisionTrail(events: Array<{ type: string; data: unknown }>): string {
+  const msgs: string[] = [];
+  for (const e of events) {
+    if (e.type !== "message") continue;
+    const d = (typeof e.data === "string" ? JSON.parse(e.data) : e.data) as { role?: string; content?: unknown };
+    if (d.role !== "user" || typeof d.content !== "string" || !d.content.trim()) continue;
+    msgs.push(d.content.slice(0, 1500));
+    if (msgs.length >= 6) break;
+  }
+  return msgs.reverse().join("\n---\n").slice(0, 6000);
+}
+
+export function reviewPrompt(reviewed: AgentRecord, testInfo: string, untrusted: boolean, decisionTrail = ""): string {
   const base = reviewed.repo_ref || "main";
   return [
     `You are a SENIOR REVIEWER. Another da_boss agent made a change on this branch and its tests ran. Review it thoroughly and recommend what the human should do.`,
@@ -43,6 +60,13 @@ export function reviewPrompt(reviewed: AgentRecord, testInfo: string, untrusted:
     "",
     `ORIGINAL TASK (what the agent was asked to do):`,
     reviewed.prompt.slice(0, 4000),
+    ...(decisionTrail
+      ? [
+          "",
+          `OWNER DECISIONS SINCE (feedback and scope rulings sent to the agent — these AMEND the original task; judge the change against the task as amended, and do not flag scope blessed here as "unrequested"):`,
+          decisionTrail,
+        ]
+      : []),
     "",
     `TEST RESULT: ${testInfo}`,
     "",
@@ -58,11 +82,11 @@ export function reviewPrompt(reviewed: AgentRecord, testInfo: string, untrusted:
 
 /** The full create-request for a review agent. Pure, so every field that had a
  *  bug (repo_ref, permission_mode, the untrusted preamble) is directly assertable. */
-export function buildReviewConfig(reviewed: AgentRecord, testInfo: string): CreateAgentRequest {
+export function buildReviewConfig(reviewed: AgentRecord, testInfo: string, decisionTrail = ""): CreateAgentRequest {
   const { repoRef, untrusted } = resolveReviewTarget(reviewed);
   return {
     name: `review: ${reviewed.name}`.slice(0, 100),
-    prompt: reviewPrompt(reviewed, testInfo, untrusted),
+    prompt: reviewPrompt(reviewed, testInfo, untrusted, decisionTrail),
     cwd: "/work",
     repo_url: reviewed.repo_url ?? undefined,
     repo_ref: repoRef, // the branch / PR-head under review

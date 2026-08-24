@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as queries from "../src/db/queries.js";
 import {
-  resolveReviewTarget, buildReviewConfig, gatherAssessment, extractVerdictFromText,
+  resolveReviewTarget, buildReviewConfig, gatherAssessment, gatherDecisionTrail, extractVerdictFromText,
 } from "../src/pipeline/review-logic.js";
 import { dispatchReviewAgent, applyReviewResult, type ReviewDispatcher } from "../src/pipeline/review-agent.js";
 import type { AgentRecord, CreateAgentRequest } from "../src/types/agent.js";
@@ -74,6 +74,33 @@ describe("review-logic (pure)", () => {
   it("review pods are at least M — S (512Mi) OOMs under a repo's in-pod MCP servers", async () => {
     const cfg = buildReviewConfig(await seedReviewed(), "test passed");
     expect(cfg.size).toBe("m");
+  });
+
+  it("decision trail: user messages amend the task in the review prompt", async () => {
+    const trail = "Owner ruling: the write tool IS intended scope.\n---\nAlso expose Slack.";
+    const cfg = buildReviewConfig(await seedReviewed(), "test passed", trail);
+    expect(cfg.prompt).toContain("OWNER DECISIONS SINCE");
+    expect(cfg.prompt).toContain("the write tool IS intended scope");
+    expect(cfg.prompt).toContain("as amended");
+    // and without a trail the section is absent entirely
+    const bare = buildReviewConfig(await seedReviewed(), "test passed");
+    expect(bare.prompt).not.toContain("OWNER DECISIONS SINCE");
+  });
+
+  it("gatherDecisionTrail keeps only user messages, oldest-first, capped", () => {
+    const events = [
+      // stored newest-first, like getAgentEvents returns
+      { type: "message", data: JSON.stringify({ role: "user", content: "third ruling" }) },
+      { type: "message", data: JSON.stringify({ role: "assistant", content: "agent chatter" }) },
+      { type: "message", data: JSON.stringify({ role: "system", content: "↩️ requested changes" }) },
+      { type: "message", data: JSON.stringify({ role: "user", content: "second ruling" }) },
+      { type: "tool_use", data: JSON.stringify({ role: "user", content: "not a message" }) },
+      { type: "message", data: JSON.stringify({ role: "user", content: "first ruling" }) },
+    ];
+    const trail = gatherDecisionTrail(events);
+    expect(trail).toBe("first ruling\n---\nsecond ruling\n---\nthird ruling");
+    expect(trail).not.toContain("agent chatter");
+    expect(trail).not.toContain("requested changes");
   });
 
   it("verdict survives a long assessment (no 4000-char clip) and parses at the end", () => {
