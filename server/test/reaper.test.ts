@@ -13,8 +13,11 @@ async function mkAgent(id: string, state: string) {
     worker_image: null, adopted_ref: null, size: null,
   });
 }
+// A genuinely dead pod means no recent heartbeat AND no recent state change —
+// backdate both (the reaper's updated_at grace protects fresh intentional
+// transitions like a resume click whose new pod hasn't beat yet).
 const setHeartbeat = (id: string, iso: string | null) =>
-  getPool().query("UPDATE agents SET last_heartbeat_at = $1 WHERE id = $2", [iso, id]);
+  getPool().query("UPDATE agents SET last_heartbeat_at = $1, updated_at = COALESCE($1, updated_at) WHERE id = $2", [iso, id]);
 
 describe("heartbeat reaper — reconciles dead-pod agents by their sidecar heartbeat", () => {
   it("reconciles a running agent whose heartbeat went stale → paused", async () => {
@@ -31,6 +34,20 @@ describe("heartbeat reaper — reconciles dead-pod agents by their sidecar heart
     const reaped = await reconcileOrphanedAgents();
     expect(reaped).toContain("ag_wait");
     expect((await queries.getAgent("ag_wait"))!.state).toBe("paused");
+  });
+
+  it("grace: a FRESH state change with a stale heartbeat is NOT reaped (resume race)", async () => {
+    // The resume-click race: old pod's heartbeat is ancient, but the agent was
+    // JUST transitioned (updated_at = now) and its new pod hasn't beat yet.
+    // Reconciling here would undo the resume seconds after the click.
+    await mkAgent("ag_resumed", "waiting_input");
+    await getPool().query("UPDATE agents SET last_heartbeat_at = $1 WHERE id = $2", [
+      new Date(Date.now() - 90 * 60 * 1000).toISOString(), // heartbeat 90 min stale
+      "ag_resumed",
+    ]); // updated_at stays fresh (the insert/transition just happened)
+    const reaped = await reconcileOrphanedAgents();
+    expect(reaped).not.toContain("ag_resumed");
+    expect((await queries.getAgent("ag_resumed"))!.state).toBe("waiting_input");
   });
 
   it("leaves a running agent with a FRESH heartbeat alone (pod alive)", async () => {

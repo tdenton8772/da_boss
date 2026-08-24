@@ -189,8 +189,26 @@ export class AgentManager {
       throw new Error("Cannot resume agent without a session ID");
     }
 
-    // Just mark as waiting_input — no process starts until user sends a message.
-    // This matches terminal behavior: resume loads the session, shows the prompt.
+    // Pod mode: resume = CONTINUE WORKING — dispatch a pod that resumes the
+    // session. The old "flip to waiting_input until the user types" behavior left
+    // a pod-less agent whose stale heartbeat the reaper (rightly) re-paused within
+    // seconds, so Resume clicks silently undid themselves. Answers recorded while
+    // the pod was down (a question resolved after it died) ride along in the
+    // prompt instead of being silently lost.
+    if (config.agentExecution === "pod") {
+      const answers = await queries.getPermissionAnswersSinceHeartbeat(agentId);
+      let prompt = "You were paused and are now RESUMED. Pick up the task where you left off — re-read your recent context if needed.";
+      if (answers.length) {
+        prompt +=
+          "\n\nWhile you were paused, your pending question(s)/approval(s) were resolved:\n" +
+          answers.map((a) => `- [${a.tool_name} → ${a.status}] ${a.answer}`).join("\n");
+      }
+      await this.sendInput(agentId, prompt);
+      return;
+    }
+
+    // In-process mode: mark as waiting_input — no process starts until user sends
+    // a message. This matches terminal behavior: resume loads the session.
     await queries.updateAgentState(agentId, "waiting_input");
     this.eventBus.emit("server-event", {
       type: "agent:state_changed",

@@ -768,11 +768,34 @@ export async function updateAgentHeartbeat(agentId: string): Promise<void> {
  *  agents that beat at least once, so a pod still booting (no beat yet) and
  *  non-sidecar agents aren't flagged. This is the signal the reaper reconciles on. */
 export async function getStaleHeartbeatAgents(cutoffIso: string): Promise<AgentRecord[]> {
+  // updated_at grace: a state change NEWER than the cutoff is a fresh intentional
+  // action (a resume click, an input dispatch) whose pod may not have booted/beat
+  // yet — reconciling on the OLD pod's last heartbeat would undo it seconds later.
   const res = await getPool().query<AgentRecord>(
     `SELECT * FROM agents
        WHERE state IN ('running','waiting_permission','waiting_input')
-         AND last_heartbeat_at IS NOT NULL AND last_heartbeat_at < $1`,
+         AND last_heartbeat_at IS NOT NULL AND last_heartbeat_at < $1
+         AND updated_at < $1`,
     [cutoffIso]
+  );
+  return res.rows;
+}
+
+/** Permission resolutions the agent's pod never saw — resolved AFTER its last
+ *  heartbeat (i.e. after the pod died). Fed into the resume prompt so answers
+ *  given while an agent was down aren't silently lost. */
+export async function getPermissionAnswersSinceHeartbeat(
+  agentId: string
+): Promise<Array<{ tool_name: string; status: string; answer: string }>> {
+  const res = await getPool().query<{ tool_name: string; status: string; answer: string }>(
+    `SELECT p.tool_name, p.status, p.resolution_answer AS answer
+       FROM permission_requests p
+       JOIN agents a ON a.id = p.agent_id
+      WHERE p.agent_id = $1 AND p.status <> 'pending'
+        AND p.resolution_answer IS NOT NULL AND p.resolution_answer <> ''
+        AND (a.last_heartbeat_at IS NULL OR p.resolved_at > a.last_heartbeat_at)
+      ORDER BY p.resolved_at`,
+    [agentId]
   );
   return res.rows;
 }

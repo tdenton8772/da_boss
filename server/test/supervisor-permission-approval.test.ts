@@ -144,6 +144,25 @@ describe("supervisor resolves stale tool permissions (the second-agent approval)
     expect((await queries.getPermission(perm2.id))!.resolved_by).toBe("timeout");
   });
 
+  it("getPermissionAnswersSinceHeartbeat returns only answers the pod never saw", async () => {
+    await queries.insertAgent({ ...agentBase, id: "ag_res" });
+    const seen = await queries.insertPermissionRequest("ag_res", "AskUserQuestion", {}, "tu_seen");
+    await queries.resolvePermission(seen.id, "approved", "old answer the pod delivered", "usr_x");
+    const missed = await queries.insertPermissionRequest("ag_res", "AskUserQuestion", {}, "tu_missed");
+    await queries.resolvePermission(missed.id, "approved", "answer given while paused", "usr_x");
+    // pod's last heartbeat sits between the two resolutions
+    await getPool().query("UPDATE agents SET last_heartbeat_at = $1 WHERE id = 'ag_res'", [
+      new Date(Date.now() - 30 * 60_000).toISOString(),
+    ]);
+    await getPool().query("UPDATE permission_requests SET resolved_at = $1 WHERE id = $2", [
+      new Date(Date.now() - 60 * 60_000).toISOString(),
+      seen.id,
+    ]);
+
+    const answers = await queries.getPermissionAnswersSinceHeartbeat("ag_res");
+    expect(answers.map((a) => a.answer)).toEqual(["answer given while paused"]);
+  });
+
   it("falls through to permission_timeout when no credential is configured", async () => {
     // No designateSupervisorCredential() — credEnv.ok is false.
     await queries.insertAgent({ ...agentBase, id: "ag_nocred" });
