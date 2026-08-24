@@ -50,6 +50,48 @@ function userWorkspacePvcName(userId: string): string {
   return `daboss-ws-${rfc1123(userId)}`;
 }
 
+/** RWO co-location: a per-user workspace PVC can attach to only ONE node. If any
+ *  live pod (agent or cleanup) already mounts this PVC, every new pod for the
+ *  same user MUST land on that node — otherwise it deadlocks in Multi-Attach
+ *  ("Volume is already used by pod(s) …") and never starts. Returns the node
+ *  currently holding the volume, or null when nothing live mounts it (the
+ *  scheduler is free). Best-effort: on API error we fall back to scheduler luck,
+ *  which is exactly the pre-fix behavior. */
+async function nodeHoldingPvc(pvcName: string, excludePod?: string): Promise<string | null> {
+  try {
+    const pods = await api().listNamespacedPod({ namespace: NAMESPACE, labelSelector: "app in (daboss-agent, daboss-cleanup)" });
+    for (const p of pods.items || []) {
+      if (!p.spec?.nodeName) continue; // unscheduled pods don't hold an attachment
+      if (excludePod && p.metadata?.name === excludePod) continue;
+      const phase = p.status?.phase;
+      if (phase !== "Running" && phase !== "Pending") continue;
+      if ((p.spec.volumes || []).some((v) => v.persistentVolumeClaim?.claimName === pvcName)) {
+        return p.spec.nodeName;
+      }
+    }
+  } catch (err) {
+    logger.warn({ pvcName, err: err instanceof Error ? err.message : String(err) }, "PVC holder lookup failed — scheduling without co-location");
+  }
+  return null;
+}
+
+/** Required node affinity pinning a pod to the volume-holding node. Uses
+ *  nodeAffinity (not spec.nodeName) so the scheduler still enforces resource
+ *  fit — a full node surfaces as a clear Unschedulable event instead of a
+ *  silent Multi-Attach wedge. */
+function pinToNode(node: string | null): Pick<k8s.V1PodSpec, "affinity"> | Record<string, never> {
+  if (!node) return {};
+  return {
+    affinity: {
+      nodeAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: {
+          nodeSelectorTerms: [{ matchFields: [{ key: "metadata.name", operator: "In", values: [node] }] }],
+        },
+      },
+    },
+  };
+}
+
 /** Per-tenant shard: an RWO PVC per user, provisioned on first dispatch. The
  *  user's repo mirror + clones live here; their agents co-locate on its node
  *  (WaitForFirstConsumer). Persists across agents; never shared across users. */
@@ -246,6 +288,10 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     }
     await waitForPodGone(name);
   }
+  // Land on the node already holding this user's RWO volume (if any) — see
+  // nodeHoldingPvc. Exclude our own name: a terminal leftover pod of THIS agent
+  // was just deleted above and mustn't pin us to its old node.
+  const volumeNode = await nodeHoldingPvc(wsPvc, name);
   const pod: k8s.V1Pod = {
     metadata: {
       name,
@@ -257,6 +303,7 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     },
     spec: {
       restartPolicy: "Never",
+      ...pinToNode(volumeNode),
       // Opt-in identity: a deploy-manager agent runs as the Workload-Identity deploy
       // SA so its gcloud/kubectl can drive a real deploy. Default agents omit this
       // (namespace default SA — no privileged k8s access from agent code).
@@ -431,6 +478,7 @@ export async function launchStateCleanupPod(agent: AgentRecord): Promise<boolean
   }
 
   const name = `daboss-cleanup-${rfc1123(agent.id)}`;
+  const volumeNode = await nodeHoldingPvc(pvc, name);
   const pod: k8s.V1Pod = {
     metadata: {
       name,
@@ -440,6 +488,7 @@ export async function launchStateCleanupPod(agent: AgentRecord): Promise<boolean
     },
     spec: {
       restartPolicy: "Never",
+      ...pinToNode(volumeNode),
       serviceAccountName: "daboss", // needs pods-delete RBAC to remove itself
       containers: [
         {
@@ -712,10 +761,26 @@ export async function reapFinishedAgentPods(): Promise<void> {
           const evs = await api().listNamespacedEvent({ namespace: NAMESPACE, fieldSelector: `involvedObject.name=${name}` }).catch(() => null);
           const volFail = (evs?.items || []).some((e) => e.reason === "FailedAttachVolume" || /AttachVolume\.Attach failed|Could not find disk|was not found/i.test(e.message || ""));
           if (volFail) {
-            logger.warn({ pod: name, agentId }, "Agent pod wedged on volume attach — recovering: recreate PVC + re-dispatch");
             const agent = await queries.getAgent(agentId).catch(() => null);
-            if (agent?.created_by_user_id) {
-              await api().deleteNamespacedPersistentVolumeClaim({ name: userWorkspacePvcName(agent.created_by_user_id), namespace: NAMESPACE }).catch(() => {});
+            const pvcName = agent?.created_by_user_id ? userWorkspacePvcName(agent.created_by_user_id) : null;
+            // Multi-Attach ≠ lost disk. If a SIBLING pod (another of this user's
+            // agents) legitimately holds the volume on a different node, the disk
+            // is fine — deleting the PVC would destroy the live sibling's
+            // workspace. Drop only the stuck pod and requeue: the dispatcher's
+            // co-location affinity lands the retry on the volume's node.
+            const holder = pvcName ? await nodeHoldingPvc(pvcName, name) : null;
+            if (holder) {
+              logger.warn({ pod: name, agentId, holder }, "Agent pod wedged on Multi-Attach (volume held by a sibling pod) — re-dispatching co-located");
+              await api().deleteNamespacedPod({ name, namespace: NAMESPACE, gracePeriodSeconds: 0 }).catch(() => {});
+              await deleteAgentCredSecret(agentId).catch(() => {});
+              await queries.insertAgentEvent(agentId, "message", { role: "system", content: "♻ Pod couldn't attach the workspace volume (held by another of your agents on a different node) — re-dispatching onto that node. Session history is intact." }).catch(() => {});
+              await queries.updateAgentState(agentId, "queued", {}).catch(() => {});
+              await queries.notifyAgentQueued(agentId).catch(() => {});
+              continue;
+            }
+            logger.warn({ pod: name, agentId }, "Agent pod wedged on volume attach — recovering: recreate PVC + re-dispatch");
+            if (pvcName) {
+              await api().deleteNamespacedPersistentVolumeClaim({ name: pvcName, namespace: NAMESPACE }).catch(() => {});
             }
             await api().deleteNamespacedPod({ name, namespace: NAMESPACE, gracePeriodSeconds: 0 }).catch(() => {});
             await deleteAgentCredSecret(agentId).catch(() => {});
