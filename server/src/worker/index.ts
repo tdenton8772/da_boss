@@ -30,6 +30,7 @@ import { config } from "../config.js";
 import { ensurePullRequest } from "../forge/github.js";
 import { loadProjectContext } from "./project-context.js";
 import { loadRepoMcpServers } from "./repo-mcp.js";
+import { parsePipeline } from "../pipeline/config.js";
 import type { AgentRecord } from "../types/agent.js";
 import { logger } from "../utils/logger.js";
 
@@ -410,6 +411,26 @@ async function main(): Promise<void> {
   const agentCwd = WORK_DIR;
   const policy: PermissionPolicy = (agent.permission_policy as PermissionPolicy) || "auto";
 
+  // Repo-declared auto-approve (pipeline.yaml `agents.auto_approve_tools`) — tools
+  // the repo trusts without a human round-trip (typically its own read-only MCP
+  // tools). NEVER for review agents: same trust gate as .mcp.json loading — a
+  // reviewer of untrusted code keeps every escalation.
+  const repoAutoApprove = new Set<string>();
+  if (!agent.review_of_agent_id) {
+    try {
+      const raw = await readFile(`${WORK_DIR}/.daboss/pipeline.yaml`, "utf8").catch(() => "");
+      if (raw.trim()) {
+        for (const t of parsePipeline(raw).agents?.auto_approve_tools ?? []) repoAutoApprove.add(t);
+      }
+    } catch { /* repo config is best-effort — malformed yaml never blocks the agent */ }
+    if (repoAutoApprove.size) {
+      await queries.insertAgentEvent(AGENT_ID!, "message", {
+        role: "system",
+        content: `🔓 Repo auto-approves ${repoAutoApprove.size} tool(s) (pipeline.yaml agents.auto_approve_tools): ${[...repoAutoApprove].join(", ")}`,
+      }).catch(() => {});
+    }
+  }
+
   // ── Edit-time freeze-lease hook ───────────────────────────
   // Before the agent edits a NEW function, review the leases and acquire it —
   // blocking (enforce mode) if another agent already holds that function. This is
@@ -509,7 +530,7 @@ async function main(): Promise<void> {
     const gate = await leaseHook(toolName, toolInput);
     if (gate) return gate;
 
-    if (shouldAutoApprove(toolName, toolInput, agentCwd, policy)) {
+    if (repoAutoApprove.has(toolName) || shouldAutoApprove(toolName, toolInput, agentCwd, policy)) {
       return { behavior: "allow", updatedInput: toolInput };
     }
     // Plan approval: if the agent wrote its plan to a .claude/plans/*.md file and

@@ -65,9 +65,20 @@ export interface PipelinePhase {
   expose_to_agents?: boolean;
 }
 
+/** Repo-declared agent policy — the repo's side of the permission contract. */
+export interface AgentPolicy {
+  // Tool names agents may use on this repo WITHOUT a permission round-trip
+  // (e.g. the repo's own read-only MCP tools like a knowledge-base search).
+  // Repo-declared trust: whoever can merge to the repo already controls its
+  // pipeline commands and .mcp.json servers, so they may also mark tools safe.
+  // NEVER applied to review agents (same gate as .mcp.json loading).
+  auto_approve_tools?: string[];
+}
+
 export interface Pipeline {
   version?: number;
   phases: Record<string, PipelinePhase>;
+  agents?: AgentPolicy;
 }
 
 export const PIPELINE_PATH = ".daboss/pipeline.yaml";
@@ -115,7 +126,7 @@ function parseBuild(v: unknown, where: string): ImageBuild | undefined {
 export function parsePipeline(yamlText: string): Pipeline {
   const doc = parseYaml(yamlText) as unknown;
   if (typeof doc !== "object" || doc === null) throw new Error("pipeline must be a mapping");
-  const d = doc as { version?: unknown; phases?: unknown };
+  const d = doc as { version?: unknown; phases?: unknown; agents?: unknown };
   if (typeof d.phases !== "object" || d.phases === null || Array.isArray(d.phases)) {
     throw new Error("pipeline.phases must be a map of phase name → phase");
   }
@@ -185,5 +196,15 @@ export function parsePipeline(yamlText: string): Pipeline {
     }
   }
   if (!Object.keys(phases).length) throw new Error("pipeline has no phases");
-  return { version: typeof d.version === "number" ? d.version : undefined, phases };
+
+  let agents: AgentPolicy | undefined;
+  if (d.agents !== undefined) {
+    if (typeof d.agents !== "object" || d.agents === null || Array.isArray(d.agents)) {
+      throw new Error("pipeline.agents must be a mapping");
+    }
+    const a = d.agents as Record<string, unknown>;
+    agents = { auto_approve_tools: asStringArray(a.auto_approve_tools, "agents.auto_approve_tools") };
+  }
+
+  return { version: typeof d.version === "number" ? d.version : undefined, phases, agents };
 }

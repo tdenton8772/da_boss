@@ -9,6 +9,7 @@
  * Entrypoint: `node dist/orchestrator/index.js` (same image as the boss).
  */
 import { EventEmitter } from "node:events";
+import pg from "pg";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { runChecks, type SupervisorDeps } from "../supervisor/checks.js";
@@ -17,6 +18,20 @@ import { TokenBudgetManager } from "../tokens/budget.js";
 import { createAgentPod, deleteAgentPod } from "../agent/pod-dispatcher.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
+
+// One cycle at a time: a slow/hung Claude call must not let interval + listener
+// timers stack concurrent cycles (each would insert a supervisor_runs row and
+// queue on the Claude lock). Skipped ticks are fine — the next one catches up.
+let cycleInFlight = false;
+async function runGuarded(deps: SupervisorDeps): Promise<void> {
+  if (cycleInFlight) return;
+  cycleInFlight = true;
+  try {
+    await runOnce(deps);
+  } finally {
+    cycleInFlight = false;
+  }
+}
 
 async function runOnce(deps: SupervisorDeps): Promise<void> {
   // Borrow the designated admin's Claude credential for this cycle (fresh, so
@@ -92,11 +107,32 @@ async function main(): Promise<void> {
     "Orchestrator started"
   );
 
-  await runOnce(deps); // run once immediately on boot
-  const timer = setInterval(() => void runOnce(deps), intervalMs);
+  await runGuarded(deps); // run once immediately on boot
+  const timer = setInterval(() => void runGuarded(deps), intervalMs);
+
+  // Permission SLA: judge a stale request at ~5:00 pending, not "5 min + wherever
+  // the cron happens to be" (worst case was ~10). LISTEN for each new permission
+  // request and schedule a focused cycle exactly at its staleness deadline; the
+  // interval loop stays as the backstop if the listener connection drops.
+  const STALENESS_MS = 5 * 60_000 + 5_000; // checks.ts requires minutes > 5
+  const listener = new pg.Client({
+    connectionString: process.env.DATABASE_URL || "postgres://daboss:daboss@localhost:5432/daboss",
+  });
+  listener.on("error", (e) => logger.warn({ err: e.message }, "Permission listener connection error — interval loop remains the backstop"));
+  listener.on("notification", () => {
+    setTimeout(() => void runGuarded(deps), STALENESS_MS);
+  });
+  try {
+    await listener.connect();
+    await listener.query("LISTEN daboss_permission");
+    logger.info("Permission-deadline listener up (stale requests judged at ~5 min)");
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Permission listener failed to start — interval loop remains the backstop");
+  }
 
   const shutdown = async () => {
     clearInterval(timer);
+    await listener.end().catch(() => {});
     await closeDb();
     process.exit(0);
   };
