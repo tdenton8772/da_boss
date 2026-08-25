@@ -101,6 +101,29 @@ export async function applyReviewResult(reviewAgentId: string): Promise<void> {
   const reviewer = await queries.getAgent(reviewAgentId);
   if (!reviewer?.review_of_agent_id) return;
   const reviewedId = reviewer.review_of_agent_id;
+
+  // VERDICT PROVENANCE: only the review's own dispatch cycle may set a verdict.
+  // A reviewer that completes AGAIN later (e.g. a human messaged it after the
+  // review closed) must not overwrite anything. Observed live: mis-routed
+  // feedback made a reviewer implement the fixes itself, and its next
+  // completion ended with "RECOMMENDATION: merge" — a self-review, of code
+  // that wasn't even on the reviewed branch — which da_boss then applied.
+  // Only a DONE review is sealed. 'running' is the review's own cycle, and
+  // 'error' means it never delivered (dead reviewer interrupted mid-review) —
+  // a resumed reviewer finishing that run IS the review's first real verdict.
+  const reviewRow = await queries.getReviewByReviewAgent(reviewAgentId);
+  if (reviewRow && reviewRow.status === "done") {
+    logger.warn(
+      { reviewAgentId, reviewedId, reviewStatus: reviewRow.status },
+      "Reviewer completed again after its review closed — verdict NOT applied"
+    );
+    await queries.insertAgentEvent(reviewedId, "message", {
+      role: "system",
+      content: "🚫 The reviewer produced further output AFTER its review closed — ignored. A verdict only counts from the review's own run; queue a fresh review for a new verdict.",
+    }).catch(() => {});
+    return;
+  }
+
   // Guard: only act once (the reviewed agent keeps its review after we set it).
   const already = await queries.getAgent(reviewedId);
   // (re-review after request-changes clears the recommendation, so this is safe)
