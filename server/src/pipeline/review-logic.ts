@@ -24,21 +24,22 @@ export function resolveReviewTarget(
   };
 }
 
-/** The owner's decision trail: every user message sent to the reviewed agent
- *  (request-changes feedback, answers, scope rulings), oldest-first. This is the
- *  running amendment history of the task — without it, every fresh reviewer
- *  re-judges the branch against the day-one prompt and re-holds scope the owner
- *  already blessed. Pure over the stored event list (newest-first). */
-export function gatherDecisionTrail(events: Array<{ type: string; data: unknown }>): string {
-  const msgs: string[] = [];
-  for (const e of events) {
-    if (e.type !== "message") continue;
-    const d = (typeof e.data === "string" ? JSON.parse(e.data) : e.data) as { role?: string; content?: unknown };
-    if (d.role !== "user" || typeof d.content !== "string" || !d.content.trim()) continue;
-    msgs.push(d.content.slice(0, 1500));
-    if (msgs.length >= 6) break;
-  }
-  return msgs.reverse().join("\n---\n").slice(0, 6000);
+/** Format the owner's decision trail (request-changes feedback, scope rulings)
+ *  from the newest-first user messages: oldest-first, per-message and total caps.
+ *  This is the running amendment history of the task — without it, every fresh
+ *  reviewer re-judges the branch against the day-one prompt and re-holds scope
+ *  the owner already blessed. The CALLER must source user messages with a
+ *  role-filtered query (queries.getUserMessages) — scanning "the last N events"
+ *  loses the trail entirely on a busy agent whose assistant/system chatter
+ *  pushes the owner's messages out of any bounded window (observed live). */
+export function formatDecisionTrail(userMessagesNewestFirst: string[]): string {
+  return userMessagesNewestFirst
+    .filter((m) => !!m && !!m.trim())
+    .slice(0, 6)
+    .map((m) => m.slice(0, 1500))
+    .reverse()
+    .join("\n---\n")
+    .slice(0, 6000);
 }
 
 export function reviewPrompt(reviewed: AgentRecord, testInfo: string, untrusted: boolean, decisionTrail = ""): string {

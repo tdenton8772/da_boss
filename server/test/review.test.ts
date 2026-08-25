@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as queries from "../src/db/queries.js";
 import {
-  resolveReviewTarget, buildReviewConfig, gatherAssessment, gatherDecisionTrail, extractVerdictFromText,
+  resolveReviewTarget, buildReviewConfig, gatherAssessment, formatDecisionTrail, extractVerdictFromText,
 } from "../src/pipeline/review-logic.js";
 import { dispatchReviewAgent, applyReviewResult, type ReviewDispatcher } from "../src/pipeline/review-agent.js";
 import type { AgentRecord, CreateAgentRequest } from "../src/types/agent.js";
@@ -88,20 +88,25 @@ describe("review-logic (pure)", () => {
     expect(bare.prompt).not.toContain("OWNER DECISIONS SINCE");
   });
 
-  it("gatherDecisionTrail keeps only user messages, oldest-first, capped", () => {
-    const events = [
-      // stored newest-first, like getAgentEvents returns
-      { type: "message", data: JSON.stringify({ role: "user", content: "third ruling" }) },
-      { type: "message", data: JSON.stringify({ role: "assistant", content: "agent chatter" }) },
-      { type: "message", data: JSON.stringify({ role: "system", content: "↩️ requested changes" }) },
-      { type: "message", data: JSON.stringify({ role: "user", content: "second ruling" }) },
-      { type: "tool_use", data: JSON.stringify({ role: "user", content: "not a message" }) },
-      { type: "message", data: JSON.stringify({ role: "user", content: "first ruling" }) },
-    ];
-    const trail = gatherDecisionTrail(events);
+  it("formatDecisionTrail renders newest-first messages oldest-first, capped", () => {
+    const trail = formatDecisionTrail(["third ruling", "second ruling", "first ruling"]);
     expect(trail).toBe("first ruling\n---\nsecond ruling\n---\nthird ruling");
-    expect(trail).not.toContain("agent chatter");
-    expect(trail).not.toContain("requested changes");
+    expect(formatDecisionTrail([])).toBe("");
+    expect(formatDecisionTrail(["", "  ", "only real one"])).toBe("only real one");
+  });
+
+  it("getUserMessages survives an agent buried under hundreds of non-user events", async () => {
+    // Regression: the trail was sourced from a last-200-events scan; a busy
+    // rework's assistant/system chatter pushed the owner's rulings out of the
+    // window, the trail came up empty, and the reviewer re-litigated blessed
+    // scope. Role-filtered SQL cannot lose them.
+    await seedReviewed({ id: "ag_busy" });
+    await queries.insertAgentEvent("ag_busy", "message", { role: "user", content: "owner ruling: write tool IS in scope" });
+    for (let i = 0; i < 250; i++) {
+      await queries.insertAgentEvent("ag_busy", "message", { role: "assistant", content: `work update ${i}` });
+    }
+    const msgs = await queries.getUserMessages("ag_busy", 6);
+    expect(msgs).toEqual(["owner ruling: write tool IS in scope"]);
   });
 
   it("verdict survives a long assessment (no 4000-char clip) and parses at the end", () => {
