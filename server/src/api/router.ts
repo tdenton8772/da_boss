@@ -1516,6 +1516,29 @@ export function createRouter(manager: AgentManager): Router {
     res.json({ ok: true });
   });
 
+  // ── Recovery ──────────────────────────────────────────
+  // Force re-dispatch: requeue a wedged agent through the dispatcher — the same
+  // path the self-healing uses. Works regardless of HOW it wedged (dead pod,
+  // failed resume, stuck state): the dispatcher builds a fresh pod that resumes
+  // the session from the workspace shard. The recovery hammer.
+  router.post("/api/agents/:id/redispatch", async (req, res) => {
+    const agent = await queries.getAgent(String(req.params.id));
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (["running", "queued"].includes(agent.state)) {
+      res.status(409).json({ error: `Agent is ${agent.state} — kill it first if it's actually wedged` });
+      return;
+    }
+    await queries.updateAgentState(agent.id, "queued", { error_message: null });
+    await queries.insertAgentEvent(agent.id, "state_change", { from: agent.state, to: "queued" });
+    await queries.insertAgentEvent(agent.id, "message", {
+      role: "system",
+      content: `🔁 **${actorOf(req)}** force re-dispatched this agent (was ${agent.state}). A fresh pod will resume the session.`,
+    });
+    await queries.notifyAgentQueued(agent.id);
+    await queries.insertAuditLog(req.ip ?? null, "agent.redispatch", "agent", agent.id, `was ${agent.state}`, req.user?.userId);
+    res.json({ ok: true });
+  });
+
   // ── Permissions ───────────────────────────────────────
   router.get("/api/permissions/pending", async (_req, res) => {
     res.json(await queries.getPendingPermissions());

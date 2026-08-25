@@ -94,6 +94,8 @@ export const api = {
     request(`/agents/${id}/pause`, { method: "POST" }),
   resumeAgent: (id: string) =>
     request(`/agents/${id}/resume`, { method: "POST" }),
+  redispatchAgent: (id: string) =>
+    request(`/agents/${id}/redispatch`, { method: "POST" }),
   killAgent: (id: string) =>
     request(`/agents/${id}/kill`, { method: "POST" }),
   sendInput: (id: string, message: string) =>
