@@ -68,6 +68,9 @@ export function ControlBar({
   // which would otherwise show a finished-looking Resume. Suppress Resume and show
   // a Testing indicator instead so it doesn't read as done/idle.
   const showResume = !testing && ["paused", "completed", "failed"].includes(state);
+  // The recovery hammer: requeue through the dispatcher (same path the
+  // self-healing uses) — for agents wedged in ways Resume can't fix.
+  const showRedispatch = ["paused", "failed", "waiting_permission", "waiting_input", "aborted"].includes(state);
   const showPause = state === "running" || state === "waiting_input";
   const showKill = ["running", "paused", "waiting_permission", "waiting_input"].includes(state);
   // Every non-terminal state takes input — the queue holds it and delivers on the
@@ -105,6 +108,14 @@ export function ControlBar({
             label="Pause"
             onClick={() => exec(() => api.pauseAgent(agentId))}
             color="bg-yellow-700 hover:bg-yellow-600"
+          />
+        )}
+        {showRedispatch && (
+          <ActionButton
+            icon={<RotateCcw size={16} />}
+            label="Re-dispatch"
+            onClick={() => exec(() => api.redispatchAgent(agentId))}
+            color="bg-orange-800 hover:bg-orange-700"
           />
         )}
         {showKill && (

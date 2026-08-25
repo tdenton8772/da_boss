@@ -5,9 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import helmet from "helmet";
 import { config } from "./config.js";
-import { initDb, closeDb } from "./db/index.js";
+import { initDb, closeDb, getPool } from "./db/index.js";
 import { AgentManager } from "./agent/manager.js";
 import { createRouter } from "./api/router.js";
 import { createDiscoveryRouter } from "./api/discovery.js";
@@ -55,8 +56,12 @@ async function main() {
   );
 
   app.use(express.json({ limit: "1mb" }));
+  // Sessions live in Postgres, NOT memory — the in-memory store wiped every login
+  // on each deploy/restart, so clicks right after a rollout silently failed auth.
+  const PgSession = connectPgSimple(session);
   app.use(
     session({
+      store: new PgSession({ pool: getPool(), createTableIfMissing: true }),
       secret: config.sessionSecret,
       resave: false,
       saveUninitialized: false,
