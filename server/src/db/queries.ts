@@ -316,6 +316,19 @@ export async function getAgentEvents(
   return res.rows;
 }
 
+/** The newest USER messages sent to an agent (request-changes feedback, owner
+ *  rulings) — role-filtered in SQL so hundreds of assistant/system events can't
+ *  push the owner's decisions out of a bounded scan window. Newest first. */
+export async function getUserMessages(agentId: string, limit: number): Promise<string[]> {
+  const res = await getPool().query<{ content: string | null }>(
+    `SELECT data::jsonb->>'content' AS content FROM agent_events
+      WHERE agent_id = $1 AND type = 'message' AND data::jsonb->>'role' = 'user'
+      ORDER BY id DESC LIMIT $2`,
+    [agentId, limit]
+  );
+  return res.rows.map((r) => r.content ?? "").filter((c) => c.trim().length > 0);
+}
+
 export async function getLatestEventTime(agentId: string): Promise<string | null> {
   const res = await getPool().query<{ created_at: string }>(
     "SELECT created_at FROM agent_events WHERE agent_id = $1 ORDER BY id DESC LIMIT 1",

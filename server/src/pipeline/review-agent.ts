@@ -11,7 +11,7 @@ import type { AgentRecord, CreateAgentRequest } from "../types/agent.js";
 import { resolveSupervisorCredentialEnv } from "../supervisor/credential.js";
 import { logger } from "../utils/logger.js";
 import { sendNotification } from "../notifications/ntfy.js";
-import { buildReviewConfig, gatherAssessment, gatherDecisionTrail, extractVerdictFromText, type Verdict } from "./review-logic.js";
+import { buildReviewConfig, gatherAssessment, formatDecisionTrail, extractVerdictFromText, type Verdict } from "./review-logic.js";
 
 const REVIEW_MODEL = "claude-sonnet-5";
 
@@ -68,7 +68,10 @@ export async function dispatchReviewAgent(
   // The owner's amendment history (request-changes feedback, scope rulings) —
   // fed to the reviewer so a re-review judges the task AS AMENDED instead of
   // re-holding scope the owner already blessed against the day-one prompt.
-  const decisionTrail = gatherDecisionTrail(await queries.getAgentEvents(reviewed.id, 200));
+  // Role-filtered query, NOT an event-window scan: a busy rework buries the
+  // owner's messages under hundreds of events (bit us live — trail came up
+  // empty and the reviewer re-litigated already-blessed scope).
+  const decisionTrail = formatDecisionTrail(await queries.getUserMessages(reviewed.id, 6));
 
   const agent = await dispatcher.createAgent(buildReviewConfig(reviewed, testInfo, decisionTrail), reviewed.created_by_user_id, null);
   // Set review-of BEFORE starting the pod: the worker reads it at runtime to gate
