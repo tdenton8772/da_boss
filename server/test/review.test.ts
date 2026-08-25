@@ -164,6 +164,30 @@ describe("applyReviewResult", () => {
     expect(after!.review).toContain("exposes the DB");
   });
 
+  it("verdict provenance: a reviewer re-completing after its review closed changes NOTHING", async () => {
+    // Observed live: mis-routed feedback made a reviewer implement fixes itself,
+    // then its next completion ended "RECOMMENDATION: merge" — a self-review of
+    // code not on the branch — and da_boss applied it. Only the review's own
+    // run may set a verdict.
+    const reviewed = await seedReviewed({ id: "ag_src" });
+    const { dispatcher } = makeFakeDispatcher();
+    const revId = await dispatchReviewAgent(dispatcher, reviewed);
+    await queries.insertAgentEvent(revId!, "message", {
+      role: "assistant", content: "Real review.\nRECOMMENDATION: hold\nASSESSMENT: needs a human",
+    });
+    await applyReviewResult(revId!); // closes the review row (status: done)
+
+    // Human messages the reviewer; it "completes" again ending with merge.
+    await queries.insertAgentEvent(revId!, "message", {
+      role: "assistant", content: "I fixed everything myself!\nRECOMMENDATION: merge\nASSESSMENT: ship it",
+    });
+    await applyReviewResult(revId!);
+
+    const after = await queries.getAgent("ag_src");
+    expect(after!.recommendation).toBe("hold"); // the real verdict survives
+    expect(after!.review).not.toContain("ship it");
+  });
+
   it("reviewer produced nothing → hold (the only real 'no verdict' case)", async () => {
     const reviewed = await seedReviewed({ id: "ag_src" });
     const { dispatcher } = makeFakeDispatcher();

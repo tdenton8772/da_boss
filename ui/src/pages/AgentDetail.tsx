@@ -335,14 +335,22 @@ export function AgentDetail() {
           <span className="text-blue-400/80">— {agent.recommendation ? "read the full in-depth review" : "watch it review the code live"} →</span>
         </Link>
       )}
-      {/* If THIS is a review agent, link back to what it's reviewing */}
+      {/* If THIS is a review agent: loud guard — feedback sent HERE goes to the
+          REVIEWER, not the working agent. A mis-routed request-changes once made
+          a reviewer implement the fixes itself and then self-review them. */}
       {agent.review_of_agent_id && (
-        <Link
-          to={`/agent/${agent.review_of_agent_id}`}
-          className="flex items-center gap-2 bg-gray-800/60 border border-gray-700 hover:border-gray-500 text-gray-300 rounded-lg px-4 py-2.5 mb-4 text-sm"
-        >
-          ← <span className="font-medium">Reviewing another agent's change</span> — back to it
-        </Link>
+        <div className="bg-amber-900/25 border border-amber-600/50 rounded-lg px-4 py-3 mb-4 text-sm">
+          <div className="flex items-center gap-2 text-amber-300 font-medium">
+            🔍 This is a REVIEW agent — it audits, it doesn't implement.
+          </div>
+          <div className="text-amber-200/80 mt-1">
+            Messages typed here go to the <em>reviewer</em> and won't reach the working
+            agent or count as a verdict. Change feedback belongs on{" "}
+            <Link to={`/agent/${agent.review_of_agent_id}`} className="underline font-medium text-amber-300">
+              the reviewed agent's page →
+            </Link>
+          </div>
+        </div>
       )}
       {/* Adopting an existing PR/branch — pushes onto it instead of creating one */}
       {agent.adopted_ref && (
