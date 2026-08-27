@@ -30,10 +30,13 @@ export function Reviews() {
     finally { setBusy(null); }
   };
 
-  const merge = (id: string, recommendation?: string | null) => {
+  const merge = (id: string, recommendation?: string | null, stagingValidated?: boolean) => {
     const flagged = recommendation === "hold" || recommendation === "fix";
-    if (flagged && !confirm(`⚠️ The review is ${recommendation?.toUpperCase()} — the reviewer flagged this change.\n\nMerge anyway? This will be recorded against you.`)) return;
-    act(id, () => api.mergeAgent(id, flagged).then((r) => { if (r?.landing) toast.info?.("Landing — rebasing on main + retesting"); }), "Merge started");
+    // A passed branch deploy AFTER the review = empirical validation → clean merge.
+    if (flagged && stagingValidated) {
+      if (!confirm(`The review is ${recommendation?.toUpperCase()}, but the branch was deployed to staging after the review and passed — you've validated it empirically.\n\nMerge?`)) return;
+    } else if (flagged && !confirm(`⚠️ The review is ${recommendation?.toUpperCase()} — the reviewer flagged this change.\n\nTip: deploy the branch to staging and verify it — a passed branch deploy unlocks a clean merge.\n\nMerge anyway? This will be recorded against you.`)) return;
+    act(id, () => api.mergeAgent(id, flagged && !stagingValidated).then((r) => { if (r?.landing) toast.info?.("Landing — rebasing on main + retesting"); }), "Merge started");
   };
   const requestChanges = (id: string) => {
     const fb = prompt("What changes should the agent make?");
@@ -109,12 +112,12 @@ export function Reviews() {
                   </div>
                   <div className="flex gap-2 shrink-0">
                     <button disabled={busy === c.id || c.landing}
-                      title={c.landing ? "A land is already in progress — rebasing on main + retesting before merge." : undefined}
-                      onClick={() => merge(c.id, c.recommendation)}
+                      title={c.landing ? "A land is already in progress — rebasing on main + retesting before merge." : c.staging_validated ? "Branch deployed to staging after the review and passed — merges cleanly." : undefined}
+                      onClick={() => merge(c.id, c.recommendation, c.staging_validated)}
                       className={`text-sm disabled:opacity-50 text-white rounded px-3 py-1.5 ${
-                        c.recommendation === "hold" || c.recommendation === "fix"
+                        (c.recommendation === "hold" || c.recommendation === "fix") && !c.staging_validated
                           ? "bg-amber-700 hover:bg-amber-600" : "bg-green-700 hover:bg-green-600"
-                      }`}>{c.landing ? "Landing…" : (c.recommendation === "hold" || c.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
+                      }`}>{c.landing ? "Landing…" : (c.recommendation === "hold" || c.recommendation === "fix") ? (c.staging_validated ? "Merge (staging-validated)" : "Merge anyway") : "Merge PR"}</button>
                     <button disabled={busy === c.id || c.landing} onClick={() => requestChanges(c.id)}
                       className="text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded px-3 py-1.5">Request changes</button>
                   </div>

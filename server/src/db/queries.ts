@@ -1395,6 +1395,36 @@ export async function getAgentsWithActiveReview(): Promise<string[]> {
   return res.rows.map((r) => r.review_of_agent_id);
 }
 
+/** When the latest DONE review of this agent completed — the "since" anchor for
+ *  staging validation (a branch deploy only counts if it happened AFTER the
+ *  review that flagged the change). NULL if no completed review row exists. */
+export async function getLatestReviewCompletedAt(reviewedAgentId: string): Promise<string | null> {
+  const res = await getPool().query<{ completed_at: string | null }>(
+    "SELECT completed_at FROM reviews WHERE reviewed_agent_id = $1 AND status = 'done' ORDER BY created_at DESC LIMIT 1",
+    [reviewedAgentId]
+  );
+  return res.rows[0]?.completed_at ?? null;
+}
+
+/** A PASSED branch deploy (deploy phase run on the branch itself) newer than
+ *  `sinceIso` — the owner shipped the branch to staging and watched it work
+ *  AFTER the review flagged it. Empirical validation that unlocks a clean
+ *  merge on a hold/fix verdict. */
+export async function hasPassedBranchDeploySince(
+  repoUrl: string,
+  branch: string,
+  sinceIso: string | null
+): Promise<boolean> {
+  const res = await getPool().query(
+    `SELECT 1 FROM pipeline_runs
+      WHERE repo_url = $1 AND git_ref = $2 AND phase = 'deploy' AND status = 'passed'
+        AND ($3::timestamptz IS NULL OR COALESCE(completed_at, created_at) > $3::timestamptz)
+      LIMIT 1`,
+    [repoUrl, branch, sinceIso]
+  );
+  return res.rows.length > 0;
+}
+
 export async function hasActiveReviewAgent(reviewedAgentId: string): Promise<boolean> {
   // Only a review that's still in flight blocks dispatching another. A COMPLETED (or
   // verified) review must NOT block a fresh one — otherwise, after the change is

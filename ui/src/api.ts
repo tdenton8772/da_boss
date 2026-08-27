@@ -234,6 +234,7 @@ export const api = {
         id: string; name: string; owner_email: string | null; repo_url: string | null;
         pr_number: number | null; pr_url: string | null; branch: string | null;
         recommendation: string | null; review: string | null; state: string; landing: boolean;
+        staging_validated?: boolean;
       }>;
       deploys: Array<{
         id: string; phase: string; repo_url: string | null; git_ref: string | null;
