@@ -551,13 +551,19 @@ export function createRouter(manager: AgentManager): Router {
     // A review agent actively working right now → "In review"; an open PR with no
     // live reviewer → "Needs review". Same signal the list endpoint batches.
     const reviewing = await queries.hasActiveReviewAgent(agent.id);
+    // Hold/fix + a PASSED branch deploy after the review = empirically validated
+    // on staging → the UI offers a clean merge instead of "Merge anyway".
+    const staging_validated =
+      (agent.recommendation === "hold" || agent.recommendation === "fix") && agent.repo_url && agent.branch
+        ? await queries.hasPassedBranchDeploySince(agent.repo_url, agent.branch, await queries.getLatestReviewCompletedAt(agent.id))
+        : false;
     // Deploy manifest: if this is a deploy agent, what it shipped.
     const shipped = await queries.getShippedAgents(agent.id);
     // THE canonical status — identical function + inputs to the list endpoint, so the
     // detail header and the dashboard card can never disagree.
     const status = computeAgentStatus({ ...agent, testing, landing, reviewing, deploy_status, deploy_agent_state });
     const is_deploy_agent = await queries.isDeployAgent(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, reviewing, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, reviewing, staging_validated, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
   });
 
   // Upload a file for the agent (screenshot, doc, etc.). Stored in PG; the worker
@@ -1160,24 +1166,42 @@ export function createRouter(manager: AgentManager): Router {
     );
     if (landInFlight) { res.status(409).json({ error: "A land is already in progress for this PR — wait for it to finish." }); return; }
     // HOLD-merge guard: if the reviewer flagged this change (hold/fix), don't let it
-    // ship silently (a HOLD got merged on #13). Require an explicit override — the UI
-    // asks "merge anyway?", and the override is recorded against the actor.
+    // ship silently (a HOLD got merged on #13). Two clean exits: the owner DEPLOYED
+    // THE BRANCH to staging after the review and verified it does what they want
+    // (empirical validation — a hold mostly asks "a human should look"; watching it
+    // run IS looking), or an explicit override recorded against the actor.
     const rec = agent.recommendation;
     const override = (req.body as { override?: boolean })?.override === true;
-    if ((rec === "hold" || rec === "fix") && !override) {
+    const flagged = rec === "hold" || rec === "fix";
+    const validated =
+      flagged && agent.repo_url && agent.branch
+        ? await queries.hasPassedBranchDeploySince(
+            agent.repo_url,
+            agent.branch,
+            await queries.getLatestReviewCompletedAt(agent.id)
+          )
+        : false;
+    if (flagged && !override && !validated) {
       res.status(409).json({
-        error: `The review is ${rec.toUpperCase()} — the reviewer flagged this change. Merge anyway?`,
+        error: `The review is ${rec.toUpperCase()} — the reviewer flagged this change. Deploy the branch to staging and verify it (that unlocks a clean merge), or merge anyway?`,
         needsOverride: true,
         recommendation: rec,
       });
       return;
     }
-    const overrode = override && (rec === "hold" || rec === "fix");
+    const overrode = override && flagged && !validated;
     // Attribute the click in the visible trace (audit log records it too, below).
     await queries.insertAgentEvent(agent.id, "message", {
       role: "system",
-      content: `👤 **${actorOf(req)}** clicked Merge on PR #${agent.pr_number}${overrode ? ` — ⚠️ **overriding the ${rec!.toUpperCase()} review**` : ""} — landing (rebase on main + retest before merge).`,
+      content: `👤 **${actorOf(req)}** clicked Merge on PR #${agent.pr_number}${
+        validated && flagged
+          ? ` — ✅ **staging-validated** (branch deployed and verified after the ${rec!.toUpperCase()} review)`
+          : overrode
+          ? ` — ⚠️ **overriding the ${rec!.toUpperCase()} review**`
+          : ""
+      } — landing (rebase on main + retest before merge).`,
     });
+    if (validated && flagged) await queries.insertAuditLog(req.ip || null, "agent.merge_staging_validated", "agent", agent.id, `PR #${agent.pr_number} merged on ${rec!.toUpperCase()} after passed branch deploy, by ${actorOf(req)}`, req.user?.userId);
     if (overrode) await queries.insertAuditLog(req.ip || null, "agent.merge_override", "agent", agent.id, `PR #${agent.pr_number} merged past ${rec!.toUpperCase()} by ${actorOf(req)}`, req.user?.userId);
     try {
       const gc = await queries.getUserGitCredential(agent.created_by_user_id);
@@ -1264,7 +1288,19 @@ export function createRouter(manager: AgentManager): Router {
       queries.getReviewQueueChanges(),
       queries.getReviewQueueDeploys(),
     ]);
-    res.json({ changes, deploys });
+    // Empirical-validation flag: a hold/fix change whose branch was deployed to
+    // staging (and passed) AFTER the review merges cleanly — surface that so the
+    // queue offers a calm "Merge (staging-validated)" instead of "Merge anyway".
+    const enriched = await Promise.all(
+      changes.map(async (c) => ({
+        ...c,
+        staging_validated:
+          (c.recommendation === "hold" || c.recommendation === "fix") && c.repo_url && c.branch
+            ? await queries.hasPassedBranchDeploySince(c.repo_url, c.branch, await queries.getLatestReviewCompletedAt(c.id))
+            : false,
+      }))
+    );
+    res.json({ changes: enriched, deploys });
   });
   router.get("/api/pipeline/runs/:id", async (req, res) => {
     const run = await queries.getPipelineRun(req.params.id);

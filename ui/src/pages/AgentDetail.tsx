@@ -37,6 +37,7 @@ interface AgentData {
   total_cost_usd?: number;
   testing?: boolean;
   landing?: boolean;
+  staging_validated?: boolean;
   deploy_pending?: boolean;
   deploy_status?: string | null;
   deploy_agent_state?: string | null;
@@ -411,21 +412,28 @@ export function AgentDetail() {
                   title={agent.landing ? "A land is already in progress — rebasing on main + retesting before merge." : undefined}
                   onClick={() => {
                     // HOLD-merge guard: the reviewer flagged this — make the human pause.
+                    // Unless the branch was deployed to staging AFTER the review and
+                    // passed: watching it work IS the "human should look" the hold asked
+                    // for, so that merges cleanly with no override recorded.
                     const flagged = agent.recommendation === "hold" || agent.recommendation === "fix";
-                    if (flagged && !confirm(
-                      `⚠️ The review is ${agent.recommendation?.toUpperCase()} — the reviewer flagged this change (see the verdict below).\n\nMerge anyway? This will be recorded against you.`
+                    if (flagged && agent.staging_validated) {
+                      if (!confirm(
+                        `The review is ${agent.recommendation?.toUpperCase()}, but this branch was deployed to staging after the review and passed — you've validated it empirically.\n\nMerge?`
+                      )) return;
+                    } else if (flagged && !confirm(
+                      `⚠️ The review is ${agent.recommendation?.toUpperCase()} — the reviewer flagged this change (see the verdict below).\n\nTip: "Deploy branch → staging" and verify it — a passed branch deploy unlocks a clean merge.\n\nMerge anyway? This will be recorded against you.`
                     )) return;
                     setActionBusy(true);
-                    api.mergeAgent(agent.id, flagged)
+                    api.mergeAgent(agent.id, flagged && !agent.staging_validated)
                       .then((r) => { toast.success(r?.landing ? "Landing — rebasing on main + retesting before merge…" : "Merged"); refresh(); })
                       .catch((e) => toast.error(e instanceof Error ? e.message : "Merge failed"))
                       .finally(() => setActionBusy(false));
                   }}
                   className={`text-sm disabled:opacity-40 text-white rounded px-3 py-1.5 ${
-                    agent.recommendation === "hold" || agent.recommendation === "fix"
+                    (agent.recommendation === "hold" || agent.recommendation === "fix") && !agent.staging_validated
                       ? "bg-amber-700 hover:bg-amber-600" : "bg-green-700 hover:bg-green-600"
                   }`}
-                >{(actionBusy || agent.landing) ? "Landing…" : (agent.recommendation === "hold" || agent.recommendation === "fix") ? "Merge anyway" : "Merge PR"}</button>
+                >{(actionBusy || agent.landing) ? "Landing…" : (agent.recommendation === "hold" || agent.recommendation === "fix") ? (agent.staging_validated ? "Merge (staging-validated)" : "Merge anyway") : "Merge PR"}</button>
                 <button
                   disabled={actionBusy}
                   onClick={() => {
