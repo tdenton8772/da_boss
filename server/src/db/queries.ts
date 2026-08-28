@@ -482,6 +482,17 @@ export async function getSpendByUser(): Promise<Array<{ user_id: string; daily: 
   return res.rows;
 }
 
+/** Transfer an agent to a new owner. Future dispatches run on the NEW owner's
+ *  Claude credential + git token, mount THEIR workspace shard (so the session
+ *  transcript resets via the graceful fresh-resume path), and bill to them.
+ *  The agent's identity — events, PR, review verdicts, decision trail — stays. */
+export async function updateAgentOwner(agentId: string, newUserId: string): Promise<void> {
+  await getPool().query("UPDATE agents SET created_by_user_id = $2, updated_at = now() WHERE id = $1", [
+    agentId,
+    newUserId,
+  ]);
+}
+
 /** Users with their per-user budget overrides (NULL = inherit the default). */
 export async function getUserBudgetOverrides(): Promise<Array<{ id: string; email: string; daily_budget_usd: number | null; monthly_budget_usd: number | null }>> {
   const res = await getPool().query<{ id: string; email: string; daily_budget_usd: number | null; monthly_budget_usd: number | null }>(

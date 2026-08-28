@@ -1552,6 +1552,35 @@ export function createRouter(manager: AgentManager): Router {
     res.json({ ok: true });
   });
 
+  // Transfer ownership: continue a colleague's agent on YOUR credential (e.g.
+  // the owner hit their Claude usage limit). Admin-only; the target must have a
+  // Claude credential on file. The agent identity (events, PR, verdicts,
+  // decision trail) is preserved; the session transcript lives on the OLD
+  // owner's workspace shard, so the next dispatch fresh-resumes from the branch.
+  router.post("/api/agents/:id/transfer", requireAdmin, async (req, res) => {
+    const agent = await queries.getAgent(String(req.params.id));
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (["running", "queued"].includes(agent.state)) {
+      res.status(409).json({ error: `Agent is ${agent.state} — pause or kill it before transferring` });
+      return;
+    }
+    const newUserId = String((req.body as { user_id?: string })?.user_id || "");
+    const target = newUserId ? await queries.getUserById(newUserId) : null;
+    if (!target) { res.status(400).json({ error: "user_id of an existing user is required" }); return; }
+    if (!(await queries.getUserCredential(target.id))) {
+      res.status(400).json({ error: `${target.email} has no Claude credential on file — they must add one first` });
+      return;
+    }
+    const prevOwner = agent.created_by_user_id ? await queries.getUserById(agent.created_by_user_id) : null;
+    await queries.updateAgentOwner(agent.id, target.id);
+    await queries.insertAgentEvent(agent.id, "message", {
+      role: "system",
+      content: `👥 **${actorOf(req)}** transferred this agent from **${prevOwner?.email ?? agent.created_by_user_id ?? "unknown"}** to **${target.email}** — future turns run on ${target.email}'s credential and workspace. Session history will reset on next dispatch (committed branch work is intact).`,
+    });
+    await queries.insertAuditLog(req.ip ?? null, "agent.transfer", "agent", agent.id, `${prevOwner?.email ?? "?"} → ${target.email}`, req.user?.userId);
+    res.json({ ok: true, owner: target.email });
+  });
+
   // ── Recovery ──────────────────────────────────────────
   // Force re-dispatch: requeue a wedged agent through the dispatcher — the same
   // path the self-healing uses. Works regardless of HOW it wedged (dead pod,

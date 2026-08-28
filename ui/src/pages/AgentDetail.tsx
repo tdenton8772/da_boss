@@ -295,6 +295,33 @@ export function AgentDetail() {
               </select>
             </div>
           )}
+          {agent.state !== "running" && agent.state !== "queued" && (
+            <button
+              onClick={async () => {
+                // Continue a colleague's agent on YOUR credential (e.g. they hit
+                // their Claude limit). Admin-only server-side; keeps the agent's
+                // identity, resets session context on next dispatch.
+                try {
+                  const users = (await api.listUsers()).filter((u) => !!u.email);
+                  const email = prompt(
+                    `Transfer this agent to which user? (their credential + workspace take over; session context resets, branch work is intact)\n\nUsers: ${users.map((u) => u.email).join(", ")}`
+                  )?.trim();
+                  if (!email) return;
+                  const target = users.find((u) => u.email!.toLowerCase() === email.toLowerCase());
+                  if (!target) { toast.error("No user with that email"); return; }
+                  const r = await api.transferAgent(agent.id, target.id);
+                  toast.success(`Transferred to ${r.owner} — Resume to continue on their credential`);
+                  refresh();
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Transfer failed");
+                }
+              }}
+              className="mt-1 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded px-2 py-1"
+              title="Transfer ownership — future turns run on the new owner's Claude credential and workspace (admin only)."
+            >
+              👥 Transfer owner
+            </button>
+          )}
           {agent.repo_url && agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent && (
             <button
               onClick={() => {

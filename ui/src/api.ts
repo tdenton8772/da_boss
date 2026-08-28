@@ -96,6 +96,8 @@ export const api = {
     request(`/agents/${id}/resume`, { method: "POST" }),
   redispatchAgent: (id: string) =>
     request(`/agents/${id}/redispatch`, { method: "POST" }),
+  transferAgent: (id: string, userId: string) =>
+    request<{ ok: boolean; owner: string }>(`/agents/${id}/transfer`, { method: "POST", body: JSON.stringify({ user_id: userId }) }),
   killAgent: (id: string) =>
     request(`/agents/${id}/kill`, { method: "POST" }),
   sendInput: (id: string, message: string) =>
