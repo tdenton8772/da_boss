@@ -52,3 +52,28 @@ describe("getStalePipelineRuns", () => {
     expect(run?.completed_at).toBeTruthy();
   });
 });
+
+// Regression: the first cut of the sweep looked only for daboss-pipeline pods, so an
+// agent-managed deploy (`agent: true`) — which runs in a daboss-agent pod and carries
+// no daboss.run-id — looked pod-less and would have been aborted mid-deploy.
+describe("getAgentDrivenRunIds", () => {
+  it("reports the run a live agent is driving, so the sweep leaves it alone", async () => {
+    await queries.insertAgent({
+      id: "ag_deployer", name: "deploy main", prompt: "deploy", cwd: "/work",
+      state: "running", priority: "medium", permission_mode: "bypassPermissions",
+      sdk_session_id: null, model: "claude-sonnet-5", max_turns: 10, max_budget_usd: 5,
+      error_message: null, supervisor_instructions: "", permission_policy: "auto",
+    });
+    await queries.insertPipelineRun({ id: "run_deploy", repoUrl: "https://github.com/x/y", ref: "main", phase: "deploy", status: "running" });
+    await queries.setAgentPipelineRun("ag_deployer", "run_deploy");
+
+    // Stale by age, and no pipeline pod would ever carry its id.
+    expect((await queries.getStalePipelineRuns(future())).map((r) => r.id)).toContain("run_deploy");
+    // But the live agent claims it — that is what keeps the sweep off it.
+    expect(await queries.getAgentDrivenRunIds(["ag_deployer"])).toEqual(["run_deploy"]);
+  });
+
+  it("returns nothing when no agent is live", async () => {
+    expect(await queries.getAgentDrivenRunIds([])).toEqual([]);
+  });
+});
