@@ -114,8 +114,13 @@ export function CreateAgentForm({
     }
     setSubmitting(true);
     try {
+      // Name the payload from `adoption` directly, NOT from whatever setForm did.
+      // When the ref resolves here (typed a PR and hit Create without pressing
+      // Resolve), resolveAdopt's setForm has not been applied yet — reading
+      // form.name on this line would still see the template's "PR Adopter".
+      const adoptedName = adoption && isTemplateName(form.name) ? prAgentName(adoption) : "";
       const payload: CreateAgentData = adoption
-        ? { ...form, branch: adoption.branch, adopted_ref: adoption.adoptedRef }
+        ? { ...form, name: adoptedName || form.name, branch: adoption.branch, adopted_ref: adoption.adoptedRef }
         : form;
       const agent = (await api.createAgent(payload)) as { id: string };
       if (autoStart) {
