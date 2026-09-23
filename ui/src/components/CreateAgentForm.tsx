@@ -2,6 +2,18 @@ import { useState, useEffect } from "react";
 import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef } from "../api";
 import { X, GitBranch, Loader, CheckCircle } from "lucide-react";
 
+/** What to call an agent that adopts a PR. Every adoption used to land on the
+ *  dashboard as the template's own name, so a column of identical "PR Adopter"
+ *  rows gave you nothing to pick from — the PR's title is what you actually
+ *  recognize the work by. Truncated so it stays readable in a card. */
+const PR_NAME_MAX = 56;
+function prAgentName(r: ResolvedRef): string {
+  if (r.kind !== "pr" || !r.prTitle) return "";
+  const t = r.prTitle.trim();
+  const title = t.length > PR_NAME_MAX ? `${t.slice(0, PR_NAME_MAX - 1).trimEnd()}…` : t;
+  return `PR #${r.prNumber}: ${title}`;
+}
+
 export function CreateAgentForm({
   onCreated,
   onClose,
@@ -31,6 +43,13 @@ export function CreateAgentForm({
   const [adoptError, setAdoptError] = useState("");
   const [resolving, setResolving] = useState(false);
 
+  // A name is not yet "the user's" while it is blank or still a template's own
+  // default — only those get replaced by the PR title. Anything typed is left alone.
+  const isTemplateName = (name: string): boolean => {
+    const n = name.trim();
+    return !n || templates.some((t) => t.name === n);
+  };
+
   // Resolve the typed PR/branch reference against the remote. Returns the resolved
   // ref, or null (with adoptError set) if it doesn't validate. No-op when blank.
   const resolveAdopt = async (): Promise<ResolvedRef | null> => {
@@ -42,6 +61,9 @@ export function CreateAgentForm({
     try {
       const r = await api.resolveRef(form.repo_url.trim(), ref);
       setResolved(r);
+      // Name it after the PR — but never clobber a name the user made their own.
+      const prName = prAgentName(r);
+      if (prName) setForm((f) => (isTemplateName(f.name) ? { ...f, name: prName } : f));
       return r;
     } catch (err) {
       setResolved(null);
@@ -70,7 +92,9 @@ export function CreateAgentForm({
     setSelectedTemplate(template);
     setForm({
       ...form,
-      name: template.name,
+      // Picking the template after pasting the PR must not undo the PR name —
+      // people do it in either order.
+      name: (resolved && prAgentName(resolved)) || template.name,
       prompt: template.prompt,
       priority: template.priority,
       model: template.model,
