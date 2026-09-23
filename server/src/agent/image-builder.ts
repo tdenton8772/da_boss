@@ -28,6 +28,12 @@ const KANIKO_MEMORY = process.env.DABOSS_KANIKO_MEMORY || "4Gi";
 // and want real CPU — both configurable, with defaults sized for them.
 const KANIKO_CPU = process.env.DABOSS_KANIKO_CPU || "4";
 const BUILD_TIMEOUT_MS = Number(process.env.DABOSS_BUILD_TIMEOUT_MS) || 45 * 60 * 1000;
+// The registry existence check must never outlive the phase waiting on it. An
+// unbounded HEAD left the manifest probe hanging and the pipeline run sat at
+// `pending` forever — no pod, no error, no log (2026-09-23: it stalled PR #145's
+// land gate indefinitely). On timeout we fall through to "can't tell" → BUILD,
+// which is the safe direction.
+const REGISTRY_CHECK_TIMEOUT_MS = Number(process.env.DABOSS_REGISTRY_CHECK_TIMEOUT_MS) || 15 * 1000;
 
 let coreApi: k8s.CoreV1Api | null = null;
 function api(): k8s.CoreV1Api {
@@ -97,7 +103,7 @@ export async function imageExists(ref: string): Promise<boolean> {
       Accept: "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
     };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`https://${registry}/v2/${repository}/manifests/${encodeURIComponent(tag)}`, { method: "HEAD", headers });
+    const res = await fetch(`https://${registry}/v2/${repository}/manifests/${encodeURIComponent(tag)}`, { method: "HEAD", headers, signal: AbortSignal.timeout(REGISTRY_CHECK_TIMEOUT_MS) });
     if (res.status === 200) return true;
     if (res.status === 404) return false;
     logger.warn({ ref, status: res.status }, "Image existence check inconclusive — will build");
