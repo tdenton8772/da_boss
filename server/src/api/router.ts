@@ -1201,8 +1201,8 @@ export function createRouter(manager: AgentManager): Router {
           : ""
       } — landing (rebase on main + retest before merge).`,
     });
-    if (validated && flagged) await queries.insertAuditLog(req.ip || null, "agent.merge_staging_validated", "agent", agent.id, `PR #${agent.pr_number} merged on ${rec!.toUpperCase()} after passed branch deploy, by ${actorOf(req)}`, req.user?.userId);
-    if (overrode) await queries.insertAuditLog(req.ip || null, "agent.merge_override", "agent", agent.id, `PR #${agent.pr_number} merged past ${rec!.toUpperCase()} by ${actorOf(req)}`, req.user?.userId);
+    if (validated && flagged) await queries.insertAuditLog(req.ip || null, "agent.merge_staging_validated", "agent", agent.id, `PR #${agent.pr_number}: merge AUTHORIZED on ${rec!.toUpperCase()} (staging-validated) by ${actorOf(req)} — landing; the merge itself is recorded by agent.merge on success`, req.user?.userId);
+    if (overrode) await queries.insertAuditLog(req.ip || null, "agent.merge_override", "agent", agent.id, `PR #${agent.pr_number}: merge AUTHORIZED past ${rec!.toUpperCase()} by ${actorOf(req)} — landing; the merge itself is recorded by agent.merge on success`, req.user?.userId);
     try {
       const gc = await queries.getUserGitCredential(agent.created_by_user_id);
       if (!gc) { res.status(400).json({ error: "Owner has no git credential" }); return; }

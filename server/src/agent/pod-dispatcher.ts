@@ -33,6 +33,10 @@ function api(): k8s.CoreV1Api {
 }
 
 const WORKSPACE_SIZE = process.env.WORKSPACE_PVC_SIZE || "20Gi";
+// How long a pipeline run may sit non-terminal with no pod before it is treated as
+// orphaned. Generous on purpose: the row is written before the pod exists, and the
+// sweep additionally refuses to run while any kaniko build is in flight.
+const ORPHAN_RUN_GRACE_MS = Number(process.env.DABOSS_ORPHAN_RUN_GRACE_MS) || 15 * 60 * 1000;
 
 /** RFC1123 segment: lowercase alphanumeric + '-', NO leading/trailing '-'
  *  (a nanoid can end in '-'/'_', which would otherwise make an invalid name). */
@@ -718,6 +722,46 @@ export async function deleteUserWorkspacePvc(userId: string): Promise<void> {
   } catch (err: unknown) {
     const e = err as { code?: number; statusCode?: number };
     if (e.code !== 404 && e.statusCode !== 404) throw err;
+  }
+}
+
+/** Terminalize pipeline runs that have nothing driving them.
+ *
+ *  A run row is inserted before its pod exists, and the pod writes its own terminal
+ *  status from inside (pipeline/runner.ts + recorder.ts) — so a non-terminal run is
+ *  perfectly normal while its pod is alive, and a boss restart does NOT orphan one.
+ *  The orphan case is narrower: the boss-side launch died between the DB insert and
+ *  pod creation, leaving a row nothing will ever finish. There is no restore path for
+ *  pending runs, and `hasLandInFlight` counts them — so an orphaned land run wedges
+ *  that PR permanently, with both the Merge button and POST /merge answering 409 and
+ *  no in-product way to clear it (2026-09-23: an unbounded registry existence check
+ *  hung exactly there and stalled PR #145's land gate until the row was fixed by hand).
+ *
+ *  Reaped only when NO pipeline pod carries the run id and NO kaniko build is in
+ *  flight — a phase whose image is still baking legitimately has no pod yet, and
+ *  that bake can run for BUILD_TIMEOUT_MS. `aborted` is deliberate: gateTestBatch
+ *  acts only on passed/failed, so releasing the gate never fabricates a verdict. */
+export async function reapOrphanedPipelineRuns(): Promise<void> {
+  try {
+    const stale = await queries.getStalePipelineRuns(new Date(Date.now() - ORPHAN_RUN_GRACE_MS).toISOString());
+    if (stale.length === 0) return;
+    // Any build in flight → a pod-less run may just be waiting on its image. Skip
+    // the whole sweep rather than guess which run the build belongs to.
+    const builds = await api().listNamespacedPod({ namespace: NAMESPACE, labelSelector: "app=daboss-build" }).catch(() => null);
+    if (builds?.items?.length) return;
+    const pods = await api().listNamespacedPod({ namespace: NAMESPACE, labelSelector: "app=daboss-pipeline" });
+    const driven = new Set(pods.items.map((p) => p.metadata?.annotations?.["daboss.run-id"]).filter(Boolean) as string[]);
+    for (const run of stale) {
+      if (driven.has(run.id)) continue;
+      await queries.updatePipelineRun(run.id, {
+        status: "aborted",
+        log: "Orphaned: no pipeline pod and no build in flight. The boss-side launch died between the DB insert and pod creation, and nothing resumes a pending run — terminalized here so it stops reporting as work in progress and releases any land gate waiting on it.",
+        completed: true,
+      });
+      logger.warn({ runId: run.id, phase: run.phase, agentId: run.agent_id }, "Reaped orphaned pipeline run");
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Orphaned pipeline run sweep failed");
   }
 }
 
