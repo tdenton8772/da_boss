@@ -751,6 +751,14 @@ export async function reapOrphanedPipelineRuns(): Promise<void> {
     if (builds?.items?.length) return;
     const pods = await api().listNamespacedPod({ namespace: NAMESPACE, labelSelector: "app=daboss-pipeline" });
     const driven = new Set(pods.items.map((p) => p.metadata?.annotations?.["daboss.run-id"]).filter(Boolean) as string[]);
+    // An agent-managed phase (deploy with `agent: true`) runs in a daboss-agent pod
+    // and carries no daboss.run-id, so it looks pod-less from the pipeline side. Add
+    // the runs those live agents are driving, or the sweep aborts a running deploy.
+    const agentPods = await api().listNamespacedPod({ namespace: NAMESPACE, labelSelector: "app=daboss-agent" }).catch(() => null);
+    const liveAgentIds = (agentPods?.items || [])
+      .map((p) => p.metadata?.annotations?.["daboss.agent-id"])
+      .filter(Boolean) as string[];
+    for (const id of await queries.getAgentDrivenRunIds(liveAgentIds)) driven.add(id);
     for (const run of stale) {
       if (driven.has(run.id)) continue;
       await queries.updatePipelineRun(run.id, {

@@ -1594,6 +1594,23 @@ export async function hasLandInFlight(agentId: string): Promise<boolean> {
   return res.rows.length > 0;
 }
 
+/** The run each of these agents is currently driving. Agent-managed phases (a
+ *  deploy declaring `agent: true`) execute in a daboss-agent pod, NOT a
+ *  daboss-pipeline pod, so the orphan sweep would otherwise see no pod for a
+ *  perfectly healthy run and abort a live deploy mid-flight. */
+export async function getAgentDrivenRunIds(agentIds: string[]): Promise<string[]> {
+  if (agentIds.length === 0) return [];
+  // Numbered placeholders rather than `= ANY($1)`: still fully parameterized (the
+  // interpolation is generated $n markers, never caller data), and unlike ANY it
+  // behaves the same under pg-mem, which the offline test suite runs on.
+  const markers = agentIds.map((_, i) => `$${i + 1}`).join(", ");
+  const res = await getPool().query<{ pipeline_run_id: string }>(
+    `SELECT pipeline_run_id FROM agents WHERE id IN (${markers}) AND pipeline_run_id IS NOT NULL`,
+    agentIds
+  );
+  return res.rows.map((r) => r.pipeline_run_id);
+}
+
 /** Non-terminal runs created before `cutoffIso` — candidates for orphan reaping.
  *  A run row is inserted BEFORE its pod exists and the pod writes its own terminal
  *  status (pipeline/runner.ts + recorder.ts), so a young pending run is normal;
