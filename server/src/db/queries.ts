@@ -1594,6 +1594,18 @@ export async function hasLandInFlight(agentId: string): Promise<boolean> {
   return res.rows.length > 0;
 }
 
+/** Non-terminal runs created before `cutoffIso` — candidates for orphan reaping.
+ *  A run row is inserted BEFORE its pod exists and the pod writes its own terminal
+ *  status (pipeline/runner.ts + recorder.ts), so a young pending run is normal;
+ *  only an old one with nothing driving it is suspect. The caller decides that. */
+export async function getStalePipelineRuns(cutoffIso: string): Promise<PipelineRun[]> {
+  const res = await getPool().query<PipelineRun>(
+    "SELECT * FROM pipeline_runs WHERE status IN ('pending','running') AND created_at < $1 ORDER BY created_at",
+    [cutoffIso]
+  );
+  return res.rows;
+}
+
 export async function getPipelineRunsForAgent(agentId: string): Promise<PipelineRun[]> {
   const res = await getPool().query<PipelineRun>(
     "SELECT * FROM pipeline_runs WHERE agent_id = $1 ORDER BY created_at DESC",

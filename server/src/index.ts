@@ -15,7 +15,7 @@ import { createDiscoveryRouter } from "./api/discovery.js";
 import { createUsageRouter } from "./api/usage.js";
 import { setupWebSocket } from "./api/websocket.js";
 import { startSupervisor, stopSupervisor, runSupervisorOnce } from "./supervisor/index.js";
-import { reapFinishedAgentPods } from "./agent/pod-dispatcher.js";
+import { reapFinishedAgentPods, reapOrphanedPipelineRuns } from "./agent/pod-dispatcher.js";
 import { startLiveRelay } from "./api/live-relay.js";
 import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
@@ -127,6 +127,9 @@ async function main() {
   if (config.agentExecution === "pod") {
     logger.info("Agent execution: pod mode — supervisor runs in the orchestrator pod; starting agent-pod reaper");
     setInterval(() => { void reapFinishedAgentPods(); }, 10_000);
+    // Separate, slower cadence: this one reconciles DB rows against the cluster
+    // (a run whose pod never got created), not pods against their exit status.
+    setInterval(() => { void reapOrphanedPipelineRuns(); }, 60_000);
   } else {
     startSupervisor(manager);
   }

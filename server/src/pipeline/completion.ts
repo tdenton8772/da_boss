@@ -172,6 +172,12 @@ async function gateTestBatch(run: PipelineRun): Promise<void> {
           role: "system",
           content: `✅ Landed PR #${agent.pr_number} — rebased on main, all tests green (${summary}), squash-merged.`,
         });
+        // The ONLY audit row that means the PR actually merged. The click-time
+        // row records authorization, which is not the same event and can precede
+        // this one by a long way — or never be followed by it at all if the land
+        // gate blocks or stalls. userId stays null: this is the system acting on
+        // green, and the human who authorized it is already named on that row.
+        await queries.insertAuditLog(null, "agent.merge", "agent", agent.id, `PR #${agent.pr_number} merged — land gate green (${summary})`, null);
         logger.info({ prNumber: agent.pr_number }, "Landed PR after retest");
         await maybeProposeDeploy(agent);
       } else {
