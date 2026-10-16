@@ -122,6 +122,13 @@ describe("in-pod scripts", () => {
     expect(syncScript("b", c)).not.toContain("kill -TERM");
     expect(syncScript("b", { ...c, restart_on_sync: true })).toContain("kill -TERM");
   });
+  it("kills the app's whole process group in a form dash accepts, and waits for it", () => {
+    const s = syncScript("b", { ...c, restart_on_sync: true });
+    expect(s).toContain('kill -TERM "-$P"');
+    expect(s).not.toMatch(/kill -\w+ -- /); // dash: "Illegal number: -" → the old server survives
+    expect(s).toContain('kill -0 "-$P"');
+    expect(s).toContain('kill -KILL "-$P"');
+  });
 });
 
 describe("what the human gets", () => {
