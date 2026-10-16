@@ -58,7 +58,8 @@ How it's built — the parts worth keeping if you write your own config:
   gcloud layer sits *below* the app, so app changes never rebuild or re-push it.
 - **Push the `os` stage too** (`da-boss-os`). Repo agent images are built on it and
   keyed by its *layer digests*, which the cache keeps stable, so a da_boss deploy
-  doesn't rebuild them; the agent pod mounts da_boss's code from `WORKER_IMAGE` as
+  doesn't rebuild them (one that changes the `os` stage does — the boss pre-builds
+  them right after startup, so agents don't wait); the agent pod mounts da_boss's code from `WORKER_IMAGE` as
   a read-only image volume (needs Kubernetes ImageVolume — on by default in 1.35;
   leave `DABOSS_AGENT_BASE_IMAGE` unset on clusters without it).
 - **Static images are skipped when unchanged**: hash the Dockerfile and check for

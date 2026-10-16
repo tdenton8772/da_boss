@@ -18,6 +18,10 @@ export const config = {
   claudePath: process.env.CLAUDE_PATH || "claude",
   // "inprocess" = spawn claude as a child of the boss (host/dev).
   // "pod"       = dispatch each agent to its own k8s pod (in-cluster).
+  // Image agent pods run (the deployed worker), and da_boss's OS-only base that
+  // repos build agent toolchain images on — set → split layout (agent-image.ts).
+  workerImage: process.env.WORKER_IMAGE || "da-boss:local",
+  agentBaseImage: process.env.DABOSS_AGENT_BASE_IMAGE || "",
   agentExecution: (process.env.AGENT_EXECUTION || "inprocess") as "inprocess" | "pod",
   // Auto-run the test gate every time an agent completes a turn. OFF by default:
   // agents iterate freely, and a test cycle is queued ONLY on demand — the agent

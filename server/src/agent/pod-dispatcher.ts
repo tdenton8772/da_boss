@@ -18,11 +18,11 @@ import { parsePipeline, PIPELINE_PATH } from "../pipeline/config.js";
 import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
-const WORKER_IMAGE = process.env.WORKER_IMAGE || "da-boss:local";
+const WORKER_IMAGE = config.workerImage;
 // da_boss's OS-only base (the Dockerfile's `os` stage). Set → repo agent images
 // hold only the repo's toolchain and get da_boss's /app from WORKER_IMAGE as an
 // image volume, so a da_boss deploy doesn't rebuild them. See agent/agent-image.ts.
-const AGENT_BASE_IMAGE = process.env.DABOSS_AGENT_BASE_IMAGE || "";
+const AGENT_BASE_IMAGE = config.agentBaseImage;
 const APP_SECRET = process.env.APP_SECRET_NAME || "daboss-app";
 
 let coreApi: k8s.CoreV1Api | null = null;

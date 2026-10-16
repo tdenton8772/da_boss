@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 342 tests, 39 files (offline, pg-mem)
+npm run test         # 356 tests, 41 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -60,6 +60,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `agent/runner.ts` | Legacy in-process runner (dev only) — wraps SDK `query()`, host PID tracking |
 | `agent/image-builder.ts` | Kaniko in-cluster builds for pipeline `build:` images; single-flight, adopts in-flight pods |
 | `agent/agent-image.ts` | Self-provisioning agent images from repo `.daboss/agent.Dockerfile`; content-addressed tags; `daboss-hash-include`; toolchain flavors = build targets |
+| `agent/image-prewarm.ts` | Pre-builds active repos' toolchain images on boss startup (deploys) and when main-watch sees a repo's main move — the first agent after a change doesn't wait on the build |
 | `agent/sizing.ts` | T-shirt pod sizes s/m/l/xl; presets overridable via env + admin UI |
 | `agent/tool-policy.ts` | Shared safe/escalate tool policy (`auto`/`ask`/`strict`) — single source of truth for boss handler AND pod worker |
 | `agent/permissions.ts` | In-process `canUseTool` + permission resolution |
@@ -79,7 +80,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `leasing/freeze-set.ts` | Semantic blast radius: git diff + universal-ctags + git grep (edited fns + 1-hop callers) |
 | `orchestrator/index.ts` | Standalone supervisor pod entrypoint |
 | `supervisor/checks.ts` | Stuck/stale/budget checks, lease reclamation + overlap alerts, Claude eval of idle/completed agents (steer/block/notify), queue test cycles |
-| `supervisor/dispatcher.ts` | The dispatch queue: `LISTEN daboss_agent_queued` + fallback sweep, slot-limited, auto-sizes unsized agents via one Claude call |
+| `supervisor/dispatcher.ts` | The dispatch queue: `LISTEN daboss_agent_queued` + fallback sweep, slot-limited, auto-sizes unsized agents via one Claude call. Dispatches run **concurrently** (in-flight map counts against the cap) — one agent waiting on an image build never blocks the rest |
 | `supervisor/reaper.ts` | Heartbeat reaper (pod mode) — dead pods → paused, unsticks reviews |
 | `supervisor/credential.ts` | Headless Claude calls borrow a designated admin's vault credential; degrades to rules-only |
 | `forge/github.ts` / `sync-branch.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent |
