@@ -1763,6 +1763,14 @@ export async function getAgentFilesWithBytes(agentId: string): Promise<Array<{ n
   );
   return res.rows;
 }
+/** One uploaded file with its bytes (download / MCP read). */
+export async function getAgentFile(id: string, agentId: string): Promise<{ id: string; name: string; mime: string | null; size: number; bytes: Buffer } | undefined> {
+  const res = await getPool().query<{ id: string; name: string; mime: string | null; size: number; bytes: Buffer }>(
+    "SELECT id, name, mime, size, bytes FROM agent_files WHERE id=$1 AND agent_id=$2",
+    [id, agentId]
+  );
+  return res.rows[0];
+}
 export async function deleteAgentFile(id: string, agentId: string): Promise<void> {
   await getPool().query("DELETE FROM agent_files WHERE id=$1 AND agent_id=$2", [id, agentId]);
 }

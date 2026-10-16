@@ -338,10 +338,11 @@ export async function devEnvView(env: DevEnvRecord, agent: AgentRecord): Promise
     if (env.user_id) exclude = (await loadDevConfig(env.repo_url, await gitTokenFor(env.user_id))).sync_exclude;
   } catch { /* commands still work, just without the repo's excludes */ }
   const commands = commandsFor(env, exclude);
+  const files = (await queries.listAgentFiles(agent.id).catch(() => [])).map((f) => f.name);
   return {
     env,
     commands,
-    local_claude_prompt: localClaudePrompt({ agentId: agent.id, agentName: agent.name, repoUrl: env.repo_url, branch: env.branch, cmds: commands }),
+    local_claude_prompt: localClaudePrompt({ agentId: agent.id, agentName: agent.name, repoUrl: env.repo_url, branch: env.branch, cmds: commands, files }),
   };
 }
 

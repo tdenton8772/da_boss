@@ -362,6 +362,46 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     }
   );
 
+  // ── Files attached to a change (the UI's uploads) ──────────────────
+  server.registerTool(
+    "list_agent_files",
+    {
+      description: "List the files (screenshots, docs) a human uploaded to a change: id, name, type, size. Read one with read_agent_file. Requires 'agent:read'.",
+      inputSchema: { agent_id: z.string() },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "agent:read"); if (deny) return deny;
+      return asText((await queries.listAgentFiles(agent_id)).map((f) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size })));
+    }
+  );
+
+  server.registerTool(
+    "read_agent_file",
+    {
+      description: "Read a file uploaded to a change, by id or name (see list_agent_files). Images come back as images you can see; text as text; anything else as base64. Requires 'agent:read'.",
+      inputSchema: { agent_id: z.string(), file: z.string().describe("The file's id or exact name") },
+    },
+    async ({ agent_id, file }) => {
+      const deny = denyIfMissing(principal, "agent:read"); if (deny) return deny;
+      const meta = (await queries.listAgentFiles(agent_id)).find((f) => f.id === file || f.name === file);
+      if (!meta) return asError(`No file '${file}' on ${agent_id}.`);
+      const f = (await queries.getAgentFile(meta.id, agent_id))!;
+      if (f.size > 10 * 1024 * 1024) return asError(`${f.name} is ${Math.round(f.size / 1048576)} MB — too big to return here; download it from the change's page.`);
+      const mime = f.mime || "application/octet-stream";
+      if (mime.startsWith("image/")) {
+        return { content: [{ type: "image" as const, data: f.bytes.toString("base64"), mimeType: mime }, { type: "text" as const, text: f.name }] };
+      }
+      const looksText = /^text\/|json|xml|yaml|csv|javascript|markdown/.test(mime) || !f.bytes.subarray(0, 8000).includes(0);
+      if (looksText) return asText(`--- ${f.name} ---\n${f.bytes.toString("utf8")}`);
+      return {
+        content: [{
+          type: "resource" as const,
+          resource: { uri: `daboss://agents/${agent_id}/files/${f.id}`, mimeType: mime, blob: f.bytes.toString("base64") },
+        }],
+      };
+    }
+  );
+
   // ── Agent lifecycle + monitoring (parity with the UI) ──────────────
   server.registerTool(
     "list_models",

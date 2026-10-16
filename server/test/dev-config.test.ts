@@ -145,3 +145,18 @@ describe("what the human gets", () => {
     for (const tool of ["sync_dev_env", "handback_change", "stop_dev_env"]) expect(p).toContain(tool);
   });
 });
+
+describe("local-Claude prompt without MCP + with files", () => {
+  const cmds = devCommands({ name: "d", namespace: "n", port: 4000, branch: "feat/x", context: "c", syncExclude: [] });
+  it("falls back to asking the human to click when the MCP tools aren't connected", () => {
+    const p = localClaudePrompt({ agentId: "ag_1", agentName: "x", repoUrl: "r", branch: "feat/x", cmds });
+    expect(p).toMatch(/sync_dev_env.*if you have it; otherwise ask me to click \*\*Sync\*\*/s);
+    expect(p).toMatch(/handback_change.*otherwise ask me to click \*\*Hand back\*\*/s);
+    expect(p).not.toContain("Files attached");
+  });
+  it("lists the change's uploaded files and how to read them", () => {
+    const p = localClaudePrompt({ agentId: "ag_1", agentName: "x", repoUrl: "r", branch: "feat/x", cmds, files: ["bug.png", "spec.pdf"] });
+    expect(p).toContain("Files attached to the change (screenshots/docs): bug.png, spec.pdf");
+    expect(p).toContain("read_agent_file");
+  });
+});

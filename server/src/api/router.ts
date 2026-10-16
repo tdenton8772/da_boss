@@ -660,6 +660,20 @@ export function createRouter(manager: AgentManager): Router {
     res.json(await queries.listAgentFiles(req.params.id));
   });
 
+  // Download an uploaded file — how someone working on the change locally (no agent
+  // pod to receive /work/uploads) gets the screenshots/docs attached to it.
+  router.get("/api/agents/:id/files/:fileId/content", async (req, res) => {
+    const f = await queries.getAgentFile(req.params.fileId, req.params.id);
+    if (!f) { res.status(404).json({ error: "File not found" }); return; }
+    res.setHeader("Content-Type", f.mime || "application/octet-stream");
+    // ASCII fallback + RFC 5987 UTF-8 name: macOS screenshot names carry U+202F,
+    // which Node rejects in a plain header value.
+    const ascii = f.name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+    res.setHeader("Content-Disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(f.bytes);
+  });
+
   router.delete("/api/agents/:id/files/:fileId", async (req, res) => {
     await queries.deleteAgentFile(req.params.fileId, req.params.id);
     res.json({ ok: true });
