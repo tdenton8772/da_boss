@@ -20,12 +20,48 @@ gcloud artifacts repositories create daboss \
 ```
 
 ## 2. Build + push images (Cloud Build — amd64; do NOT local-buildx)
+
+Builds run on Cloud Build, never locally: GKE nodes are amd64, and cross-building
+on an arm Mac under QEMU is slow and corrupts caches. The build config,
+`cloudbuild.daboss.yaml` at the repo root, is **gitignored** because it names the
+real project and registry. Create yours from the shape below; its header comments
+are the full reference.
+
 ```bash
-export TAG=$(git rev-parse --short HEAD)
+export TAG=$(git rev-parse --short HEAD)    # commit + push first — the tag IS the commit
 gcloud builds submit --project=YOUR_PROJECT --config=cloudbuild.daboss.yaml \
   --substitutions=_TAG=$TAG
-# pushes  .../YOUR_PROJECT/daboss/da-boss:$TAG  and  .../daboss/elixir-test:1.18
 ```
+
+What one build produces (Artifact Registry `us-central1-docker.pkg.dev/YOUR_PROJECT/daboss`):
+
+| Image | Source | Used by |
+|---|---|---|
+| `da-boss:$TAG` | `Dockerfile`, target `runtime` | boss, orchestrator, and every agent pod (`WORKER_IMAGE`) |
+| `deploy-agent:$TAG` | `Dockerfile`, target `deploy-agent` (runtime + gcloud/kubectl) | deploy-manager agents (`DABOSS_DEPLOY_AGENT_IMAGE`) |
+| `elixir-test:1.18` | `images/elixir-test` | pipeline test phases; rebuilt only when its Dockerfile changes (tracked by a `src-<hash>` tag) |
+
+How it's built — the parts worth keeping if you write your own config:
+
+- **BuildKit with a registry cache.** Each Cloud Build runs on a fresh VM, so
+  nothing is cached unless the build brings it. The steps use `docker buildx` on a
+  `docker-container` builder with
+  `--cache-from/--cache-to type=registry,ref=…/buildcache:<target>,mode=max,image-manifest=true,oci-mediatypes=true`.
+  `mode=max` caches layers from every stage (npm ci, apt, gcloud), not only the
+  final one. A code-only change then reruns just tsc/vite and the final COPY, and
+  unchanged layers keep their digests, so the push skips them.
+  `image-manifest=true,oci-mediatypes=true` is what Artifact Registry needs to store
+  the cache.
+- **The two app images build in parallel** on one shared builder, so their common
+  stages (`build`, `proddeps`, `app`, `os`) are built once. In `deploy-agent` the
+  gcloud layer sits *below* the app, so app changes never rebuild or re-push it.
+- **Static images are skipped when unchanged**: hash the Dockerfile and check for
+  the `src-<hash>` tag with `docker buildx imagetools inspect` before building.
+- In `cloudbuild.yaml`, shell variables must be written `$$var`, because Cloud
+  Build treats `$var` as a substitution.
+
+Local (docker-desktop kind) builds stay a plain `docker build -t da-boss:<tag> .`,
+which builds the default `runtime` target.
 
 ## 3. Namespace + quota
 ```bash
@@ -128,6 +164,10 @@ just without the repo's declared toolchain).
   `daboss-elixir-test:1.18`). The `test` (workers) phase uses public python, no change.
 - Redeploys: bump `_TAG`, rebuild (step 2), re-`sed`+apply (step 6). `:latest`-style
   tags need `kubectl rollout restart deploy/daboss`.
+- **One tag, one apply.** `30-daboss.yaml` sets the boss image, the orchestrator
+  image, `WORKER_IMAGE` and `DABOSS_DEPLOY_AGENT_IMAGE` from the same `IMAGE_TAG`.
+  Never bump one by hand (`kubectl set image`, `kubectl set env`): the rest keep
+  running old worker code.
 - Deferred hardening: External Secrets, tainted worker node pool, Cloud SQL, Okta
   OIDC (set AUTH_MODE=oidc + provider config), GitHub App tokens, Workload Identity
   for the deploy phase.

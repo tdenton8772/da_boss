@@ -30,7 +30,11 @@ kubectl --context docker-desktop -n daboss port-forward svc/daboss 8080:3847 &
 
 **k8s-only:** don't run agent execution on the host — the in-process runner scans the host process table and can kill unrelated `claude` sessions. Inside a pod's PID namespace it can't. `AGENT_EXECUTION=pod` in cluster manifests.
 
-**WORKER_IMAGE drift gotcha:** `kubectl set image` updates only the boss container — agent pods launch from the `WORKER_IMAGE` env var, which stays stale. Update both together (the manifests keep them in sync; ad-hoc image bumps don't).
+**WORKER_IMAGE drift gotcha:** `kubectl set image` updates only the boss container — agent pods launch from the `WORKER_IMAGE` env var (deploy agents from `DABOSS_DEPLOY_AGENT_IMAGE`), which stay stale. Update all of them together (the manifests set them from one tag; ad-hoc image bumps don't).
+
+### GKE builds (Cloud Build)
+
+Images for GKE are built by Cloud Build (amd64), never local buildx, from the **gitignored** `cloudbuild.daboss.yaml` — usage, image list, and the BuildKit registry-cache setup are in `k8s/gke/RUNBOOK.md` §2. One `Dockerfile`, two targets: `runtime` (default, last stage — boss/orchestrator/agent pods) and `deploy-agent` (+ gcloud/kubectl). Keep `runtime` the last stage so a plain `docker build` still picks it.
 
 ## Architecture
 
