@@ -60,11 +60,13 @@ afterEach(() => {
 });
 
 describe("model validation", () => {
-  it("with a live catalog, accepts ids, aliases, and an alias's resolved id; rejects unknowns", () => {
+  it("accepts catalog ids, aliases, an alias's resolved id, and unlisted id-shaped models", () => {
     expect(validateModelChoice(live(), "opus", null)).toBeNull();
     expect(validateModelChoice(live(), "claude-opus-4-6", null)).toBeNull();
     expect(validateModelChoice(live(), "claude-sonnet-9", null)).toBeNull(); // what 'sonnet' resolves to
-    expect(validateModelChoice(live(), "claude-opus-1", null)).toMatch(/Unknown model/);
+    // The catalog is the supervisor's view — an unlisted pinned id may still work for the agent's owner.
+    expect(validateModelChoice(live(), "claude-sonnet-5", "high")).toBeNull();
+    expect(validateModelChoice(live(), "not a model!", null)).toMatch(/doesn't look like a model/);
   });
 
   it("checks effort against what the model supports", () => {
