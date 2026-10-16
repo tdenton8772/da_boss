@@ -165,6 +165,40 @@ builder shouldn't). If `DABOSS_BUILD_SERVICE_ACCOUNT` is unset or the grant is m
 kaniko can't push → da_boss falls back to the generic base image (agents still run,
 just without the repo's declared toolchain).
 
+## 12. Dev environments (optional)
+
+A repo that ships `.daboss/dev.yaml` can get per-change dev pods: da_boss runs the
+branch in the repo's own namespace (where its secrets, config and service account
+live), and the human port-forwards to it and works with their local Claude. da_boss
+needs, per app namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: daboss-dev-envs, namespace: YOUR_APP_NAMESPACE }
+rules:
+  - { apiGroups: ["apps"], resources: ["deployments"], verbs: ["get", "list", "create", "update", "delete"] }
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["get", "create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: daboss-dev-envs, namespace: YOUR_APP_NAMESPACE }
+subjects: [{ kind: ServiceAccount, name: daboss, namespace: daboss }]
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: daboss-dev-envs }
+```
+
+RBAC can't scope by name, so this covers every Deployment and pod in that namespace;
+da_boss only touches the `dev-*` Deployments it created. It gets no Secret access.
+Then set on the control plane (30-daboss.yaml):
+
+- `DABOSS_DEV_NAMESPACES=YOUR_APP_NAMESPACE` — the namespaces dev.yaml may target.
+- `DABOSS_DEV_KUBE_CONTEXT=<the kubectl context name your users have>` — so the
+  port-forward command da_boss shows is copy-paste exact (otherwise it shows `$CTX`).
+
+Users need their own kubectl access to the namespace to port-forward (and
+`pods/exec` to use the copy-files command).
+
 ## Notes / follow-ups
 - `test-web` phase image: on GKE point the app's `.daboss/pipeline.yaml` at
   `us-central1-docker.pkg.dev/YOUR_PROJECT/daboss/elixir-test:1.18` (not the local

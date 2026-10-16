@@ -644,6 +644,35 @@ const migrations: Migration[] = [
       ALTER TABLE agents ALTER COLUMN model DROP DEFAULT;
     `,
   },
+  {
+    version: 37,
+    name: "dev_envs",
+    // Dev environments (dev/dev-env.ts): a repo-declared pod (.daboss/dev.yaml)
+    // running a change's branch for local iteration. One live env per agent;
+    // stopped rows stay as history. expires_at moves on every sync/extend.
+    up: `
+      CREATE TABLE IF NOT EXISTS dev_envs (
+        id            TEXT PRIMARY KEY,
+        agent_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        user_id       TEXT,
+        repo_url      TEXT NOT NULL,
+        branch        TEXT NOT NULL,
+        namespace     TEXT NOT NULL,
+        name          TEXT NOT NULL,
+        image         TEXT,
+        port          INTEGER NOT NULL,
+        ttl_hours     DOUBLE PRECISION NOT NULL DEFAULT 8,
+        status        TEXT NOT NULL DEFAULT 'starting',
+        detail        TEXT,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at    TIMESTAMPTZ NOT NULL,
+        stopped_at    TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_dev_envs_agent ON dev_envs(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_dev_envs_status ON dev_envs(status);
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

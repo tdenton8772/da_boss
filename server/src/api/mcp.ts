@@ -19,6 +19,10 @@ import { runTestPhasesForAgent } from "../pipeline/service.js";
 import { resolveBearer } from "./tokens.js";
 import { checkAgentModelRequest, getModelCatalog, getModelDefaults, selectableModels, knownEffortLevels } from "../models.js";
 import { logger } from "../utils/logger.js";
+import {
+  startDevEnv, syncDevEnv, stopDevEnv, devEnvLogs, devEnvView, ensureRemoteBranch, DevEnvError,
+} from "../dev/dev-env.js";
+import { handbackChange } from "../dev/handback.js";
 
 /** Gate /mcp on a Bearer token with the `mcp` scope. Token-only (no sessions). */
 export function requireMcpAuth(req: Request, res: Response, next: NextFunction): void {
@@ -241,6 +245,120 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
         const e = err as { status?: number; message?: string };
         return asError(e.message || String(err));
       }
+    }
+  );
+
+  // ── Dev environments: work on a change locally, hand it back ──────
+  const devError = (err: unknown) =>
+    asError(err instanceof DevEnvError || err instanceof Error ? err.message : (err as { message?: string })?.message || String(err));
+  const actor = { userId: principal.userId, email: principal.email, name: principal.name };
+
+  server.registerTool(
+    "start_dev_env",
+    {
+      description:
+        "Start a DEV ENVIRONMENT for a change so you can work on it locally: a pod (declared by the repo's .daboss/dev.yaml) running the change's branch. " +
+        "Pass agent_id for an existing change, OR repo_url (+ branch to adopt an existing branch, or name to cut a new one) to create a local-work change with no agent run. " +
+        "Returns immediately while the pod provisions — poll get_dev_env until status is 'ready'; it returns the port-forward command for the human and how to sync code in. Requires 'agent:create'.",
+      inputSchema: {
+        agent_id: z.string().optional().describe("Existing change to develop."),
+        repo_url: z.string().optional().describe("Repo for a NEW local-work change (when no agent_id)."),
+        branch: z.string().optional().describe("Existing branch to adopt (with repo_url). Omit to cut a new branch from base_ref."),
+        name: z.string().optional().describe("Short name for a new change (used in a new branch's name)."),
+        base_ref: z.string().optional().describe("Base branch for a new change (default main)."),
+      },
+    },
+    async (args) => {
+      const deny = denyIfMissing(principal, "agent:create"); if (deny) return deny;
+      try {
+        let agent = args.agent_id ? await queries.getAgent(args.agent_id) : undefined;
+        if (args.agent_id && !agent) return asError(`No agent ${args.agent_id}`);
+        if (!agent) {
+          if (!args.repo_url) return asError("Pass agent_id, or repo_url for a new change.");
+          const branch = args.branch?.trim();
+          agent = await manager.createAgent(
+            {
+              name: args.name?.trim() || (branch ? branch.split("/").pop()! : "local work"),
+              prompt: "(local work — developed against a dev environment, no agent run)",
+              cwd: "/work",
+              repo_url: args.repo_url,
+              repo_ref: args.base_ref,
+              ...(branch ? { branch, adopted_ref: branch } : { branch_type: "feat" }),
+            },
+            principal.userId,
+            principal.email?.split("@")[0] ?? null
+          );
+          await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `💻 **${principal.email ?? "someone"}** is working on this change locally (dev environment, via MCP).` });
+        }
+        await ensureRemoteBranch(agent, principal.userId);
+        const env = await startDevEnv(agent, actor);
+        return asText({ agent_id: agent.id, ...(await devEnvView(env, agent)) });
+      } catch (err) { return devError(err); }
+    }
+  );
+
+  server.registerTool(
+    "get_dev_env",
+    {
+      description: "A change's dev environment: status (starting/ready/failed/stopped), progress detail, expiry, the exact port-forward command for the human, commands to copy local files into the pod, and optionally the app's recent log. Requires 'agent:read'.",
+      inputSchema: { agent_id: z.string(), logs: z.boolean().optional().describe("Include the last ~100 lines of the app's log.") },
+    },
+    async ({ agent_id, logs }) => {
+      const deny = denyIfMissing(principal, "agent:read"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      const env = await queries.getLiveDevEnvForAgent(agent_id);
+      if (!env) return asText({ status: "none", note: "No dev environment — call start_dev_env." });
+      const view = await devEnvView(env, agent);
+      const log = logs && env.status === "ready" ? await devEnvLogs(env, 100).catch((e) => `(log unavailable: ${e instanceof Error ? e.message : e})`) : undefined;
+      return asText({ ...view, ...(log !== undefined ? { log } : {}) });
+    }
+  );
+
+  server.registerTool(
+    "sync_dev_env",
+    {
+      description: "After you commit + push to the change's branch, pull those commits into the dev pod and run the repo's sync steps (the app reloads). Also extends the env's lifetime. For uncommitted iteration, use the copy commands from get_dev_env instead. Requires 'agent:control'.",
+      inputSchema: { agent_id: z.string() },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
+      const env = await queries.getLiveDevEnvForAgent(agent_id);
+      if (!env) return asError("No dev environment for this change.");
+      try { return asText(await syncDevEnv(env, principal.userId)); } catch (err) { return devError(err); }
+    }
+  );
+
+  server.registerTool(
+    "stop_dev_env",
+    {
+      description: "Tear down a change's dev environment (deletes its pod). Do this when the human is done with it — envs also expire on their own. Requires 'agent:control'.",
+      inputSchema: { agent_id: z.string() },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "agent:control"); if (deny) return deny;
+      const env = await queries.getLiveDevEnvForAgent(agent_id);
+      if (!env) return asText({ stopped: false, note: "No live dev environment." });
+      try {
+        await stopDevEnv(env, `stopped by ${principal.email ?? "MCP"}`);
+        return asText({ stopped: true });
+      } catch (err) { return devError(err); }
+    }
+  );
+
+  server.registerTool(
+    "handback_change",
+    {
+      description: "Hand a locally-developed change back to da_boss: push everything to the branch FIRST, then call this. da_boss opens/updates the PR, runs the repo's test gates and queues the review agent (poll get_verdict). The dev environment keeps running until stopped or expired. Requires 'review:create'.",
+      inputSchema: { agent_id: z.string() },
+    },
+    async ({ agent_id }) => {
+      const deny = denyIfMissing(principal, "review:create"); if (deny) return deny;
+      const agent = await queries.getAgent(agent_id);
+      if (!agent) return asError(`No agent ${agent_id}`);
+      try {
+        return asText(await handbackChange(manager, agent, { userId: principal.userId, label: principal.email ?? "MCP" }));
+      } catch (err) { return devError(err); }
     }
   );
 

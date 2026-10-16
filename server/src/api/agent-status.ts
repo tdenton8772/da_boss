@@ -26,9 +26,18 @@ export interface StatusInputs {
   deployed_by_agent_id?: string | null;
   deploy_agent_state?: string | null; // state of the deploy agent that claimed this change
   deploy_status?: string | null; // in-flight deploy gate for this repo/ref, pre-claim
+  dev_env?: string | null; // status of the change's live dev environment, if any
 }
 
 export function computeAgentStatus(a: StatusInputs): StatusView {
+  // Being worked on locally against a dev environment (no agent run in flight).
+  if (a.dev_env && ["pending", "paused"].includes(a.state)) {
+    return a.dev_env === "ready"
+      ? { key: "local_dev", label: "Local dev", color: "text-violet-400" }
+      : a.dev_env === "failed"
+        ? { key: "local_dev_failed", label: "Local dev · env failed", color: "text-red-400" }
+        : { key: "local_dev_starting", label: "Local dev · starting env", color: "text-violet-400", spin: true };
+  }
   switch (a.state) {
     case "pending": return { key: "pending", label: "Pending", color: "text-gray-400" };
     case "queued": return { key: "queued", label: "Queued — sizing", color: "text-sky-400", spin: true };

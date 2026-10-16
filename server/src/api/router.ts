@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import {
   checkAgentModelRequest, getModelCatalog, getModelDefaults, deploymentModelDefaults, refreshModelCatalog,
   selectableModels, knownEffortLevels, validateModelChoice, resolveRole,
@@ -32,6 +32,10 @@ import { getConfiguredPresets } from "../agent/sizing.js";
 import { getCipher } from "../crypto/cipher.js";
 import { config } from "../config.js";
 import { AGENT_TEMPLATES } from "../agent/templates.js";
+import {
+  startDevEnv, syncDevEnv, stopDevEnv, extendDevEnv, devEnvLogs, devEnvView, DevEnvError, ensureRemoteBranch,
+} from "../dev/dev-env.js";
+import { handbackChange } from "../dev/handback.js";
 
 const DEFAULT_REPO_URL_SETTING = "default_repo_url";
 const DEFAULT_REPO_REF_SETTING = "default_repo_ref";
@@ -417,6 +421,7 @@ export function createRouter(manager: AgentManager): Router {
       agents.map((a) => a.deployed_by_agent_id).filter((x): x is string => !!x)
     );
 
+    const devEnvs = new Map((await queries.getLiveDevEnvs()).map((e) => [e.agent_id, e.status] as const));
     const enriched = agents.map((a) => {
       const testingA = testing.has(a.id);
       const landingA = landing.has(a.id);
@@ -432,7 +437,8 @@ export function createRouter(manager: AgentManager): Router {
         deploy_agent_state,
         is_deploy_agent: deployAgentIds.has(a.id), // hide change-actions on deploy agents
         // THE canonical status — same function + same inputs the detail endpoint uses.
-        status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, reviewing: reviewingA, deploy_status, deploy_agent_state }),
+        dev_env: devEnvs.get(a.id) ?? null,
+        status: computeAgentStatus({ ...a, testing: testingA, landing: landingA, reviewing: reviewingA, deploy_status, deploy_agent_state, dev_env: devEnvs.get(a.id) ?? null }),
         tokens: summaryMap.get(a.id) || {
           total_input_tokens: 0,
           total_output_tokens: 0,
@@ -534,6 +540,21 @@ export function createRouter(manager: AgentManager): Router {
           const pr = await ensureAdoptedPrNumber(agent).catch(() => null);
           if (pr) agent = { ...agent, pr_number: pr.number, pr_url: pr.url };
         }
+        // Work locally: no agent run — put the branch on the remote and start the
+        // repo's dev environment for it. A failure here still returns the change
+        // (it exists); the UI shows the reason and can retry from the agent page.
+        if (body.local_dev && req.user) {
+          let dev_env_error: string | null = null;
+          try {
+            await ensureRemoteBranch(agent, req.user.userId);
+            await startDevEnv(agent, { userId: req.user.userId, email: req.user.email ?? null, name: req.user.name ?? null });
+            await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `💻 **${actorOf(req)}** is working on this change locally (dev environment).` });
+          } catch (err) {
+            dev_env_error = err instanceof Error ? err.message : String(err);
+          }
+          res.status(201).json({ ...agent, dev_env_error });
+          return;
+        }
         res.status(201).json(agent);
       }).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -605,9 +626,10 @@ export function createRouter(manager: AgentManager): Router {
     const shipped = await queries.getShippedAgents(agent.id);
     // THE canonical status — identical function + inputs to the list endpoint, so the
     // detail header and the dashboard card can never disagree.
-    const status = computeAgentStatus({ ...agent, testing, landing, reviewing, deploy_status, deploy_agent_state });
+    const dev_env = (await queries.getLiveDevEnvForAgent(agent.id))?.status ?? null;
+    const status = computeAgentStatus({ ...agent, testing, landing, reviewing, deploy_status, deploy_agent_state, dev_env });
     const is_deploy_agent = await queries.isDeployAgent(agent.id);
-    res.json({ ...agent, total_cost_usd: cost, testing, landing, reviewing, staging_validated, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent });
+    res.json({ ...agent, total_cost_usd: cost, testing, landing, reviewing, staging_validated, deploy_pending, deploy_status, deploy_agent_state, review_agent_id, shipped, status, is_deploy_agent, dev_env });
   });
 
   // Upload a file for the agent (screenshot, doc, etc.). Stored in PG; the worker
@@ -723,6 +745,67 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
+  // ── Dev environments (dev/dev-env.ts) — a repo-declared pod running a change's
+  // branch for local iteration, then handed back for checks + review.
+  const devErr = (res: Response, err: unknown) => {
+    const status = err instanceof DevEnvError ? err.status : (err as { status?: number })?.status || 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : (err as { message?: string })?.message || String(err) });
+  };
+  const loadAgent = async (req: Request, res: Response) => {
+    const agent = await queries.getAgent(String(req.params.id));
+    if (!agent) res.status(404).json({ error: "Agent not found" });
+    return agent;
+  };
+  router.get("/api/agents/:id/dev-env", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent) return;
+    const env = await queries.getLiveDevEnvForAgent(agent.id);
+    res.json({ enabled: config.devNamespaces.length > 0, view: env ? await devEnvView(env, agent) : null });
+  });
+  router.post("/api/agents/:id/dev-env", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent || !req.user) return;
+    try {
+      const env = await startDevEnv(agent, { userId: req.user.userId, email: req.user.email ?? null, name: req.user.name ?? null });
+      await queries.insertAuditLog(req.ip || null, "dev_env.start", "agent", agent.id, `${env.namespace}/${env.name}`, req.user.userId);
+      res.status(202).json(await devEnvView(env, agent));
+    } catch (err) { devErr(res, err); }
+  });
+  router.post("/api/agents/:id/dev-env/sync", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent || !req.user) return;
+    const env = await queries.getLiveDevEnvForAgent(agent.id);
+    if (!env) { res.status(404).json({ error: "No dev environment for this change." }); return; }
+    try { res.json(await syncDevEnv(env, req.user.userId)); } catch (err) { devErr(res, err); }
+  });
+  router.post("/api/agents/:id/dev-env/extend", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent) return;
+    const env = await queries.getLiveDevEnvForAgent(agent.id);
+    if (!env) { res.status(404).json({ error: "No dev environment for this change." }); return; }
+    res.json(await devEnvView(await extendDevEnv(env), agent));
+  });
+  router.get("/api/agents/:id/dev-env/logs", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent) return;
+    const env = await queries.getLiveDevEnvForAgent(agent.id);
+    if (!env) { res.status(404).json({ error: "No dev environment for this change." }); return; }
+    try { res.json({ log: await devEnvLogs(env, Number(req.query.lines) || 200) }); } catch (err) { devErr(res, err); }
+  });
+  router.delete("/api/agents/:id/dev-env", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent) return;
+    const env = await queries.getLiveDevEnvForAgent(agent.id);
+    if (!env) { res.json({ ok: true, stopped: false }); return; }
+    try {
+      await stopDevEnv(env, `stopped by ${actorOf(req)}`);
+      await queries.insertAuditLog(req.ip || null, "dev_env.stop", "agent", agent.id, `${env.namespace}/${env.name}`, req.user?.userId);
+      res.json({ ok: true, stopped: true });
+    } catch (err) { devErr(res, err); }
+  });
+  router.post("/api/agents/:id/handback", async (req, res) => {
+    const agent = await loadAgent(req, res); if (!agent || !req.user) return;
+    try {
+      const result = await handbackChange(manager, agent, { userId: req.user.userId, label: actorOf(req) });
+      await queries.insertAuditLog(req.ip || null, "agent.handback", "agent", agent.id, `PR #${result.pr?.number}`, req.user.userId);
+      res.json(result);
+    } catch (err) { devErr(res, err); }
+  });
+
   router.delete("/api/agents/:id", async (req, res) => {
     try {
       const agent = await queries.getAgent(req.params.id);
@@ -734,6 +817,9 @@ export function createRouter(manager: AgentManager): Router {
       if (["running", "waiting_permission", "waiting_input"].includes(agent.state)) {
         await manager.killAgent(req.params.id);
       }
+      // Tear down its dev environment — the row cascades with the agent, the pod wouldn't.
+      const devEnv = await queries.getLiveDevEnvForAgent(agent.id);
+      if (devEnv) await stopDevEnv(devEnv, "change deleted").catch(() => {});
       // Clean up the agent's remote branch (best-effort) unless asked to keep it.
       // Runs BEFORE the row is deleted so the sibling-branch check can see it.
       let branchCleanup: { deleted: boolean; branch?: string; reason?: string } | undefined;

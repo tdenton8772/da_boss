@@ -22,6 +22,11 @@ export const config = {
   // repos build agent toolchain images on — set → split layout (agent-image.ts).
   workerImage: process.env.WORKER_IMAGE || "da-boss:local",
   agentBaseImage: process.env.DABOSS_AGENT_BASE_IMAGE || "",
+  // Dev environments (dev/dev-env.ts): namespaces a repo's .daboss/dev.yaml may
+  // target (empty → feature off), and the kubectl context name humans use for this
+  // cluster, so the port-forward command is copy-paste exact.
+  devNamespaces: (process.env.DABOSS_DEV_NAMESPACES || "").split(",").map((s) => s.trim()).filter(Boolean),
+  devKubeContext: process.env.DABOSS_DEV_KUBE_CONTEXT || "",
   agentExecution: (process.env.AGENT_EXECUTION || "inprocess") as "inprocess" | "pod",
   // Auto-run the test gate every time an agent completes a turn. OFF by default:
   // agents iterate freely, and a test cycle is queued ONLY on demand — the agent

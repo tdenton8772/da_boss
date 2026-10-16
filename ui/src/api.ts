@@ -203,6 +203,17 @@ export const api = {
     }),
   revokeToken: (id: string) => request<{ ok: boolean }>(`/tokens/${id}`, { method: "DELETE" }),
 
+  // Dev environments (server/src/dev): a repo-declared pod running a change's branch
+  getDevEnv: (id: string) => request<{ enabled: boolean; view: DevEnvView | null }>(`/agents/${id}/dev-env`),
+  startDevEnv: (id: string) => request<DevEnvView>(`/agents/${id}/dev-env`, { method: "POST" }),
+  syncDevEnv: (id: string) => request<{ output: string }>(`/agents/${id}/dev-env/sync`, { method: "POST" }),
+  extendDevEnv: (id: string) => request<DevEnvView>(`/agents/${id}/dev-env/extend`, { method: "POST" }),
+  devEnvLogs: (id: string) => request<{ log: string }>(`/agents/${id}/dev-env/logs`),
+  stopDevEnv: (id: string) => request<{ ok: boolean }>(`/agents/${id}/dev-env`, { method: "DELETE" }),
+  handback: (id: string) =>
+    request<{ pr: { number: number; url: string } | null; runs: Array<{ phase: string; runId: string }>; review_agent_id: string | null; notes: string[] }>(
+      `/agents/${id}/handback`, { method: "POST" }),
+
   // Models: discovered catalog + per-role defaults (server/src/models.ts)
   getModels: () => request<ModelsInfo>("/models"),
   saveModelDefaults: (defaults: Partial<Record<string, ModelChoice>>) =>
@@ -447,6 +458,8 @@ export interface CreateAgentData {
   priority?: string;
   model?: string;
   effort?: string;
+  /** Don't run an agent — start the repo's dev environment for local work. */
+  local_dev?: boolean;
   max_turns?: number;
   max_budget_usd?: number;
   repo_url?: string;
@@ -644,4 +657,36 @@ export interface ModelsInfo {
   defaults: Record<string, ModelChoice>;
   deployment_defaults: Record<string, ModelChoice>;
   roles: Record<string, { label: string; description: string; inheritable: boolean }>;
+}
+
+export interface DevEnvRecord {
+  id: string;
+  agent_id: string;
+  repo_url: string;
+  branch: string;
+  namespace: string;
+  name: string;
+  image: string | null;
+  port: number;
+  ttl_hours: number;
+  status: "starting" | "ready" | "failed" | "stopping" | "stopped";
+  detail: string | null;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface DevEnvView {
+  env: DevEnvRecord;
+  commands: {
+    context: string;
+    context_hint?: string;
+    port_forward: string;
+    url: string;
+    copy_tree: string;
+    copy_files: string;
+    logs: string;
+    shell: string;
+    checkout: string;
+  };
+  local_claude_prompt: string;
 }

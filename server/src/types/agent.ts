@@ -84,6 +84,7 @@ export interface CreateAgentRequest {
   issue_id?: string;
   service_account?: string; // k8s SA the agent pod runs as (e.g. the deploy identity)
   worker_image?: string; // image override for the agent container (e.g. a gcloud/kubectl image)
+  local_dev?: boolean; // API only: don't run an agent — start the repo's dev environment for local work
 }
 
 /** A review as a first-class entity (review-platform plan §3.1). Additive to the

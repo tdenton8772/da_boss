@@ -56,6 +56,7 @@ describe("MCP surface", () => {
       "list_pending_permissions", "resolve_permission",
       "list_reviewable_changes", "request_review", "run_checks", "deploy_branch", "sync_main", "resize_agent", "get_verdict",
       "list_deploys", "get_deploy_verdict",
+      "start_dev_env", "get_dev_env", "sync_dev_env", "stop_dev_env", "handback_change",
     ]) expect(tools.has(t)).toBe(true);
     await client.close();
   });
