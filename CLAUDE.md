@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 338 tests, 39 files (offline, pg-mem)
+npm run test         # 342 tests, 39 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -50,7 +50,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | Module | Purpose |
 |---|---|
 | `index.ts` | Entry — Express 5, session, WS, static UI, starts: live relay, pipeline listener, dispatch queue, pod reaper, heartbeat reaper, main-watch, phase scheduler |
-| `config.ts` / `models.ts` | Env config; **model catalog + role defaults** — models/effort levels discovered from the bundled CLI (`supportedModels()`, supervisor credential, cached in app_settings, refreshed daily + on SDK bump); per-role `{model, effort}` (agent/template/review_agent/reviewer/supervisor/sizing/deploy) = built-in aliases < `DABOSS_MODEL_DEFAULTS` < admin UI. **Never hardcode a model id or effort** — call `resolveRole()` |
+| `config.ts` / `models.ts` | Env config; **model catalog + role defaults** — models/effort levels discovered from the bundled CLI (`supportedModels()` → aliases) merged with the Models API (`GET /v1/models` → pinned versions + effort capabilities), both on the supervisor credential, cached in app_settings, refreshed daily + on SDK bump); per-role `{model, effort}` (agent/template/review_agent/reviewer/supervisor/sizing/deploy) = built-in aliases < `DABOSS_MODEL_DEFAULTS` < admin UI. **Never hardcode a model id or effort** — call `resolveRole()` |
 | `agent/manager.ts` | Create/start/pause/resume/kill/input, branch naming, input queues, restore on restart, `offboardUser` |
 | `agent/pod-dispatcher.ts` | Pod-per-agent: pod build, ephemeral cred Secret, per-user RWO workspace PVC, reaper, failure reasons, lost-volume recovery, pipeline/cleanup pod launch |
 | `agent/runner.ts` | Legacy in-process runner (dev only) — wraps SDK `query()`, host PID tracking |
