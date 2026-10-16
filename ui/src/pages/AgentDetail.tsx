@@ -92,7 +92,9 @@ export function AgentDetail() {
       .catch(() => {});
   }, [id]);
 
-  // Load events on mount
+  // Load events on mount — and again after a WebSocket reconnect (reloadKey),
+  // since live events sent while the socket was down never arrived.
+  const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     if (!id) return;
     refresh();
@@ -113,7 +115,7 @@ export function AgentDetail() {
         setMessages(msgs);
       })
       .catch(() => {});
-  }, [id, refresh]);
+  }, [id, refresh, reloadKey]);
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
@@ -184,7 +186,9 @@ export function AgentDetail() {
     [id, refresh]
   );
 
-  const { subscribe, unsubscribe } = useWebSocket(handleEvent);
+  const { subscribe, unsubscribe, generation } = useWebSocket(handleEvent);
+  // Reconnected (generation 1 is the first connect): refetch what we missed.
+  useEffect(() => { if (generation > 1) setReloadKey((k) => k + 1); }, [generation]);
 
   // Subscribe to streaming for this agent
   useEffect(() => {
@@ -416,7 +420,8 @@ export function AgentDetail() {
       )}
 
       {/* Dev environment — run this branch in a repo-declared pod for local work. */}
-      <DevEnvPanel agentId={agent.id} hasBranch={!!agent.repo_url && !!agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent} />
+      <DevEnvPanel agentId={agent.id} hasBranch={!!agent.repo_url && !!agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent}
+        prNumber={agent.pr_number ?? null} prUrl={agent.pr_url ?? null} status={deriveStatus(agent)} onChanged={() => setReloadKey((k) => k + 1)} />
 
       {/* Plans (ExitPlanMode plan docs) + user file uploads to the agent. */}
       <AgentPlans agentId={agent.id} />
