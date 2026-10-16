@@ -22,6 +22,7 @@ import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
 import { startAgentReaper } from "./supervisor/reaper.js";
 import { startMainWatch } from "./pipeline/main-watch.js";
 import { startModelCatalogRefresher } from "./models.js";
+import { prewarmAllRepoImages } from "./agent/image-prewarm.js";
 import { startScheduler } from "./pipeline/scheduler.js";
 import { logger } from "./utils/logger.js";
 
@@ -151,6 +152,11 @@ async function main() {
   // Model catalog: discover the models + effort levels the bundled CLI offers
   // (refetched daily and whenever the SDK version changes) — see models.ts.
   startModelCatalogRefresher();
+
+  // Pre-build repos' agent toolchain images (a deploy may have moved the OS base),
+  // so the first agent after a deploy doesn't wait on a ~10 min build. Delayed so
+  // it doesn't compete with startup; background, never throws.
+  setTimeout(() => { void prewarmAllRepoImages(); }, 30_000).unref();
 
   // Start server
   server.listen(config.port, () => {

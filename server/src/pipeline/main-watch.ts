@@ -13,6 +13,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { getBranchHead } from "../forge/github.js";
 import { resolvePhase, launchResolved, listTestPhases } from "./service.js";
 import { sendNotification } from "../notifications/ntfy.js";
+import { prewarmRepoImage } from "../agent/image-prewarm.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
@@ -59,6 +60,9 @@ async function sweepRepo(repoUrl: string, userId: string): Promise<void> {
 
   switch (nextWatchAction(head, state, runs)) {
     case "launch": {
+      // main moved — maybe the repo's agent.Dockerfile or a lockfile it bakes did
+      // too. Build the new toolchain image now, not when the next agent waits on it.
+      void prewarmRepoImage(repoUrl, userId);
       const phases = await listTestPhases(userId, repoUrl, "main");
       if (phases.length === 0) {
         await queries.setAppSetting(stateKey(repoUrl), JSON.stringify({ sha: head, status: "no-tests", runIds: [] }));

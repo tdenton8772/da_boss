@@ -91,33 +91,51 @@ async function dispatchQueued(agent: AgentRecord): Promise<void> {
   await createAgentPod(agent.id); // the pod build — owned by the supervisor
 }
 
-/** Dispatch queued agents up to the concurrency cap. Mutex-guarded so overlapping
- *  NOTIFY + cron sweeps don't double-dispatch. Never throws. */
+/** Agents whose dispatch (sizing → image → pod) is in progress. Each runs on its
+ *  own, so one agent waiting out a 10-minute toolchain image build no longer
+ *  holds every agent queued behind it. An in-flight dispatch counts against the
+ *  concurrency cap — it's about to run. */
+const dispatching = new Map<string, Promise<void>>();
+
+/** Start dispatching queued agents up to the concurrency cap, without waiting for
+ *  them. Mutex-guarded so overlapping NOTIFY + cron sweeps don't double-dispatch
+ *  (the in-flight map covers sweeps that land while a dispatch is still running).
+ *  Never throws. */
 export async function processQueue(): Promise<void> {
   if (processing) return;
   processing = true;
   try {
     const active = (await queries.getAgentsByState(...ACTIVE_STATES)).length;
-    let slots = config.maxConcurrentAgents - active;
+    let slots = config.maxConcurrentAgents - active - dispatching.size;
     if (slots <= 0) return;
     const queued = await queries.getAgentsByState("queued");
     for (const agent of queued) {
       if (slots <= 0) break;
-      try {
-        await dispatchQueued(agent);
-        slots--;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error({ agentId: agent.id, err: msg }, "queue dispatch failed");
-        await queries.updateAgentState(agent.id, "failed", { error_message: msg }).catch(() => {});
-        await queries.insertAgentEvent(agent.id, "error", { error: `Dispatch failed: ${msg}` }).catch(() => {});
-      }
+      if (dispatching.has(agent.id)) continue;
+      slots--;
+      const run = dispatchQueued(agent)
+        .catch(async (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error({ agentId: agent.id, err: msg }, "queue dispatch failed");
+          await queries.updateAgentState(agent.id, "failed", { error_message: msg }).catch(() => {});
+          await queries.insertAgentEvent(agent.id, "error", { error: `Dispatch failed: ${msg}` }).catch(() => {});
+        })
+        .finally(() => {
+          dispatching.delete(agent.id);
+          void processQueue(); // a slot may have freed (failure) — let the next agent go
+        });
+      dispatching.set(agent.id, run);
     }
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, "processQueue failed");
   } finally {
     processing = false;
   }
+}
+
+/** Test seam: wait for every in-flight dispatch to settle. */
+export async function drainDispatches(): Promise<void> {
+  while (dispatching.size) await Promise.allSettled([...dispatching.values()]);
 }
 
 /** LISTEN for queued agents and sweep on connect (catch-up for a missed NOTIFY). */
