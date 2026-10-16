@@ -292,17 +292,15 @@ const MODEL_ID_SHAPE = /^[a-z][a-z0-9.\-_]*(\[[a-z0-9]+\])?$/i;
 
 /**
  * Check a requested model + effort. Returns an error message, or null when OK.
- * With a live catalog the model must be one the credential can use and the effort
- * one that model accepts; with only the seed, anything id-shaped is allowed (the
- * CLI rejects truly unknown ids at run time).
+ * A model the catalog doesn't list is still allowed when it's id-shaped: the
+ * catalog comes from the SUPERVISOR's credential (which may list only aliases),
+ * while agents run on their owner's — so it can't be the gate. The CLI rejects
+ * truly unknown ids at run time. Effort is checked whenever the model is known.
  */
 export function validateModelChoice(catalog: ModelCatalog, model: string | null | undefined, effort: string | null | undefined): string | null {
   const entry = model ? findModel(catalog, model) : undefined;
-  if (model) {
-    if (catalog.source === "live" && !entry) {
-      return `Unknown model '${model}'. Available: ${selectableModels(catalog).map((m) => m.value).join(", ")}`;
-    }
-    if (!entry && !MODEL_ID_SHAPE.test(model)) return `'${model}' doesn't look like a model id or alias`;
+  if (model && !entry && !MODEL_ID_SHAPE.test(model)) {
+    return `'${model}' doesn't look like a model id or alias. Known: ${selectableModels(catalog).map((m) => m.value).join(", ")}`;
   }
   if (effort) {
     const levels = knownEffortLevels(catalog);
