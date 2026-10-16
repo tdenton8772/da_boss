@@ -91,7 +91,7 @@ vi.mock("../src/pipeline/review-agent.js", () => ({ dispatchReviewAgent: async (
 import * as queries from "../src/db/queries.js";
 import { LocalAesCipher, setCipher } from "../src/crypto/cipher.js";
 import { config } from "../src/config.js";
-import { startDevEnv, syncDevEnv, stopDevEnv, reapDevEnvs, ensureRemoteBranch, DevEnvError } from "../src/dev/dev-env.js";
+import { startDevEnv, syncDevEnv, stopDevEnv, reapDevEnvs, ensureRemoteBranch, previewDevEnv, DevEnvError } from "../src/dev/dev-env.js";
 import { handbackChange } from "../src/dev/handback.js";
 import type { AgentRecord } from "../src/types/agent.js";
 
@@ -224,6 +224,19 @@ describe("dev environment lifecycle", () => {
     k.podPhase = "Running";
     await vi.waitFor(() => expect(k.deployments.size).toBe(0), { timeout: 5000 });
     expect((await queries.getDevEnv(env.id))?.status).toBe("stopped");
+  });
+
+  it("previews the real commands before anything starts, or says why it can't", async () => {
+    const agent = await change();
+    const p = await previewDevEnv(agent, { userId: "usr_alice", email: "alice@co.io" });
+    expect(p).toMatchObject({ available: true, namespace: "shop", name: "dev-alice-ag-1", port: 4000 });
+    if (p.available) {
+      expect(p.commands.port_forward).toBe("kubectl --context gw_ctx -n shop port-forward deploy/dev-alice-ag-1 4000:4000");
+      expect(p.local_claude_prompt).toContain("feat/alice/fix-totals");
+    }
+    expect(k.deployments.size).toBe(0); // a preview touches nothing
+    forge.devYaml = null;
+    expect(await previewDevEnv(agent, { userId: "usr_alice", email: "alice@co.io" })).toMatchObject({ available: false, reason: expect.stringMatching(/no .daboss\/dev.yaml/) });
   });
 
   it("cuts a new branch from the base when a local-dev change starts", async () => {
