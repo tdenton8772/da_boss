@@ -142,8 +142,23 @@ export function syncScript(branch: string, c: DevConfig): string {
     `cd ${shq(workdir)}`,
     ...c.sync.map((cmd) => `echo "▶ ${cmd.replace(/["\\$`]/g, "\\$&")}"; ${cmd}`),
     ...(c.restart_on_sync
-      ? ['if [ -f /workspace/.dev.pid ]; then P=$(cat /workspace/.dev.pid); kill -TERM -- "-$P" 2>/dev/null || kill -TERM "$P" 2>/dev/null || true; sleep 2; fi', startLine(c, workdir)]
+      ? [stopAppScript(), startLine(c, workdir)]
       : []),
+  ].join("\n");
+}
+
+/** Stop the running app — its whole process group (setsid made the pid the group
+ *  id), waiting for it to exit so a restart doesn't hit "port already in use".
+ *  `kill -SIG -PID`, never `kill -SIG -- -PID`: dash (Debian's /bin/sh) rejects
+ *  the `--` and the group would survive. */
+function stopAppScript(): string {
+  return [
+    "if [ -f /workspace/.dev.pid ]; then",
+    "  P=$(cat /workspace/.dev.pid)",
+    '  kill -TERM "-$P" 2>/dev/null || kill -TERM "$P" 2>/dev/null || true',
+    '  i=0; while [ $i -lt 30 ] && { kill -0 "-$P" 2>/dev/null || kill -0 "$P" 2>/dev/null; }; do sleep 0.5; i=$((i+1)); done',
+    '  kill -KILL "-$P" 2>/dev/null || kill -KILL "$P" 2>/dev/null || true',
+    "fi",
   ].join("\n");
 }
 
