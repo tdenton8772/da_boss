@@ -324,7 +324,7 @@ export async function devEnvLogs(env: DevEnvRecord, lines = 200): Promise<string
 
 export function commandsFor(env: DevEnvRecord, syncExclude: string[] = []): DevCommands {
   return devCommands({
-    name: env.name, namespace: env.namespace, port: env.port, branch: env.branch,
+    name: env.name, namespace: env.namespace, port: env.port, branch: env.branch, repoUrl: env.repo_url,
     context: config.devKubeContext || undefined, syncExclude,
   });
 }
@@ -363,7 +363,7 @@ export async function previewDevEnv(agent: AgentRecord, viewer: { userId: string
     const cfg = await loadDevConfig(agent.repo_url, await gitTokenFor(viewer.userId));
     const name = devEnvName(agent.id, viewer.email);
     const commands = devCommands({
-      name, namespace: cfg.namespace, port: cfg.port, branch: agent.branch,
+      name, namespace: cfg.namespace, port: cfg.port, branch: agent.branch, repoUrl: agent.repo_url,
       context: config.devKubeContext || undefined, syncExclude: cfg.sync_exclude,
     });
     const files = (await queries.listAgentFiles(agent.id).catch(() => [])).map((f) => f.name);

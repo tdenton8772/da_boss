@@ -190,11 +190,28 @@ export interface DevCommands {
   checkout: string;
 }
 
+/** `owner/repo` from a git URL (https or ssh), lowercased — how a local remote is matched. */
+export function repoPath(repoUrl: string): string {
+  return repoUrl.trim().replace(/\.git$/, "").replace(/^[a-z]+:\/\/[^/]+\//i, "").replace(/^[^@]+@[^:]+:/, "").toLowerCase();
+}
+
+/** Check out a change's branch in a local clone, whatever its remote is named
+ *  (`origin`, `scylladb`, a fork's upstream…): pick the remote whose URL is this
+ *  repo, fetch, and track it so a later `git push` just works. */
+export function checkoutCommand(repoUrl: string | undefined, branch: string): string {
+  const b = shq(branch);
+  if (!repoUrl) return `git fetch origin ${b} && git checkout ${b}`;
+  const find = `git remote -v | awk -v r=${shq(repoPath(repoUrl))} 'tolower($2) ~ r && $3 == "(fetch)" { print $1; exit }'`;
+  return `R=$(${find}); [ -n "$R" ] || { echo "No git remote here points at ${repoUrl} — run this in your clone of it."; false; } && ` +
+    `git fetch "$R" ${b} && git checkout -B ${b} --track "$R/${branch.replace(/'/g, "")}"`;
+}
+
 export function devCommands(o: {
   name: string;
   namespace: string;
   port: number;
   branch: string;
+  repoUrl?: string;
   context?: string;
   syncExclude: string[];
 }): DevCommands {
@@ -211,7 +228,7 @@ export function devCommands(o: {
     copy_files: `COPYFILE_DISABLE=1 tar -cz <paths…> | ${untar}`,
     logs: `${k} exec deploy/${o.name} -c ${DEV_CONTAINER} -- tail -n 100 -f ${LOG_FILE}`,
     shell: `${k} exec -it deploy/${o.name} -c ${DEV_CONTAINER} -- sh -c 'cd ${SRC_DIR} && exec bash || exec sh'`,
-    checkout: `git fetch origin ${o.branch} && git checkout ${o.branch}`,
+    checkout: checkoutCommand(o.repoUrl, o.branch),
   };
 }
 

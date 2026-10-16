@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseDevConfig, renderTemplate } from "../src/dev/config.js";
-import { buildDevDeployment, devEnvName, devCommands, localClaudePrompt, bootstrapScript, syncScript, shq } from "../src/dev/manifest.js";
+import { buildDevDeployment, devEnvName, devCommands, localClaudePrompt, bootstrapScript, syncScript, shq, checkoutCommand, repoPath } from "../src/dev/manifest.js";
 
 // A realistic declaration: a web app with a DB proxy sidecar, secrets, an
 // impersonated dev user — everything app-specific lives here, none in da_boss.
@@ -147,7 +147,7 @@ describe("what the human gets", () => {
   it("a local-Claude prompt naming the branch and the MCP tools to call", () => {
     const cmds = devCommands({ name: "d", namespace: "n", port: 4000, branch: "feat/x", context: "c", syncExclude: [] });
     const p = localClaudePrompt({ agentId: "ag_1", agentName: "Fix totals", repoUrl: "https://github.com/o/r", branch: "feat/x", cmds });
-    expect(p).toContain("git fetch origin feat/x && git checkout feat/x");
+    expect(p).toContain(cmds.checkout);
     expect(p).toContain(cmds.port_forward);
     for (const tool of ["sync_dev_env", "handback_change", "stop_dev_env"]) expect(p).toContain(tool);
   });
@@ -165,5 +165,19 @@ describe("local-Claude prompt without MCP + with files", () => {
     const p = localClaudePrompt({ agentId: "ag_1", agentName: "x", repoUrl: "r", branch: "feat/x", cmds, files: ["bug.png", "spec.pdf"] });
     expect(p).toContain("Files attached to the change (screenshots/docs): bug.png, spec.pdf");
     expect(p).toContain("read_agent_file");
+  });
+});
+
+describe("checking out the branch locally", () => {
+  it("matches the repo's remote by URL, https or ssh, any case", () => {
+    expect(repoPath("https://github.com/scylladb/Odyssey.git")).toBe("scylladb/odyssey");
+    expect(repoPath("https://github.com/scylladb/Odyssey")).toBe("scylladb/odyssey");
+    expect(repoPath("git@github.com:scylladb/Odyssey.git")).toBe("scylladb/odyssey");
+  });
+  it("finds the remote instead of assuming origin, and tracks it", () => {
+    const c = checkoutCommand("https://github.com/scylladb/Odyssey", "feat/tyler.denton/x");
+    expect(c).not.toContain("fetch origin");
+    expect(c).toContain("'scylladb/odyssey'");
+    expect(c).toContain("--track \"$R/feat/tyler.denton/x\"");
   });
 });
