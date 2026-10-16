@@ -1,12 +1,14 @@
 /**
  * Models + reasoning effort — discovered, not hardcoded.
  *
- * The model list comes from the Claude Code CLI the Agent SDK bundles: its
- * `supportedModels()` reports every model the credential can use, the family
- * aliases (`opus`, `sonnet`, …) with the concrete id each resolves to, and the
- * effort levels each model accepts. We fetch it with the supervisor credential,
- * cache it in app_settings, and refresh it daily or when the SDK version changes,
- * so a new model shows up by bumping the SDK — no code edit.
+ * The catalog merges two live sources, both read with the supervisor credential:
+ *  - the Claude Code CLI the Agent SDK bundles (`supportedModels()`): the family
+ *    aliases (`opus`, `sonnet`, …) with the concrete id each resolves to;
+ *  - the Anthropic Models API (`GET /v1/models`): every pinned version the
+ *    credential can use, with the effort levels each accepts. (For an OAuth
+ *    credential the CLI lists only the aliases, so this is where versions come from.)
+ * Cached in app_settings and refreshed daily or when the SDK version changes,
+ * so a new model shows up on its own — no code edit.
  *
  * Which model + effort each part of da_boss uses is a ROLE default. The built-in
  * defaults name family aliases, so they follow new releases on their own; a
@@ -18,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query as sdkQuery, type EffortLevel, type ModelInfo } from "@anthropic-ai/claude-agent-sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import { withClaudeLock } from "./utils/claude-lock.js";
 import { logger } from "./utils/logger.js";
 
@@ -45,7 +48,12 @@ export interface ModelCatalog {
   sdk_version: string | null;
   /** Why the last refresh failed, if it did (the previous catalog is kept). */
   error?: string;
+  /** How the catalog was built — bump CATALOG_FORMAT to refetch caches built the old way. */
+  format?: number;
 }
+
+/** 2 = CLI aliases merged with the Models API's pinned versions. */
+const CATALOG_FORMAT = 2;
 
 const CATALOG_SETTING = "model_catalog";
 const CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -132,6 +140,52 @@ async function fetchSupportedModels(env: Record<string, string | undefined>): Pr
   }
 }
 
+/** Every model the credential can use, from the Models API: pinned ids with their
+ *  effort levels. Retired models are dropped; deprecated ones are labelled. */
+async function fetchApiModels(env: Record<string, string | undefined>): Promise<CatalogModel[]> {
+  const client = env.ANTHROPIC_API_KEY
+    ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout: CATALOG_FETCH_TIMEOUT_MS })
+    : new Anthropic({
+        apiKey: null,
+        authToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+        defaultHeaders: { "anthropic-beta": "oauth-2025-04-20" },
+        timeout: CATALOG_FETCH_TIMEOUT_MS,
+      });
+  const out: CatalogModel[] = [];
+  for await (const m of client.models.list()) {
+    if (m.lifecycle === "retired") continue;
+    // Keys of the effort capability are its levels (plus the `supported` flag).
+    const effort = (m.capabilities?.effort ?? {}) as unknown as Record<string, { supported?: boolean } | boolean | null>;
+    const levels = Object.entries(effort)
+      .filter(([, v]) => typeof v === "object" && v?.supported === true)
+      .map(([k]) => k as EffortLevel);
+    out.push({
+      value: m.id,
+      resolvedModel: m.id,
+      displayName: m.display_name.replace(/^Claude\s+/, ""),
+      description: m.lifecycle === "deprecated" ? "Deprecated — headed for retirement" : "",
+      supportsEffort: levels.length > 0,
+      supportedEffortLevels: levels,
+    });
+  }
+  return out;
+}
+
+/** CLI rows first (aliases, then whatever pinned ids it lists), then the Models
+ *  API's ids it didn't. A row both know takes the API's effort levels when the
+ *  CLI gave none. */
+export function mergeCatalogSources(cli: CatalogModel[], api: CatalogModel[]): CatalogModel[] {
+  const byId = new Map(api.map((m) => [m.value, m]));
+  const merged = cli.map((m) => {
+    const a = byId.get(m.value);
+    return a && !m.supportedEffortLevels?.length
+      ? { ...m, supportsEffort: a.supportsEffort, supportedEffortLevels: a.supportedEffortLevels }
+      : m;
+  });
+  const seen = new Set(cli.map((m) => m.value));
+  return [...merged, ...api.filter((m) => !seen.has(m.value))];
+}
+
 /** Fetch a fresh catalog and cache it. On failure the previous catalog stays in
  *  place (with `error` recorded) — a flaky refresh never empties the picker. */
 export async function refreshModelCatalog(): Promise<ModelCatalog> {
@@ -147,17 +201,30 @@ export async function refreshModelCatalog(): Promise<ModelCatalog> {
   };
   if (!cred.ok || !cred.env) return fail(`no supervisor credential (${cred.reason ?? "unset"}) — set one in Settings to discover models`);
   try {
-    const infos = await withClaudeLock(() => fetchSupportedModels(cred.env!));
-    const models: CatalogModel[] = infos.map((m) => ({
-      value: m.value,
-      resolvedModel: m.resolvedModel,
-      displayName: m.displayName,
-      description: m.description,
-      supportsEffort: m.supportsEffort,
-      supportedEffortLevels: m.supportedEffortLevels,
-    }));
-    if (!models.length) return fail("the CLI reported no models");
-    const catalog: ModelCatalog = { source: "live", models, fetched_at: new Date().toISOString(), sdk_version: installedSdkVersion() };
+    // Either source may fail alone; the catalog needs only one of them.
+    const [cliResult, apiResult] = await Promise.allSettled([
+      withClaudeLock(() => fetchSupportedModels(cred.env!)),
+      fetchApiModels(cred.env),
+    ]);
+    const cli: CatalogModel[] = cliResult.status === "fulfilled"
+      ? cliResult.value.map((m) => ({
+          value: m.value,
+          resolvedModel: m.resolvedModel,
+          displayName: m.displayName,
+          description: m.description,
+          supportsEffort: m.supportsEffort,
+          supportedEffortLevels: m.supportedEffortLevels,
+        }))
+      : [];
+    const api = apiResult.status === "fulfilled" ? apiResult.value : [];
+    const reason = (r: PromiseSettledResult<unknown>) => (r.status === "rejected" ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : null);
+    if (cliResult.status === "rejected") logger.warn({ error: reason(cliResult) }, "Model catalog: CLI source failed — using the Models API alone");
+    if (apiResult.status === "rejected") logger.warn({ error: reason(apiResult) }, "Model catalog: Models API source failed — using the CLI alone");
+    const models = mergeCatalogSources(cli, api);
+    if (!models.length) {
+      return fail(`no models from either source (CLI: ${reason(cliResult) ?? "none listed"}; Models API: ${reason(apiResult) ?? "none listed"})`);
+    }
+    const catalog: ModelCatalog = { source: "live", models, fetched_at: new Date().toISOString(), sdk_version: installedSdkVersion(), format: CATALOG_FORMAT };
     await queries.setAppSetting(CATALOG_SETTING, JSON.stringify(catalog));
     logger.info({ count: models.length, sdkVersion: catalog.sdk_version }, "Model catalog refreshed");
     return catalog;
@@ -166,10 +233,12 @@ export async function refreshModelCatalog(): Promise<ModelCatalog> {
   }
 }
 
-/** True when the cached catalog should be refetched: never fetched, older than a
- *  day, or produced by a different SDK version than the one now installed. */
+/** True when the cached catalog should be refetched: never fetched, built the old
+ *  way, older than a day, or produced by a different SDK version than the one now
+ *  installed. */
 export function catalogIsStale(catalog: ModelCatalog, now = Date.now()): boolean {
   if (catalog.source !== "live" || !catalog.fetched_at) return true;
+  if (catalog.format !== CATALOG_FORMAT) return true;
   if (now - Date.parse(catalog.fetched_at) > CATALOG_MAX_AGE_MS) return true;
   const installed = installedSdkVersion();
   return !!installed && catalog.sdk_version !== installed;

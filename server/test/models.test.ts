@@ -9,6 +9,23 @@ const sdk = vi.hoisted(() => ({
   supportedModels: async (): Promise<unknown[]> => [],
   lastOptions: null as Record<string, unknown> | null,
 }));
+// The Models API source: an async-iterable page of ModelInfo-shaped rows.
+const api = vi.hoisted(() => ({
+  models: [] as unknown[],
+  fail: null as Error | null,
+  lastOptions: null as Record<string, unknown> | null,
+}));
+vi.mock("@anthropic-ai/sdk", () => ({
+  default: class {
+    constructor(opts: Record<string, unknown>) { api.lastOptions = opts; }
+    models = {
+      list: () => (async function* () {
+        if (api.fail) throw api.fail;
+        yield* api.models;
+      })(),
+    };
+  },
+}));
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: ({ options }: { options: Record<string, unknown> }) => {
     sdk.lastOptions = options;
@@ -24,7 +41,7 @@ import { createRouter } from "../src/api/router.js";
 import { buildReviewConfig } from "../src/pipeline/review-logic.js";
 import type { AgentRecord } from "../src/types/agent.js";
 import {
-  validateModelChoice, findModel, knownEffortLevels, catalogIsStale, getModelCatalog, refreshModelCatalog,
+  validateModelChoice, findModel, mergeCatalogSources, knownEffortLevels, catalogIsStale, getModelCatalog, refreshModelCatalog,
   getModelDefaults, resolveRole, sdkModelOptions, installedSdkVersion, DEFAULTS_SETTING, type ModelCatalog,
 } from "../src/models.js";
 
@@ -38,7 +55,15 @@ const LIVE_MODELS = [
   { value: "claude-opus-4-6", resolvedModel: "claude-opus-4-6", displayName: "Opus 4.6", description: "", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "max"] },
   { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "" },
 ];
-const live = (): ModelCatalog => ({ source: "live", models: LIVE_MODELS as ModelCatalog["models"], fetched_at: new Date().toISOString(), sdk_version: installedSdkVersion() });
+/** Shaped like `GET /v1/models` rows (capabilities.effort keyed by level). */
+const lvl = (...ls: string[]) => Object.fromEntries([["supported", ls.length > 0], ...["low", "medium", "high", "xhigh", "max"].map((l) => [l, { supported: ls.includes(l) }])]);
+const API_MODELS = [
+  { id: "claude-opus-9", display_name: "Claude Opus 9", lifecycle: "active", capabilities: { effort: lvl("low", "medium", "high", "xhigh", "max") } },
+  { id: "claude-opus-4-6", display_name: "Claude Opus 4.6", lifecycle: "deprecated", capabilities: { effort: lvl("low", "medium", "high", "max") } },
+  { id: "claude-sonnet-3", display_name: "Claude Sonnet 3", lifecycle: "retired", capabilities: { effort: lvl() } },
+  { id: "claude-haiku-4-5-20251001", display_name: "Claude Haiku 4.5", lifecycle: "active", capabilities: { effort: lvl() } },
+];
+const live = (): ModelCatalog => ({ source: "live", models: LIVE_MODELS as ModelCatalog["models"], fetched_at: new Date().toISOString(), sdk_version: installedSdkVersion(), format: 2 });
 const seed = (): ModelCatalog => ({ source: "seed", models: [{ value: "opus", displayName: "Opus", description: "" }], fetched_at: null, sdk_version: null });
 
 async function designateSupervisor() {
@@ -53,6 +78,9 @@ beforeEach(() => {
   delete process.env.SUPERVISOR_CREDENTIAL_USER;
   sdk.supportedModels = async () => LIVE_MODELS;
   sdk.lastOptions = null;
+  api.models = [];
+  api.fail = null;
+  api.lastOptions = null;
 });
 afterEach(() => {
   setCipher(null);
@@ -112,9 +140,52 @@ describe("model catalog", () => {
     expect(catalogIsStale(await getModelCatalog())).toBe(false);
   });
 
+  it("adds the Models API's pinned versions after the CLI's rows, with their effort levels", async () => {
+    await designateSupervisor();
+    sdk.supportedModels = async () => LIVE_MODELS.filter((m) => m.value === m.resolvedModel ? false : true); // aliases only, like an OAuth credential
+    api.models = API_MODELS;
+    const c = await refreshModelCatalog();
+    expect(c.models.map((m) => m.value)).toEqual(["default", "opus", "sonnet", "claude-opus-9", "claude-opus-4-6", "claude-haiku-4-5-20251001"]);
+    expect(findModel(c, "claude-opus-4-6")).toMatchObject({ displayName: "Opus 4.6", supportedEffortLevels: ["low", "medium", "high", "max"], description: /Deprecated/ });
+    expect(findModel(c, "claude-sonnet-3")).toBeUndefined(); // retired
+    expect(validateModelChoice(c, "claude-haiku-4-5-20251001", "low")).toMatch(/doesn't support effort/);
+    expect(api.lastOptions).toMatchObject({ apiKey: "test-cred" });
+  });
+
+  it("uses an OAuth credential as a bearer token with the oauth beta", async () => {
+    await queries.createUser({ id: "usr_o", email: "o@x.io" });
+    await queries.upsertUserCredential("usr_o", "claude_oauth_token", await new LocalAesCipher(KEY).encrypt("oauth-tok"));
+    await queries.setAppSetting(SUPERVISOR_CRED_SETTING, "usr_o");
+    await refreshModelCatalog();
+    expect(api.lastOptions).toMatchObject({ apiKey: null, authToken: "oauth-tok", defaultHeaders: { "anthropic-beta": "oauth-2025-04-20" } });
+  });
+
+  it("builds the catalog from whichever source answers", async () => {
+    await designateSupervisor();
+    sdk.supportedModels = async () => { throw new Error("cli down"); };
+    api.models = API_MODELS;
+    let c = await refreshModelCatalog();
+    expect(c.source).toBe("live");
+    expect(c.models.map((m) => m.value)).toContain("claude-opus-9");
+    sdk.supportedModels = async () => LIVE_MODELS;
+    api.fail = new Error("api down");
+    c = await refreshModelCatalog();
+    expect(c.models).toHaveLength(LIVE_MODELS.length);
+  });
+
+  it("merging keeps a CLI row but fills effort it lacks from the API", () => {
+    const merged = mergeCatalogSources(
+      [{ value: "claude-x", resolvedModel: "claude-x", displayName: "X", description: "" }],
+      [{ value: "claude-x", resolvedModel: "claude-x", displayName: "X api", description: "", supportsEffort: true, supportedEffortLevels: ["low"] }],
+    );
+    expect(merged).toEqual([{ value: "claude-x", resolvedModel: "claude-x", displayName: "X", description: "", supportsEffort: true, supportedEffortLevels: ["low"] }]);
+  });
+
   it("is stale once a day old or when the installed SDK version changes", () => {
     const dayOld = { ...live(), fetched_at: new Date(Date.now() - 25 * 3600_000).toISOString() };
+    expect(catalogIsStale(live())).toBe(false);
     expect(catalogIsStale(dayOld)).toBe(true);
+    expect(catalogIsStale({ ...live(), format: undefined })).toBe(true); // built before the Models API merge
     if (installedSdkVersion()) expect(catalogIsStale({ ...live(), sdk_version: "0.0.1" })).toBe(true);
   });
 
@@ -122,9 +193,10 @@ describe("model catalog", () => {
     await designateSupervisor();
     await refreshModelCatalog();
     sdk.supportedModels = async () => { throw new Error("cli exploded"); };
+    api.fail = new Error("api exploded");
     const c = await refreshModelCatalog();
     expect(c.source).toBe("live");
-    expect(c.error).toMatch(/cli exploded/);
+    expect(c.error).toMatch(/cli exploded.*api exploded/);
     expect((await getModelCatalog()).models).toHaveLength(LIVE_MODELS.length);
   });
 
