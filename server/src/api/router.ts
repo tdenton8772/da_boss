@@ -1,5 +1,9 @@
 import { Router } from "express";
-import { SUPPORTED_MODELS } from "../models.js";
+import {
+  checkAgentModelRequest, getModelCatalog, getModelDefaults, deploymentModelDefaults, refreshModelCatalog,
+  selectableModels, knownEffortLevels, validateModelChoice, resolveRole,
+  MODEL_ROLES, MODEL_ROLE_KEYS, DEFAULTS_SETTING, type ModelChoice, type ModelRole,
+} from "../models.js";
 import { existsSync, statSync } from "node:fs";
 import type { AgentManager } from "../agent/manager.js";
 import type { AgentRecord } from "../types/agent.js";
@@ -80,6 +84,46 @@ export function createRouter(manager: AgentManager): Router {
   router.delete("/api/tokens/:id", handleRevokeToken);
 
   // ── Pod t-shirt size presets (admin-configurable resource map) ──
+  router.post("/api/admin/models/refresh", requireAdmin, async (req, res) => {
+    const catalog = await refreshModelCatalog();
+    await queries.insertAuditLog(req.ip || null, "model_catalog.refresh", "settings", "model_catalog", catalog.error ?? null, req.user?.userId);
+    if (catalog.error) {
+      res.status(502).json({ error: catalog.error, source: catalog.source });
+      return;
+    }
+    res.json({ ok: true, count: catalog.models.length, fetched_at: catalog.fetched_at });
+  });
+  router.put("/api/admin/model-defaults", requireAdmin, async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, Partial<ModelChoice> | undefined>;
+    const catalog = await getModelCatalog();
+    const out: Partial<Record<ModelRole, ModelChoice>> = {};
+    for (const role of MODEL_ROLE_KEYS) {
+      const c = body[role];
+      if (!c) continue;
+      const model = typeof c.model === "string" && c.model.trim() ? c.model.trim() : null;
+      const effort = typeof c.effort === "string" && c.effort.trim() ? c.effort.trim() : null;
+      if (!model && !MODEL_ROLES[role].inheritable) {
+        res.status(400).json({ error: `${MODEL_ROLES[role].label}: a model is required` });
+        return;
+      }
+      const err = validateModelChoice(catalog, model, effort);
+      if (err) {
+        res.status(400).json({ error: `${MODEL_ROLES[role].label}: ${err}` });
+        return;
+      }
+      out[role] = { model, effort: effort as ModelChoice["effort"] };
+    }
+    await queries.setAppSetting(DEFAULTS_SETTING, JSON.stringify(out));
+    await queries.insertAuditLog(req.ip || null, "model_defaults.update", "settings", DEFAULTS_SETTING, JSON.stringify(out), req.user?.userId);
+    res.json({ ok: true, defaults: await getModelDefaults() });
+  });
+  router.delete("/api/admin/model-defaults", requireAdmin, async (req, res) => {
+    // Back to the deployment defaults (built-in aliases + DABOSS_MODEL_DEFAULTS).
+    await queries.deleteAppSetting(DEFAULTS_SETTING);
+    await queries.insertAuditLog(req.ip || null, "model_defaults.reset", "settings", DEFAULTS_SETTING, null, req.user?.userId);
+    res.json({ ok: true, defaults: await getModelDefaults() });
+  });
+
   router.get("/api/admin/size-presets", requireAdmin, async (_req, res) => {
     res.json(await getConfiguredPresets());
   });
@@ -444,7 +488,7 @@ export function createRouter(manager: AgentManager): Router {
     }
   });
 
-  router.post("/api/agents", (req, res) => {
+  router.post("/api/agents", async (req, res) => {
     try {
       const body = req.body as CreateAgentRequest;
       if (!body.name || !body.prompt) {
@@ -475,9 +519,9 @@ export function createRouter(manager: AgentManager): Router {
           return;
         }
       }
-      const validModels: readonly string[] = SUPPORTED_MODELS;
-      if (body.model && !validModels.includes(body.model)) {
-        res.status(400).json({ error: `Invalid model. Must be one of: ${validModels.join(", ")}` });
+      const modelError = await checkAgentModelRequest(body.model, body.effort);
+      if (modelError) {
+        res.status(400).json({ error: modelError });
         return;
       }
 
@@ -1682,8 +1726,28 @@ export function createRouter(manager: AgentManager): Router {
   });
 
   // ── Templates ──────────────────────────────────────────
-  router.get("/api/templates", (_req, res) => {
-    res.json(AGENT_TEMPLATES);
+  router.get("/api/templates", async (_req, res) => {
+    // Templates carry no model of their own — they prefill the 'template' role's.
+    const role = await resolveRole("template");
+    res.json(AGENT_TEMPLATES.map((t) => ({ ...t, model: t.model ?? role.model, effort: t.effort ?? role.effort })));
+  });
+
+  // ── Models ─────────────────────────────────────────────
+  // The model picker's source: the discovered catalog (models.ts), the effort
+  // levels, and each role's effective default — so no client hardcodes a model.
+  router.get("/api/models", async (_req, res) => {
+    const catalog = await getModelCatalog();
+    res.json({
+      source: catalog.source,
+      fetched_at: catalog.fetched_at,
+      sdk_version: catalog.sdk_version,
+      error: catalog.error ?? null,
+      models: selectableModels(catalog),
+      effort_levels: knownEffortLevels(catalog),
+      defaults: await getModelDefaults(),
+      deployment_defaults: deploymentModelDefaults(),
+      roles: MODEL_ROLES,
+    });
   });
 
   // ── Settings ───────────────────────────────────────────

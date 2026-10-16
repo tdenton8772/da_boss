@@ -15,11 +15,10 @@ import { parsePipeline, PIPELINE_PATH } from "./config.js";
 import { resolveSupervisorCredentialEnv } from "../supervisor/credential.js";
 import { sendNotification } from "../notifications/ntfy.js";
 import { withClaudeLock } from "../utils/claude-lock.js";
+import { resolveRole, sdkModelOptions } from "../models.js";
 import { logger } from "../utils/logger.js";
 
-// Reviewer model — a capable model for judgment. (The stale `claude-sonnet-4-6`
-// silently returned empty results → "hold / no assessment".)
-const REVIEW_MODEL = "claude-sonnet-5";
+// Model + effort come from the admin-configured 'reviewer' role (models.ts).
 const REVIEW_MAX_USD = 1.0;
 // NOTE: the agent CHANGE review is now an in-depth review AGENT (review-agent.ts).
 // reviewAgentChange() below is superseded and unused; produceReview() (the deploy
@@ -72,20 +71,21 @@ RECOMMENDATION: <merge|fix|hold>
 ASSESSMENT: <2-4 sentences: what it did + your reasoning>
 CONCERNS: <bullets, or "none">`;
 
+  const reviewer = await resolveRole("reviewer");
   try {
     const result = await withClaudeLock(async () => {
       let r = "";
       let meta: { subtype?: string; is_error?: boolean; total_cost_usd?: number; num_turns?: number } | null = null;
-      for await (const msg of sdkQuery({ prompt, options: { maxTurns: 2, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, model: REVIEW_MODEL, env: cred.env } })) {
+      for await (const msg of sdkQuery({ prompt, options: { maxTurns: 2, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, ...sdkModelOptions(reviewer), env: cred.env } })) {
         if ("type" in msg && msg.type === "result") { meta = msg as typeof meta; if ("result" in msg) r = (msg as { result: string }).result || ""; }
       }
-      if (!r.trim()) logger.warn({ agentId, model: REVIEW_MODEL, subtype: meta?.subtype, isError: meta?.is_error, costUsd: meta?.total_cost_usd, turns: meta?.num_turns }, "Review call empty — subtype tells why");
+      if (!r.trim()) logger.warn({ agentId, model: reviewer.model, subtype: meta?.subtype, isError: meta?.is_error, costUsd: meta?.total_cost_usd, turns: meta?.num_turns }, "Review call empty — subtype tells why");
       return r;
     });
     if (!result.trim()) {
       // Empty result = the model call produced nothing (budget cut-off, bad model,
       // or credential). Don't pretend it's a verdict — say so and log it.
-      logger.warn({ agentId, model: REVIEW_MODEL }, "Reviewer returned an empty result");
+      logger.warn({ agentId, model: reviewer.model }, "Reviewer returned an empty result");
       await queries.setAgentReview(agentId, "⚠️ The reviewer returned no output (model/credential/budget issue). Tests " + (t?.status ?? "n/a") + " — review the diff yourself.", "hold");
       await queries.insertAgentEvent(agentId, "message", { role: "system", content: `📋 Review inconclusive (reviewer returned nothing)${t ? ` — tests ${t.status}` : ""}. PR${agent.pr_number ? ` #${agent.pr_number}` : ""} awaits your call.` });
       return;
@@ -179,6 +179,7 @@ RECOMMENDATION: <approve|hold|reject>
 ASSESSMENT: <what ships, whether it matches intent, and whether the deploy path is safe>
 CONCERNS: <specific breaks / intent drift / major code problems, or "none">`;
 
+  const reviewer = await resolveRole("reviewer");
   try {
     const result = await withClaudeLock(async () => {
       let r = "";
@@ -188,7 +189,7 @@ CONCERNS: <specific breaks / intent drift / major code problems, or "none">`;
         // No tools: the review is a pure text verdict from the prompt (diff +
         // tests + prior reviews are in it). With tools the model tries to explore +
         // hits maxTurns (no repo checkout in the boss pod) → error_max_turns → empty.
-        options: { maxTurns: 6, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, model: REVIEW_MODEL, env: cred.env },
+        options: { maxTurns: 6, allowedTools: [], maxBudgetUsd: REVIEW_MAX_USD, ...sdkModelOptions(reviewer), env: cred.env },
       })) {
         if ("type" in msg && msg.type === "result") { meta = msg as typeof meta; if ("result" in msg) r = (msg as { result: string }).result || ""; }
       }

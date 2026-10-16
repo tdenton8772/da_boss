@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { nanoid } from "nanoid";
-import { DEFAULT_MODEL } from "../models.js";
+import { resolveRole } from "../models.js";
 import type {
   AgentRecord,
   AgentState,
@@ -86,6 +86,11 @@ export class AgentManager {
   ): Promise<AgentRecord> {
     const id = `ag_${nanoid(8)}`;
     const branch = req.branch?.trim() ? sanitizeBranch(req.branch.trim()) : buildBranchName(req, username);
+    // No model given → the admin-configured 'agent' role (model AND its effort).
+    // A model given without an effort runs at that model's own default effort.
+    const role = await resolveRole("agent");
+    const model = req.model?.trim() || role.model;
+    const effort = req.effort?.trim() || (req.model?.trim() ? null : role.effort);
     const agent = await queries.insertAgent({
       id,
       name: req.name,
@@ -95,7 +100,8 @@ export class AgentManager {
       priority: req.priority || "medium",
       permission_mode: req.permission_mode || "default",
       sdk_session_id: null,
-      model: req.model || DEFAULT_MODEL, // code work defaults to Opus
+      model,
+      effort,
       max_turns: req.max_turns || null,
       max_budget_usd: req.max_budget_usd || null,
       error_message: null,

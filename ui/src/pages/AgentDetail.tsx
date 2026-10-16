@@ -24,6 +24,7 @@ interface AgentData {
   state: string;
   priority: string;
   model: string;
+  effort?: string | null;
   max_turns: number | null;
   max_budget_usd: number | null;
   error_message: string | null;
@@ -515,6 +516,7 @@ export function AgentDetail() {
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
           <span>Priority: {agent.priority}</span>
           <span>Model: {agent.model}</span>
+          {agent.effort && <span>Effort: {agent.effort}</span>}
           {agent.max_turns && <span>Max turns: {agent.max_turns}</span>}
           {agent.max_budget_usd && (
             <span>Budget: ${agent.max_budget_usd}</span>

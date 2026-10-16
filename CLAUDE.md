@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 287 tests, 35 files (offline, pg-mem)
+npm run test         # 338 tests, 39 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -50,7 +50,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | Module | Purpose |
 |---|---|
 | `index.ts` | Entry — Express 5, session, WS, static UI, starts: live relay, pipeline listener, dispatch queue, pod reaper, heartbeat reaper, main-watch, phase scheduler |
-| `config.ts` / `models.ts` | Env config; `SUPPORTED_MODELS` + `DEFAULT_MODEL` (opus-5) — UI model picker must stay in sync |
+| `config.ts` / `models.ts` | Env config; **model catalog + role defaults** — models/effort levels discovered from the bundled CLI (`supportedModels()`, supervisor credential, cached in app_settings, refreshed daily + on SDK bump); per-role `{model, effort}` (agent/template/review_agent/reviewer/supervisor/sizing/deploy) = built-in aliases < `DABOSS_MODEL_DEFAULTS` < admin UI. **Never hardcode a model id or effort** — call `resolveRole()` |
 | `agent/manager.ts` | Create/start/pause/resume/kill/input, branch naming, input queues, restore on restart, `offboardUser` |
 | `agent/pod-dispatcher.ts` | Pod-per-agent: pod build, ephemeral cred Secret, per-user RWO workspace PVC, reaper, failure reasons, lost-volume recovery, pipeline/cleanup pod launch |
 | `agent/runner.ts` | Legacy in-process runner (dev only) — wraps SDK `query()`, host PID tracking |
@@ -64,7 +64,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `pipeline/service.ts` | Phase resolution + launch; test phases; deploy-gate tests; artifact seeding (`$DABOSS_SEED`, ≤900KB) |
 | `pipeline/runner.ts` / `recorder.ts` | Pipeline pod entrypoint; recorder sidecar writes `/work/.daboss/{exit,log,artifact}` |
 | `pipeline/completion.ts` | `LISTEN daboss_pipeline_done` → PR comment, ready-on-green, land-on-pass merge, propose deploy |
-| `pipeline/review-agent.ts` / `review-logic.ts` / `review.ts` | Review AGENT dispatch (sonnet-5), verdict extraction → `merge|fix|hold`; fork PRs via `refs/pull/N/head` (untrusted) |
+| `pipeline/review-agent.ts` / `review-logic.ts` / `review.ts` | Review AGENT dispatch (`review_agent` role — inherits the reviewed agent's model by default), verdict extraction (`reviewer` role) → `merge|fix|hold`; fork PRs via `refs/pull/N/head` (untrusted) |
 | `pipeline/deploy-agent.ts` | Deploy agent dispatch, branch→staging deploys, deploy-run reconciliation |
 | `pipeline/main-watch.ts` | Polls active repos' main HEAD; re-runs test phases when it moves (manual merges bypass da_boss) |
 | `pipeline/scheduler.ts` | `schedule: nightly` phase sweeps |
@@ -80,12 +80,12 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `supervisor/credential.ts` | Headless Claude calls borrow a designated admin's vault credential; degrades to rules-only |
 | `forge/github.ts` / `sync-branch.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent |
 | `api/router.ts` | Main REST router (~1650 lines) — agents, reviews, merge (land gate), deploys, pipeline, files, admin, budget |
-| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 20 tools (create/control agents, reviews, deploys, checks) |
+| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 21 tools (create/control agents, `list_models`, reviews, deploys, checks) |
 | `api/auth.ts` / `tokens.ts` | Local (scrypt, first user = admin) + provider-neutral OIDC; `dbt_` API tokens, scoped, default-deny |
 | `api/live-relay.ts` / `websocket.ts` | PG LISTEN → in-process bus → WS broadcast |
 | `api/agent-status.ts` | Canonical rolled-up `status` (testing/reviewing/ready/landing/merged/deploying/deployed/…) — server-computed wins in UI |
 | `api/discovery.ts` / `usage.ts` | Import host `~/.claude` sessions; Claude account usage widget |
-| `db/` | pg pool; **33 migrations** (`migrations.ts`); ALL SQL in `queries.ts` (async, `$N` params, no raw SQL elsewhere) |
+| `db/` | pg pool; **36 migrations** (`migrations.ts`); ALL SQL in `queries.ts` (async, `$N` params, no raw SQL elsewhere) |
 | `crypto/cipher.ts` | `SecretCipher` seam — `local` AES-256-GCM today; KMS/Vault are config seams, no provider hardcoding |
 | `tokens/budget.ts` | Daily/monthly budgets, priority-tier pause |
 | `testing/` | Live-agent scenarios, scripted land-conflict fixture, hidden `usr_test_harness` user |
@@ -95,9 +95,9 @@ MCP clients ──POST /mcp──▶                 │                       �
 
 Pages: `Dashboard` (agent grid, search/filter/sort, budget, usage), `AgentDetail` (stream, plans, uploaded files, activity trace, pod size, merge-main, deploy-branch, verdict card with override guard), `Reviews` (shared queue: deploys awaiting approval + changes awaiting merge, per repo), `Discover` (import host sessions), `Settings` (credentials, git token, secrets vault, API tokens, admin: users/supervisor-credential/size-presets/default-repo/scenarios, pipeline builder), `Login` (local or SSO).
 
-Notable components: `PermissionDialog` (per-tool approval incl. AskUserQuestion + ExitPlanMode plan review), `AgentActivity` (linked runs + child agents with inline logs), `PipelineBuilder` (authors `.daboss/pipeline.yaml`, live-validated against the server parser), `CreateAgentForm` (templates, PR/branch adoption, model picker — keep in sync with `server/src/models.ts`). `agentStatus.ts` derives one status everywhere; server-computed `status` wins.
+Notable components: `PermissionDialog` (per-tool approval incl. AskUserQuestion + ExitPlanMode plan review), `AgentActivity` (linked runs + child agents with inline logs), `PipelineBuilder` (authors `.daboss/pipeline.yaml`, live-validated against the server parser), `CreateAgentForm` (templates, PR/branch adoption, model + effort pickers fed by `GET /api/models`), `ModelDefaultsPanel` (admin: per-role model + effort, catalog refresh). `agentStatus.ts` derives one status everywhere; server-computed `status` wins.
 
-### Database (Postgres, 33 migrations, 23 tables)
+### Database (Postgres, 36 migrations, 23 tables)
 
 `agents`, `agent_events`, `agent_commands`, `agent_files`, `token_usage`, `permission_requests`, `budget_config`, `supervisor_runs`, `audit_log`, `fleet_nodes`, `users`, `user_credentials`, `user_git_credentials`, `user_secrets`, `offboarded_identities`, `app_settings`, `leases`, `intents`, `dev_delta_materialization`, `pipeline_runs`, `reviews`, `api_tokens`, `schema_version`.
 
@@ -118,7 +118,8 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 ## Key SDK Integration Points
 
 - `query({ prompt, options })` → `AsyncGenerator<SDKMessage>` — iterated in `worker/index.ts` (pods) and `agent/runner.ts` (legacy)
-- `options.resume` (session id), `options.canUseTool` (permission control point), `options.includePartialMessages` (live streaming), `options.abortController`, `options.maxTurns` / `maxBudgetUsd`
+- `options.resume` (session id), `options.canUseTool` (permission control point), `options.includePartialMessages` (live streaming), `options.abortController`, `options.maxTurns` / `maxBudgetUsd`, `options.model` / `options.effort` (via `sdkModelOptions()`)
+- `Query.supportedModels()` — the CLI's model catalog (aliases + `resolvedModel` + `supportedEffortLevels`); answered at session init, so the catalog fetch sends no prompt and costs no tokens
 - `settingSources: ["project"]` loads repo CLAUDE.md + fires command hooks, but the SDK does NOT auto-load `.mcp.json` — the worker loads it (gated, graceful)
 - Plan capture: `ExitPlanMode` input is `{}`; the real plan is the file the agent Writes to `~/.claude/plans/` — worker instructs agents accordingly and captures it
 
@@ -140,7 +141,7 @@ Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `W
 
 Behavior: `MAX_CONCURRENT_AGENTS` (3), `SUPERVISOR_INTERVAL_MINUTES` (5), `SUPERVISOR_CREDENTIAL_USER`, `PERMISSION_TIMEOUT_MINUTES` (30), `STUCK_THRESHOLD_MINUTES` (15), `DABOSS_AUTO_TEST` (false), `LEASE_MODE` (`advisory`|`enforce`|`off`), `DABOSS_MAIN_WATCH_INTERVAL_SECONDS` (600), `DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS` (300), `DABOSS_REAPER_*`, `SIDECAR_*`.
 
-Builds/sizing: `DABOSS_BUILD_SERVICE_ACCOUNT`, `DABOSS_KANIKO_IMAGE`/`_MEMORY`/`_CPU`, `DABOSS_BUILD_TIMEOUT_MS`, `DABOSS_SIZE_PRESETS`, `DABOSS_DEPLOY_AGENT_IMAGE`. Misc: `NTFY_TOPIC`, `ANTHROPIC_ADMIN_API_KEY`, `CLAUDE_PATH`, `DABOSS_PR_DRAFT` (worker, default true).
+Builds/sizing: `DABOSS_BUILD_SERVICE_ACCOUNT`, `DABOSS_KANIKO_IMAGE`/`_MEMORY`/`_CPU`, `DABOSS_BUILD_TIMEOUT_MS`, `DABOSS_SIZE_PRESETS`, `DABOSS_MODEL_DEFAULTS` (JSON `{role: {model, effort}}`), `DABOSS_DEPLOY_AGENT_IMAGE`. Misc: `NTFY_TOPIC`, `ANTHROPIC_ADMIN_API_KEY`, `CLAUDE_PATH`, `DABOSS_PR_DRAFT` (worker, default true).
 
 ## Working Conventions
 

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { execSync } from "node:child_process";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { sdkModelOptions } from "../models.js";
 import type { AgentRecord } from "../types/agent.js";
 import type { ServerEvent } from "../types/events.js";
 import { createPermissionHandler } from "./permissions.js";
@@ -140,7 +141,7 @@ export class AgentRunner {
         cwd: agent.cwd,
         abortController: this.abortController,
         includePartialMessages: true,
-        model: agent.model,
+        ...sdkModelOptions(agent),
         canUseTool: permissionHandler,
         systemPrompt: {
           type: "preset" as const,

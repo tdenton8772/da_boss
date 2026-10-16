@@ -21,6 +21,7 @@ import { startPipelineCompletionListener } from "./pipeline/completion.js";
 import { startQueueListener, processQueue } from "./supervisor/dispatcher.js";
 import { startAgentReaper } from "./supervisor/reaper.js";
 import { startMainWatch } from "./pipeline/main-watch.js";
+import { startModelCatalogRefresher } from "./models.js";
 import { startScheduler } from "./pipeline/scheduler.js";
 import { logger } from "./utils/logger.js";
 
@@ -146,6 +147,10 @@ async function main() {
   // Phase scheduler: run repo phases declaring `schedule:` (e.g. a nightly data
   // snapshot whose artifact seeds test phases via `artifact_from`).
   startScheduler();
+
+  // Model catalog: discover the models + effort levels the bundled CLI offers
+  // (refetched daily and whenever the SDK version changes) — see models.ts.
+  startModelCatalogRefresher();
 
   // Start server
   server.listen(config.port, () => {

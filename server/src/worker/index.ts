@@ -21,6 +21,7 @@ import { dirname } from "node:path";
 import pg from "pg";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { sdkModelOptions } from "../models.js";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { shouldAutoApprove, mapPermissionDecision, type PermissionPolicy } from "../agent/tool-policy.js";
@@ -644,7 +645,7 @@ async function main(): Promise<void> {
           // The repo's own MCP servers (from its .mcp.json) — the SDK doesn't
           // auto-load these, so we pass them. Empty for review agents (see above).
           ...(repoMcpNames.length ? { mcpServers: repoMcpServers } : {}),
-          ...(agent.model ? { model: agent.model } : {}),
+          ...sdkModelOptions(agent),
           systemPrompt: {
             type: "preset" as const,
             preset: "claude_code" as const,
@@ -689,7 +690,7 @@ async function main(): Promise<void> {
             for (const tu of extractToolUses(msg)) {
               await queries.insertAgentEvent(AGENT_ID, "message", { role: "tool", content: tu.slice(0, TOOL_MAX) });
             }
-            const usage = (msg as { message?: { usage?: Record<string, number> } }).message?.usage;
+            const usage = (msg as unknown as { message?: { usage?: Record<string, number> } }).message?.usage;
             if (usage && (usage.input_tokens || usage.output_tokens)) {
               const cost = (usage.input_tokens || 0) * 0.000003 + (usage.output_tokens || 0) * 0.000015;
               await queries.insertTokenUsage(

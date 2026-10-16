@@ -16,6 +16,7 @@
  */
 import { nanoid } from "nanoid";
 import { config } from "../config.js";
+import { resolveRole } from "../models.js";
 import * as queries from "../db/queries.js";
 import { resolvePhase, launchResolved } from "./service.js";
 import type { AgentManager } from "../agent/manager.js";
@@ -66,6 +67,7 @@ export async function dispatchDeployAgent(
     throw { status: 400, message: "Run missing repo/owner — can't dispatch a deploy agent." };
   }
   const ref = run.git_ref || "main";
+  const deployModel = await resolveRole("deploy");
   const agent = await manager.createAgent(
     {
       name: `deploy ${ref}`,
@@ -74,7 +76,8 @@ export async function dispatchDeployAgent(
       repo_url: run.repo_url,
       repo_ref: ref,
       branch_type: "chore", // no code change; the empty-branch push is skipped
-      model: "claude-sonnet-5",
+      model: deployModel.model,
+      ...(deployModel.effort ? { effort: deployModel.effort } : {}),
       max_budget_usd: 5,
       permission_mode: "bypassPermissions",
       permission_policy: "auto",

@@ -51,7 +51,7 @@ describe("MCP surface", () => {
     const client = await connect(port, await mintMcpToken());
     const tools = new Set((await client.listTools()).tools.map((t) => t.name));
     for (const t of [
-      "create_agent", "list_agents", "get_agent", "get_agent_events",
+      "create_agent", "list_models", "list_agents", "get_agent", "get_agent_events",
       "start_agent", "pause_agent", "resume_agent", "kill_agent", "send_input",
       "list_pending_permissions", "resolve_permission",
       "list_reviewable_changes", "request_review", "run_checks", "deploy_branch", "sync_main", "resize_agent", "get_verdict",

@@ -130,7 +130,7 @@ export function AgentCard({ agent, processCount, queuedCount }: { agent: AgentWi
         <span className={`px-2 py-0.5 rounded ${PRIORITY_COLORS[agent.priority]}`}>
           {agent.priority}
         </span>
-        <span>{agent.model}</span>
+        <span>{agent.model}{agent.effort ? ` · ${agent.effort}` : ""}</span>
         {processCount != null && processCount > 0 && (
           <span className="px-2 py-0.5 rounded bg-orange-900/50 text-orange-300">
             {processCount} proc{processCount !== 1 ? "s" : ""}

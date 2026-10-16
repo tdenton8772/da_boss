@@ -31,6 +31,7 @@ export interface AgentRecord {
   permission_mode: PermissionMode;
   sdk_session_id: string | null;
   model: string;
+  effort: string | null; // reasoning effort (low…max); null = the model's default
   max_turns: number | null;
   max_budget_usd: number | null;
   error_message: string | null;
@@ -67,7 +68,8 @@ export interface CreateAgentRequest {
   cwd: string;
   priority?: PriorityTier;
   permission_mode?: PermissionMode;
-  model?: string;
+  model?: string; // id or alias (see models.ts); omitted → the 'agent' role default
+  effort?: string; // reasoning effort; omitted → the role default when model is too, else the model's default
   max_turns?: number;
   max_budget_usd?: number;
   supervisor_instructions?: string;

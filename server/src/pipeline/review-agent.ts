@@ -11,9 +11,8 @@ import type { AgentRecord, CreateAgentRequest } from "../types/agent.js";
 import { resolveSupervisorCredentialEnv } from "../supervisor/credential.js";
 import { logger } from "../utils/logger.js";
 import { sendNotification } from "../notifications/ntfy.js";
+import { resolveRole, sdkModelOptions } from "../models.js";
 import { buildReviewConfig, gatherAssessment, formatDecisionTrail, extractVerdictFromText, type Verdict } from "./review-logic.js";
-
-const REVIEW_MODEL = "claude-sonnet-5";
 
 /** The subset of AgentManager a review dispatch needs — the SEAM. Production
  *  passes the real manager (pods); tests pass a fake, so the orchestration
@@ -32,11 +31,12 @@ async function extractVerdict(assessment: string): Promise<Verdict> {
   if (explicit) return explicit;
   const cred = await resolveSupervisorCredentialEnv();
   if (!cred.ok) return "hold";
+  const reviewer = await resolveRole("reviewer");
   try {
     let r = "";
     for await (const msg of sdkQuery({
       prompt: `A senior engineer wrote this review of a PR whose tests already passed:\n\n${assessment.slice(0, 12000)}\n\nClassify it into ONE verdict for the human:\n- merge = looks good, ready to merge\n- fix = needs changes, send back to the agent\n- hold = a human should look closely\nReply with EXACTLY one word: merge, fix, or hold.`,
-      options: { maxTurns: 2, allowedTools: [], systemPrompt: "You output exactly one word: merge, fix, or hold.", maxBudgetUsd: 0.5, model: REVIEW_MODEL, env: cred.env },
+      options: { maxTurns: 2, allowedTools: [], systemPrompt: "You output exactly one word: merge, fix, or hold.", maxBudgetUsd: 0.5, ...sdkModelOptions(reviewer), env: cred.env },
     })) {
       if ("type" in msg && msg.type === "result" && "result" in msg) r = (msg as { result: string }).result || "";
     }
@@ -73,7 +73,10 @@ export async function dispatchReviewAgent(
   // empty and the reviewer re-litigated already-blessed scope).
   const decisionTrail = formatDecisionTrail(await queries.getUserMessages(reviewed.id, 6));
 
-  const agent = await dispatcher.createAgent(buildReviewConfig(reviewed, testInfo, decisionTrail), reviewed.created_by_user_id, null);
+  // Review agents run on the 'review_agent' role — by default inheriting the
+  // reviewed agent's model (review is code work).
+  const choice = await resolveRole("review_agent", reviewed.model);
+  const agent = await dispatcher.createAgent(buildReviewConfig(reviewed, testInfo, decisionTrail, choice), reviewed.created_by_user_id, null);
   // Set review-of BEFORE starting the pod: the worker reads it at runtime to gate
   // itself read-only (never push). Ordering matters — do not reorder past start.
   await queries.setAgentReviewOf(agent.id, reviewed.id);

@@ -29,12 +29,12 @@ function startOfMonthUtc(): string {
 export async function insertAgent(
   agent: Omit<
     AgentRecord,
-    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id" | "last_heartbeat_at" | "plan"
-  >
+    "created_at" | "updated_at" | "started_at" | "completed_at" | "pr_url" | "pr_number" | "advisory_strikes" | "review" | "recommendation" | "pipeline_run_id" | "review_of_agent_id" | "deployed_by_agent_id" | "last_heartbeat_at" | "plan" | "effort"
+  > & { effort?: string | null }
 ): Promise<AgentRecord> {
   await getPool().query(
-    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref, size, toolchain)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+    `INSERT INTO agents (id, name, prompt, cwd, state, priority, permission_mode, sdk_session_id, model, max_turns, max_budget_usd, error_message, supervisor_instructions, permission_policy, created_by_user_id, repo_url, repo_ref, branch, service_account, worker_image, adopted_ref, size, toolchain, effort)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
     [
       agent.id,
       agent.name,
@@ -59,6 +59,7 @@ export async function insertAgent(
       agent.adopted_ref,
       agent.size,
       agent.toolchain,
+      agent.effort ?? null,
     ]
   );
   return (await getAgent(agent.id))!;

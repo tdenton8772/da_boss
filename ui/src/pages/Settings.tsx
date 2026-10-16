@@ -7,6 +7,7 @@ import { GitCredentialPanel } from "../components/GitCredentialPanel";
 import { SecretsPanel } from "../components/SecretsPanel";
 import { AdminUsersPanel } from "../components/AdminUsersPanel";
 import { SizePresetsPanel } from "../components/SizePresetsPanel";
+import { ModelDefaultsPanel } from "../components/ModelDefaultsPanel";
 import { SupervisorCredentialPanel } from "../components/SupervisorCredentialPanel";
 import { DefaultRepoPanel } from "../components/DefaultRepoPanel";
 import { ScenarioPanel } from "../components/ScenarioPanel";
@@ -190,6 +191,9 @@ export function Settings() {
         <AdminUsersPanel />
         <DefaultRepoPanel />
       </div>
+
+      {/* Admin: model + effort per role, from the discovered catalog */}
+      <ModelDefaultsPanel />
 
       {/* Admin: pod t-shirt size presets (self-gates via the admin-only endpoint) */}
       <SizePresetsPanel />
