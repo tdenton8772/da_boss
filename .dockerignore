@@ -15,3 +15,8 @@ claude_err.log
 *.md
 k8s
 scripts
+# not part of the app: other images' contexts, vendored tarballs, local DBs, build config
+images
+*.tgz
+*.db
+cloudbuild*.yaml
