@@ -19,6 +19,12 @@ export function useWebSocket(onEvent: EventHandler) {
   const wsRef = useRef<WebSocket | null>(null);
   const onEventRef = useRef(onEvent);
   const [connected, setConnected] = useState(false);
+  // Agent subscriptions live on the SOCKET server-side, so a reconnect (e.g. the
+  // boss restarting on a deploy) starts unsubscribed — remember them and re-send.
+  const subsRef = useRef(new Set<string>());
+  // Bumped on every (re)connect. A page can refetch on reconnects (generation > 1)
+  // to pick up whatever happened while the socket was down.
+  const [generation, setGeneration] = useState(0);
 
   // Keep the callback ref up to date without causing reconnects
   onEventRef.current = onEvent;
@@ -35,7 +41,11 @@ export function useWebSocket(onEvent: EventHandler) {
       ws = new WebSocket(`${protocol}//${window.location.host}${prefix}/ws`);
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        for (const agentId of subsRef.current) ws.send(JSON.stringify({ type: "subscribe", agentId }));
+        setGeneration((g) => g + 1);
+      };
       ws.onclose = () => {
         setConnected(false);
         if (!closed) {
@@ -80,12 +90,14 @@ export function useWebSocket(onEvent: EventHandler) {
   }, []);
 
   const subscribe = useCallback((agentId: string) => {
+    subsRef.current.add(agentId);
     safeSend(JSON.stringify({ type: "subscribe", agentId }));
   }, [safeSend]);
 
   const unsubscribe = useCallback((agentId: string) => {
+    subsRef.current.delete(agentId);
     safeSend(JSON.stringify({ type: "unsubscribe", agentId }));
   }, [safeSend]);
 
-  return { connected, subscribe, unsubscribe };
+  return { connected, subscribe, unsubscribe, generation };
 }

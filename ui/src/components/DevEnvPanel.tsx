@@ -78,7 +78,19 @@ const STATUS: Record<string, { label: string; color: string; spin?: boolean }> =
   stopping: { label: "Stopping", color: "text-gray-400", spin: true },
 };
 
-export function DevEnvPanel({ agentId, hasBranch }: { agentId: string; hasBranch: boolean }) {
+/** Statuses while the handed-back change is still being checked/reviewed/landed. */
+const IN_FLIGHT = new Set(["testing", "reviewing", "landing"]);
+
+export function DevEnvPanel({ agentId, hasBranch, prNumber, prUrl, status, onChanged }: {
+  agentId: string;
+  hasBranch: boolean;
+  prNumber?: number | null;
+  prUrl?: string | null;
+  /** The change's canonical status (what the page header shows). */
+  status?: { key: string; label: string; color: string } | null;
+  /** The change itself moved (hand-back) — the page should refetch. */
+  onChanged?: () => void;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [kubeSetup, setKubeSetup] = useState<string | null>(null);
   const [view, setView] = useState<DevEnvView | null>(null);
@@ -118,6 +130,9 @@ export function DevEnvPanel({ agentId, hasBranch }: { agentId: string; hasBranch
   const prompt = live ? view!.local_claude_prompt : preview?.available ? preview.local_claude_prompt : "";
   const ready = env?.status === "ready";
   const unavailable = !env && preview && !preview.available ? preview.reason : null;
+  // Handed back = it has a PR and has left local dev (no longer pending/paused).
+  const handedBack = !!prNumber && !!status && !status.key.startsWith("local_dev") && !["pending", "paused"].includes(status.key);
+  const inFlight = !!status && IN_FLIGHT.has(status.key);
   let n = 0;
   const next = () => ++n;
 
@@ -222,18 +237,34 @@ export function DevEnvPanel({ agentId, hasBranch }: { agentId: string; hasBranch
             </div>
           </Step>
 
-          <Step n={next()} title="Done? Push everything, then hand it back" dim={!env}>
+          <Step n={next()} title={handedBack ? "Handed back" : "Done? Push everything, then hand it back"} dim={!env}>
+            {handedBack && (
+              <div className="text-sm mb-2">
+                {prUrl ? <a href={prUrl} target="_blank" rel="noreferrer" className="text-violet-300 hover:underline">PR #{prNumber}</a> : <>PR #{prNumber}</>}
+                {" · "}<span className={status!.color}>{status!.label}</span>
+                <p className="text-xs text-gray-500 mt-1">
+                  The checks run in their own pods and the review agent in its own — this dev pod just keeps serving the
+                  app. Progress shows in Messages below; the verdict lands at the top of this page.
+                </p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
-              <button disabled={!!busy || !env} title="Opens/updates the PR, runs the checks and queues the review"
+              <button disabled={!!busy || !env || inFlight}
+                title={inFlight ? "Checks / review still running for the last hand-back" : "Opens/updates the PR, runs the checks and queues the review"}
                 onClick={() => act("handback", async () => {
                   const r = await api.handback(agentId);
                   success(`Handed back — PR #${r.pr?.number}${r.runs.length ? `, ${r.runs.length} check(s)` : ""}${r.review_agent_id ? ", review queued" : ""}`);
                   if (r.notes.length) error(r.notes.join(" "));
+                  onChanged?.();
                 })}
                 className={`${btn} bg-blue-700 hover:bg-blue-600 text-white`}>
-                <Undo2 size={14} /> Hand back
+                <Undo2 size={14} /> {handedBack ? "Hand back again" : "Hand back"}
               </button>
-              <span className="text-xs text-gray-500">Opens/updates the PR, runs the checks and queues the review — the verdict lands on this page.</span>
+              <span className="text-xs text-gray-500">
+                {handedBack
+                  ? inFlight ? "Wait for the current checks/review to finish." : "Pushed more fixes? Hand back again to re-run the checks and review."
+                  : "Opens/updates the PR, runs the checks and queues the review — the verdict lands on this page."}
+              </span>
             </div>
           </Step>
 
