@@ -1,6 +1,7 @@
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { resolveSupervisorCredentialEnv } from "./credential.js";
 import { withClaudeLock } from "../utils/claude-lock.js";
+import { resolveRole, sdkModelOptions } from "../models.js";
 import * as queries from "../db/queries.js";
 import { sendNotification } from "../notifications/ntfy.js";
 import { config } from "../config.js";
@@ -20,11 +21,9 @@ interface Action {
 
 // Cooldown tracking: prevent supervisor from re-acting on the same agent too quickly
 // The supervisor makes consequential judgments — deciding to block/steer an
-// agent's work, or answering a permission question on the human's behalf. That's
-// deep reasoning about intent + correctness, not a cheap triage, so it runs on a
-// capable model (Sonnet), with a budget high enough that a long transcript won't
-// truncate the call to an empty result.
-const SUPERVISOR_MODEL = "claude-sonnet-5";
+// agent's work, or answering a permission question on the human's behalf. Its
+// model + effort are the admin-configured 'supervisor' role (models.ts); the
+// budget is high enough that a long transcript won't truncate the call to empty.
 const SUPERVISOR_MAX_USD = 0.2;
 
 const lastSupervisorAction = new Map<string, number>(); // agentId -> timestamp
@@ -514,6 +513,7 @@ Based on the supervisor instructions, decide what to do:
 
 Respond with ONLY the ACTION and MESSAGE lines, nothing else.`;
 
+  const supervisorModel = await resolveRole("supervisor");
   try {
     const result = await withClaudeLock(async () => {
       let r = "";
@@ -522,7 +522,7 @@ Respond with ONLY the ACTION and MESSAGE lines, nothing else.`;
         options: {
           maxTurns: 1,
           maxBudgetUsd: SUPERVISOR_MAX_USD,
-          model: SUPERVISOR_MODEL,
+          ...sdkModelOptions(supervisorModel),
           env,
         },
       })) {
@@ -663,6 +663,7 @@ When in doubt, deny — a denied agent adapts; a bad approval can't be taken bac
 
 Respond with ONLY the DECISION and ANSWER lines.`;
 
+  const supervisorModel = await resolveRole("supervisor");
   try {
     const result = await withClaudeLock(async () => {
       let r = "";
@@ -671,7 +672,7 @@ Respond with ONLY the DECISION and ANSWER lines.`;
         options: {
           maxTurns: 1,
           maxBudgetUsd: SUPERVISOR_MAX_USD,
-          model: SUPERVISOR_MODEL,
+          ...sdkModelOptions(supervisorModel),
           env,
         },
       })) {

@@ -203,6 +203,13 @@ export const api = {
     }),
   revokeToken: (id: string) => request<{ ok: boolean }>(`/tokens/${id}`, { method: "DELETE" }),
 
+  // Models: discovered catalog + per-role defaults (server/src/models.ts)
+  getModels: () => request<ModelsInfo>("/models"),
+  saveModelDefaults: (defaults: Partial<Record<string, ModelChoice>>) =>
+    request<{ ok: boolean }>("/admin/model-defaults", { method: "PUT", body: JSON.stringify(defaults) }),
+  resetModelDefaults: () => request<{ ok: boolean }>("/admin/model-defaults", { method: "DELETE" }),
+  refreshModels: () => request<{ ok: boolean; count: number }>("/admin/models/refresh", { method: "POST" }),
+
   // Pod t-shirt size presets (admin)
   getSizePresets: () => request<Record<string, SizePreset>>("/admin/size-presets"),
   saveSizePresets: (presets: Record<string, SizePreset>) =>
@@ -397,6 +404,7 @@ export interface AgentWithTokens {
   permission_mode: string;
   sdk_session_id: string | null;
   model: string;
+  effort?: string | null;
   max_turns: number | null;
   max_budget_usd: number | null;
   error_message: string | null;
@@ -438,6 +446,7 @@ export interface CreateAgentData {
   cwd?: string;
   priority?: string;
   model?: string;
+  effort?: string;
   max_turns?: number;
   max_budget_usd?: number;
   repo_url?: string;
@@ -601,8 +610,38 @@ export interface AgentTemplate {
   description: string;
   prompt: string;
   model: string;
+  effort: string | null;
   max_turns: number | null;
   permission_policy: "auto" | "ask" | "strict";
   supervisor_instructions: string;
   priority: "high" | "medium" | "low";
+}
+
+/** One model the server's catalog offers — an id or a family alias. */
+export interface CatalogModel {
+  value: string;
+  resolvedModel?: string; // what an alias currently points at
+  displayName: string;
+  description: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
+}
+
+/** A role's model + effort. model null = inherit (inheritable roles only);
+ *  effort null = the model's own default. */
+export interface ModelChoice {
+  model: string | null;
+  effort: string | null;
+}
+
+export interface ModelsInfo {
+  source: "live" | "seed";
+  fetched_at: string | null;
+  sdk_version: string | null;
+  error: string | null;
+  models: CatalogModel[];
+  effort_levels: string[];
+  defaults: Record<string, ModelChoice>;
+  deployment_defaults: Record<string, ModelChoice>;
+  roles: Record<string, { label: string; description: string; inheritable: boolean }>;
 }

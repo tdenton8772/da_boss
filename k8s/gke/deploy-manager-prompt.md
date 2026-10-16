@@ -63,7 +63,7 @@ and NEVER leave the system broken.
 const a = await m.createAgent({
   name: "deploy-manager", prompt: PROMPT, cwd: "/work",
   repo_url: "https://github.com/example/app", repo_ref: "main",
-  branch_type: "docs", model: "claude-sonnet-5", max_budget_usd: 5,
+  branch_type: "docs", model: "sonnet", max_budget_usd: 5,
   permission_mode: "bypassPermissions", permission_policy: "auto",
   service_account: "daboss-deploy",
   worker_image: "us-central1-docker.pkg.dev/YOUR_PROJECT/daboss/deploy-agent:<TAG>",

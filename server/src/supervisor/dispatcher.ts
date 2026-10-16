@@ -13,6 +13,7 @@ import { createAgentPod } from "../agent/pod-dispatcher.js";
 import { normalizeSize, nextSizeUp, resolvePreset, DEFAULT_SIZE, type TShirtSize } from "../agent/sizing.js";
 import { resolveSupervisorCredentialEnv } from "./credential.js";
 import { withClaudeLock } from "../utils/claude-lock.js";
+import { resolveRole, sdkModelOptions } from "../models.js";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
@@ -32,6 +33,7 @@ export async function assessSize(agent: AgentRecord): Promise<TShirtSize> {
   const cred = await resolveSupervisorCredentialEnv();
   if (!cred.ok) return DEFAULT_SIZE;
   try {
+    const sizing = await resolveRole("sizing");
     return await withClaudeLock(async () => {
       let r = "";
       for await (const msg of sdkQuery({
@@ -48,7 +50,7 @@ export async function assessSize(agent: AgentRecord): Promise<TShirtSize> {
           allowedTools: [],
           systemPrompt: "You reply with exactly one of: s, m, l, xl.",
           maxBudgetUsd: 0.2,
-          model: "claude-sonnet-5",
+          ...sdkModelOptions(sizing),
           env: cred.env,
         },
       })) {

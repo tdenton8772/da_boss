@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef } from "../api";
+import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef, type ModelsInfo } from "../api";
+import { ModelSelect, EffortSelect, effortLevelsFor } from "./ModelPicker";
 import { X, GitBranch, Loader, CheckCircle } from "lucide-react";
 
 /** What to call an agent that adopts a PR. Every adoption used to land on the
@@ -26,7 +27,8 @@ export function CreateAgentForm({
     prompt: "",
     cwd: "",
     priority: "medium",
-    model: "claude-opus-5",
+    // model/effort are filled from the server's 'agent' role default once
+    // /api/models loads; left unset, the server applies that default itself.
     repo_url: "",
     repo_ref: "",
     branch_type: "feat",
@@ -36,6 +38,7 @@ export function CreateAgentForm({
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
+  const [models, setModels] = useState<ModelsInfo | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplate | null>(null);
   // "Adopt an existing PR/branch": raw input, the resolved head branch, and status.
   const [adopt, setAdopt] = useState("");
@@ -76,6 +79,11 @@ export function CreateAgentForm({
 
   useEffect(() => {
     api.getTemplates().then(setTemplates).catch(() => {});
+    api.getModels().then((info) => {
+      setModels(info);
+      const d = info.defaults.agent;
+      setForm((f) => (f.model ? f : { ...f, model: d?.model ?? undefined, effort: d?.effort ?? undefined }));
+    }).catch(() => {});
     // Prefill repo from the admin-configured default (only if the user hasn't typed one).
     api.getSettings().then((s) => {
       if (s.default_repo_url || s.default_repo_ref) {
@@ -98,6 +106,7 @@ export function CreateAgentForm({
       prompt: template.prompt,
       priority: template.priority,
       model: template.model,
+      effort: template.effort ?? undefined,
       max_turns: template.max_turns || undefined,
     });
   };
@@ -174,7 +183,8 @@ export function CreateAgentForm({
                   type="button"
                   onClick={() => {
                     setSelectedTemplate(null);
-                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: "claude-opus-5" });
+                    const d = models?.defaults.agent;
+                    setForm({ name: "", prompt: "", cwd: "", priority: "medium", model: d?.model ?? undefined, effort: d?.effort ?? undefined });
                   }}
                   className="text-xs text-gray-500 hover:text-gray-400"
                 >
@@ -292,7 +302,7 @@ export function CreateAgentForm({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm text-gray-400 mb-1">
                 Priority
@@ -311,32 +321,39 @@ export function CreateAgentForm({
             </div>
             <div>
               <label className="block text-sm text-gray-400 mb-1">Model</label>
-              <select
-                value={form.model}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, model: e.target.value }))
-                }
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm"
-              >
-                {/* Keep in sync with server/src/models.ts (SUPPORTED_MODELS). */}
-                <optgroup label="Opus">
-                  <option value="claude-opus-5">Opus 5 (default — code work)</option>
-                  <option value="claude-opus-4-8">Opus 4.8</option>
-                  <option value="claude-opus-4-7">Opus 4.7</option>
-                  <option value="claude-opus-4-6">Opus 4.6</option>
-                </optgroup>
-                <optgroup label="Fable">
-                  <option value="claude-fable-5">Fable 5</option>
-                </optgroup>
-                <optgroup label="Sonnet">
-                  <option value="claude-sonnet-5">Sonnet 5</option>
-                  <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                  <option value="claude-sonnet-4-5-20250929">Sonnet 4.5</option>
-                </optgroup>
-                <optgroup label="Haiku">
-                  <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
-                </optgroup>
-              </select>
+              {models ? (
+                <ModelSelect
+                  info={models}
+                  value={form.model ?? null}
+                  onChange={(model) =>
+                    setForm((f) => ({
+                      ...f,
+                      model: model ?? undefined,
+                      // drop an effort the new model can't take
+                      effort: f.effort && effortLevelsFor(models, model).includes(f.effort) ? f.effort : undefined,
+                    }))
+                  }
+                />
+              ) : (
+                <select disabled className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-500 text-sm">
+                  <option>Server default</option>
+                </select>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Effort</label>
+              {models ? (
+                <EffortSelect
+                  info={models}
+                  model={form.model ?? null}
+                  value={form.effort ?? null}
+                  onChange={(effort) => setForm((f) => ({ ...f, effort: effort ?? undefined }))}
+                />
+              ) : (
+                <select disabled className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-500 text-sm">
+                  <option>Server default</option>
+                </select>
+              )}
             </div>
           </div>
 

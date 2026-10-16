@@ -7,6 +7,7 @@ import { createReadStream } from "node:fs";
 import { nanoid } from "nanoid";
 import * as queries from "../db/queries.js";
 import { logger } from "../utils/logger.js";
+import { resolveRole } from "../models.js";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -539,7 +540,7 @@ export function createDiscoveryRouter(): Router {
         priority: priority || "medium",
         permission_mode: "default",
         sdk_session_id: sessionId,
-        model: "claude-sonnet-4-20250514",
+        model: (await resolveRole("agent")).model,
         max_turns: null,
         max_budget_usd: null,
         error_message: null,

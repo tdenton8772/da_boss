@@ -633,6 +633,17 @@ const migrations: Migration[] = [
       ALTER TABLE budget_config ADD COLUMN IF NOT EXISTS user_monthly_default_usd DOUBLE PRECISION;
     `,
   },
+  {
+    version: 36,
+    name: "agent_effort",
+    // Per-agent reasoning effort (low/medium/high/xhigh/max), passed to the SDK.
+    // NULL = no effort sent → the model's own default. Also drops the v1 model
+    // default (a stale pinned id) — every insert sets the model from models.ts.
+    up: `
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS effort TEXT;
+      ALTER TABLE agents ALTER COLUMN model DROP DEFAULT;
+    `,
+  },
 ];
 
 export async function runMigrations(pool: pg.Pool): Promise<void> {

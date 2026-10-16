@@ -17,7 +17,7 @@ import { deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { syncMainIntoBranch } from "../forge/sync-branch.js";
 import { runTestPhasesForAgent } from "../pipeline/service.js";
 import { resolveBearer } from "./tokens.js";
-import { SUPPORTED_MODELS, DEFAULT_MODEL } from "../models.js";
+import { checkAgentModelRequest, getModelCatalog, getModelDefaults, selectableModels, knownEffortLevels } from "../models.js";
 import { logger } from "../utils/logger.js";
 
 /** Gate /mcp on a Bearer token with the `mcp` scope. Token-only (no sessions). */
@@ -81,7 +81,8 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
         repo_url: z.string().optional().describe("Git repo URL. Defaults to the server's configured default repo."),
         repo_ref: z.string().optional().describe("Base ref to branch from (default: main / the default repo ref)."),
         branch_type: z.string().optional().describe("feat | fix | chore | docs | refactor | test (default feat)"),
-        model: z.string().optional().describe(`Defaults to ${DEFAULT_MODEL} (code work). Options: ${SUPPORTED_MODELS.join(" | ")}`),
+        model: z.string().optional().describe("Model id or family alias (e.g. 'opus' = newest Opus). Omit for the server's configured default. See list_models."),
+        effort: z.string().optional().describe("Reasoning effort, e.g. low | medium | high | xhigh | max — must be one the model supports (see list_models). Omit for the default."),
         max_budget_usd: z.number().optional().describe("Optional spend cap in USD."),
         size: z.enum(["s", "m", "l", "xl"]).optional().describe("Pod t-shirt size — s/m/l/xl. Omit to let the supervisor assess the task and size it."),
         toolchain: z.string().optional().describe("Toolchain flavor: a build target (stage name) in the repo's .daboss/agent.Dockerfile. Omit for the full default image."),
@@ -92,6 +93,8 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
       const repoUrl = args.repo_url ?? (await queries.getAppSetting("default_repo_url")) ?? undefined;
       const repoRef = args.repo_ref ?? (await queries.getAppSetting("default_repo_ref")) ?? undefined;
       if (!repoUrl) return asError("No repo_url given and no default repo configured. Pass repo_url.");
+      const modelError = await checkAgentModelRequest(args.model, args.effort);
+      if (modelError) return asError(modelError);
       try {
         const agent = await manager.createAgent(
           {
@@ -102,6 +105,7 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
             repo_ref: repoRef,
             branch_type: args.branch_type ?? "feat",
             model: args.model,
+            effort: args.effort,
             max_budget_usd: args.max_budget_usd,
             size: args.size,
             toolchain: args.toolchain,
@@ -241,6 +245,23 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
   );
 
   // ── Agent lifecycle + monitoring (parity with the UI) ──────────────
+  server.registerTool(
+    "list_models",
+    { description: "List the models agents can run on (ids and family aliases, with the concrete model each alias resolves to), the effort levels each supports, and the server's default model + effort per role.", inputSchema: {} },
+    async () => {
+      const deny = denyIfMissing(principal, "agent:read"); if (deny) return deny;
+      const catalog = await getModelCatalog();
+      return asText({
+        source: catalog.source,
+        models: selectableModels(catalog).map((m) => ({
+          model: m.value, resolves_to: m.resolvedModel ?? m.value, name: m.displayName, effort_levels: m.supportedEffortLevels ?? [],
+        })),
+        effort_levels: knownEffortLevels(catalog),
+        defaults: await getModelDefaults(),
+      });
+    }
+  );
+
   server.registerTool(
     "list_agents",
     { description: "List all agents with their state, PR number, and review recommendation.", inputSchema: {} },
