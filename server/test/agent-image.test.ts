@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { repoSlug, configKey, agentImageRef, hashIncludePaths } from "../src/agent/agent-image.js";
 
 const BASE = "us-central1-docker.pkg.dev/proj/daboss/da-boss:sometag";
@@ -52,5 +52,58 @@ describe("hashIncludePaths", () => {
     const a = agentImageRef(BASE, "https://github.com/o/r.git", df + "\n--- web/mix.lock ---\nlock-v1");
     const b = agentImageRef(BASE, "https://github.com/o/r.git", df + "\n--- web/mix.lock ---\nlock-v2");
     expect(a).not.toBe(b);
+  });
+});
+
+describe("resolveAgentImage — split layout (toolchain image + mounted /app)", () => {
+  const OS_A = "us-central1-docker.pkg.dev/proj/daboss/da-boss-os:deployA";
+  const OS_B = "us-central1-docker.pkg.dev/proj/daboss/da-boss-os:deployB";
+  const DF = "ARG DABOSS_BASE\nFROM ${DABOSS_BASE}\nRUN apt-get install -y python3";
+
+  async function load(layers: Record<string, string | null>, dockerfile: string | null = DF) {
+    vi.resetModules();
+    const built: Array<{ image: string; buildArgs?: Record<string, string> }> = [];
+    vi.doMock("../src/forge/github.js", () => ({ getFileContents: async () => dockerfile }));
+    vi.doMock("../src/agent/image-builder.js", () => ({
+      imageLayersKey: async (ref: string) => layers[ref] ?? null,
+      ensureImage: async (image: string, spec: { buildArgs?: Record<string, string> }) => { built.push({ image, buildArgs: spec.buildArgs }); },
+    }));
+    const mod = await import("../src/agent/agent-image.js");
+    const resolve = (toolchainBase?: string) =>
+      mod.resolveAgentImage({ repoUrl: "https://github.com/o/r.git", gitToken: "t", baseImage: BASE, toolchainBase });
+    return { resolve, built };
+  }
+  afterEach(() => { vi.doUnmock("../src/forge/github.js"); vi.doUnmock("../src/agent/image-builder.js"); vi.resetModules(); });
+
+  it("a da_boss deploy with unchanged OS layers reuses the same toolchain image", async () => {
+    const { resolve, built } = await load({ [OS_A]: "layers1", [OS_B]: "layers1" });
+    const a = await resolve(OS_A);
+    const b = await resolve(OS_B);
+    expect(a).toEqual({ image: b.image, mountApp: true });
+    expect(a.image).toMatch(/\/agent-o-r:[0-9a-f]{16}$/);
+    expect(built[0].buildArgs).toEqual({ DABOSS_BASE: OS_A }); // built FROM the OS base, not the worker
+  });
+
+  it("changed OS layers produce a new toolchain image", async () => {
+    const { resolve } = await load({ [OS_A]: "layers1", [OS_B]: "layers2" });
+    expect((await resolve(OS_A)).image).not.toBe((await resolve(OS_B)).image);
+  });
+
+  it("unreadable layers fall back to keying on the ref (rebuild — the safe direction)", async () => {
+    const { resolve } = await load({});
+    expect((await resolve(OS_A)).image).not.toBe((await resolve(OS_B)).image);
+  });
+
+  it("without a toolchain base, keeps the combined layout (no mount, keyed on the worker image)", async () => {
+    const { resolve, built } = await load({});
+    const r = await resolve(undefined);
+    expect(r.mountApp).toBe(false);
+    expect(built[0].buildArgs).toEqual({ DABOSS_BASE: BASE });
+  });
+
+  it("a repo without an agent Dockerfile runs in the worker image", async () => {
+    const { resolve, built } = await load({ [OS_A]: "layers1" }, null);
+    expect(await resolve(OS_A)).toEqual({ image: BASE, mountApp: false });
+    expect(built).toHaveLength(0);
   });
 });

@@ -32,7 +32,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
 COPY ui/package.json ui/package.json
-RUN npm ci --omit=dev
+# npm installs BOTH the glibc and musl builds of the Agent SDK's native CLI (~250MB
+# each); the base is glibc (debian), so the musl one is dead weight in every pod.
+RUN npm ci --omit=dev \
+  && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl
 
 # ── app: the finished /app tree, shared by both targets ──
 FROM scratch AS app
@@ -43,7 +46,9 @@ COPY --from=build /app/server/package.json /app/server/package.json
 COPY --from=build /app/ui/dist /app/ui/dist
 COPY --from=build /app/package.json /app/package.json
 
-# ── os: the runtime OS layer ──
+# ── os: the runtime OS layer — also published as `da-boss-os`, the DABOSS_BASE
+# repos build their agent toolchain images on (agent/agent-image.ts). Changing it
+# rebuilds every repo's toolchain image, so keep it lean and stable. ──
 FROM node:22-slim AS os
 ENV NODE_ENV=production
 # git: clone repos into /work; util-linux: flock for per-user shard mirror locking;

@@ -34,7 +34,7 @@ kubectl --context docker-desktop -n daboss port-forward svc/daboss 8080:3847 &
 
 ### GKE builds (Cloud Build)
 
-Images for GKE are built by Cloud Build (amd64), never local buildx, from the **gitignored** `cloudbuild.daboss.yaml` — usage, image list, and the BuildKit registry-cache setup are in `k8s/gke/RUNBOOK.md` §2. One `Dockerfile`, two targets: `runtime` (default, last stage — boss/orchestrator/agent pods) and `deploy-agent` (+ gcloud/kubectl). Keep `runtime` the last stage so a plain `docker build` still picks it.
+Images for GKE are built by Cloud Build (amd64), never local buildx, from the **gitignored** `cloudbuild.daboss.yaml` — usage, image list, and the BuildKit registry-cache setup are in `k8s/gke/RUNBOOK.md` §2. One `Dockerfile`, three published targets: `runtime` (default, last stage — boss/orchestrator/agent pods), `deploy-agent` (+ gcloud/kubectl), and `os` (OS-only base for repo toolchain images). Keep `runtime` the last stage so a plain `docker build` still picks it.
 
 ## Architecture
 
@@ -115,7 +115,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 
 ## Per-repo contract (`.daboss/` in the TARGET repo)
 
-- `.daboss/agent.Dockerfile` — `FROM ${DABOSS_BASE}` + toolchain; kaniko-built once, content-addressed (base + Dockerfile + `# daboss-hash-include: <paths>`); build targets = per-agent toolchain flavors; falls back to base image on failure.
+- `.daboss/agent.Dockerfile` — `FROM ${DABOSS_BASE}` + toolchain; kaniko-built once, content-addressed (base + Dockerfile + `# daboss-hash-include: <paths>`); build targets = per-agent toolchain flavors; falls back to base image on failure. **Split layout** (`DABOSS_AGENT_BASE_IMAGE` set — GKE): `DABOSS_BASE` is the OS-only `da-boss-os` (node/git/ctags, **no `/app`** — don't use da_boss code at build time), keyed by its layer digests so da_boss deploys reuse the image; the pod mounts `WORKER_IMAGE`'s `/app` read-only as a k8s image volume. Unset (local kind): `DABOSS_BASE` = the full worker image, rebuilt per deploy.
 - `.daboss/pipeline.yaml` — phases (see `pipeline/config.ts`). Runner contract: env in, exit code = verdict, stdout streamed, `$DABOSS_ARTIFACT` = review artifact.
 - Runtime scratch `/work/.daboss/{log,exit,artifact}` is git-excluded by the worker.
 
@@ -141,7 +141,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 
 See `.env.example` for the documented set. Core: `DATABASE_URL`, `SESSION_SECRET`, `DABOSS_CIPHER_KEY` (required — credential vault key), `PORT` (3847), `AUTH_MODE` (`local`|`oidc` + `OIDC_*` block), `CRYPTO_PROVIDER` (`local`).
 
-Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
+Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `DABOSS_AGENT_BASE_IMAGE` (split agent-image layout), `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
 
 Behavior: `MAX_CONCURRENT_AGENTS` (3), `SUPERVISOR_INTERVAL_MINUTES` (5), `SUPERVISOR_CREDENTIAL_USER`, `PERMISSION_TIMEOUT_MINUTES` (30), `STUCK_THRESHOLD_MINUTES` (15), `DABOSS_AUTO_TEST` (false), `LEASE_MODE` (`advisory`|`enforce`|`off`), `DABOSS_MAIN_WATCH_INTERVAL_SECONDS` (600), `DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS` (300), `DABOSS_REAPER_*`, `SIDECAR_*`.
 

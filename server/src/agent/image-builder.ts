@@ -15,6 +15,7 @@
  *  - `DABOSS_KANIKO_IMAGE` — kaniko executor image (default the upstream one).
  *  - existence check auth is best-effort; when it can't tell, we BUILD (safe).
  */
+import { createHash } from "node:crypto";
 import * as k8s from "@kubernetes/client-node";
 import type { ImageBuild } from "../pipeline/config.js";
 import { normalizeGitUrl } from "../utils/git.js";
@@ -91,6 +92,8 @@ export function imagesToEnsure(
 
 // ── Registry existence check (best-effort) ────────────────────────────────────
 
+const MANIFEST_ACCEPT = "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json";
+
 /** True if `ref`'s tag already exists. Best-effort Docker Registry v2 manifest
  *  check; on GKE it authenticates to Artifact Registry with the workload-identity
  *  token. Returns false when it can't tell — so we build rather than skip (safe). */
@@ -99,9 +102,7 @@ export async function imageExists(ref: string): Promise<boolean> {
   if (!registry) return false;
   try {
     const token = await gcpAccessToken();
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json",
-    };
+    const headers: Record<string, string> = { Accept: MANIFEST_ACCEPT };
     if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(`https://${registry}/v2/${repository}/manifests/${encodeURIComponent(tag)}`, { method: "HEAD", headers, signal: AbortSignal.timeout(REGISTRY_CHECK_TIMEOUT_MS) });
     if (res.status === 200) return true;
@@ -111,6 +112,57 @@ export async function imageExists(ref: string): Promise<boolean> {
   } catch (err) {
     logger.warn({ ref, err: err instanceof Error ? err.message : String(err) }, "Image existence check failed — will build");
     return false;
+  }
+}
+
+/** One entry of an image index (multi-platform list, or buildx's image + attestation). */
+export interface IndexEntry {
+  digest: string;
+  platform?: { os?: string; architecture?: string };
+  annotations?: Record<string, string>;
+}
+
+/** The image manifest to read from an index: linux/amd64 (the cluster's nodes),
+ *  else the first real image entry. Attestation entries (buildx provenance) are
+ *  skipped — they carry platform unknown/unknown. */
+export function pickPlatformManifest(entries: IndexEntry[]): IndexEntry | undefined {
+  const images = entries.filter((e) =>
+    e.annotations?.["vnd.docker.reference.type"] !== "attestation-manifest" && e.platform?.os !== "unknown");
+  return images.find((e) => e.platform?.os === "linux" && e.platform?.architecture === "amd64") ?? images[0];
+}
+
+/** A short content identity for an image's filesystem: a hash over its layer
+ *  digests. Two pushes of the same (cached) layers share it even though their
+ *  config timestamps — and so their manifest digests — differ. */
+export function layersKey(layerDigests: string[]): string {
+  return createHash("sha256").update(layerDigests.join("\n")).digest("hex").slice(0, 16);
+}
+
+/** layersKey() of a registry image, or null when its manifest can't be read (no
+ *  registry, auth, timeout) — callers fall back to keying on the ref itself. */
+export async function imageLayersKey(ref: string): Promise<string | null> {
+  const { registry, repository, tag } = parseImageRef(ref);
+  if (!registry) return null;
+  try {
+    const token = await gcpAccessToken();
+    const get = async (reference: string) => {
+      const res = await fetch(`https://${registry}/v2/${repository}/manifests/${encodeURIComponent(reference)}`, {
+        headers: { Accept: MANIFEST_ACCEPT, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        signal: AbortSignal.timeout(REGISTRY_CHECK_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`manifest ${reference}: HTTP ${res.status}`);
+      return (await res.json()) as { manifests?: IndexEntry[]; layers?: Array<{ digest: string }> };
+    };
+    let manifest = await get(tag);
+    if (manifest.manifests) {
+      const entry = pickPlatformManifest(manifest.manifests);
+      if (!entry) return null;
+      manifest = await get(entry.digest);
+    }
+    return manifest.layers?.length ? layersKey(manifest.layers.map((l) => l.digest)) : null;
+  } catch (err) {
+    logger.warn({ ref, err: err instanceof Error ? err.message : String(err) }, "Couldn't read image layers — keying on the ref instead");
+    return null;
   }
 }
 

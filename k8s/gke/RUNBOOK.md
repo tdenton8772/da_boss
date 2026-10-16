@@ -39,6 +39,7 @@ What one build produces (Artifact Registry `us-central1-docker.pkg.dev/YOUR_PROJ
 |---|---|---|
 | `da-boss:$TAG` | `Dockerfile`, target `runtime` | boss, orchestrator, and every agent pod (`WORKER_IMAGE`) |
 | `deploy-agent:$TAG` | `Dockerfile`, target `deploy-agent` (runtime + gcloud/kubectl) | deploy-manager agents (`DABOSS_DEPLOY_AGENT_IMAGE`) |
+| `da-boss-os:$TAG` | `Dockerfile`, target `os` (OS + node, no da_boss code) | base for repos' agent toolchain images (`DABOSS_AGENT_BASE_IMAGE`) |
 | `elixir-test:1.18` | `images/elixir-test` | pipeline test phases; rebuilt only when its Dockerfile changes (tracked by a `src-<hash>` tag) |
 
 How it's built — the parts worth keeping if you write your own config:
@@ -55,6 +56,11 @@ How it's built — the parts worth keeping if you write your own config:
 - **The two app images build in parallel** on one shared builder, so their common
   stages (`build`, `proddeps`, `app`, `os`) are built once. In `deploy-agent` the
   gcloud layer sits *below* the app, so app changes never rebuild or re-push it.
+- **Push the `os` stage too** (`da-boss-os`). Repo agent images are built on it and
+  keyed by its *layer digests*, which the cache keeps stable, so a da_boss deploy
+  doesn't rebuild them; the agent pod mounts da_boss's code from `WORKER_IMAGE` as
+  a read-only image volume (needs Kubernetes ImageVolume — on by default in 1.35;
+  leave `DABOSS_AGENT_BASE_IMAGE` unset on clusters without it).
 - **Static images are skipped when unchanged**: hash the Dockerfile and check for
   the `src-<hash>` tag with `docker buildx imagetools inspect` before building.
 - In `cloudbuild.yaml`, shell variables must be written `$$var`, because Cloud
@@ -165,7 +171,8 @@ just without the repo's declared toolchain).
 - Redeploys: bump `_TAG`, rebuild (step 2), re-`sed`+apply (step 6). `:latest`-style
   tags need `kubectl rollout restart deploy/daboss`.
 - **One tag, one apply.** `30-daboss.yaml` sets the boss image, the orchestrator
-  image, `WORKER_IMAGE` and `DABOSS_DEPLOY_AGENT_IMAGE` from the same `IMAGE_TAG`.
+  image, `WORKER_IMAGE`, `DABOSS_DEPLOY_AGENT_IMAGE` and `DABOSS_AGENT_BASE_IMAGE`
+  from the same `IMAGE_TAG`.
   Never bump one by hand (`kubectl set image`, `kubectl set env`): the rest keep
   running old worker code.
 - Deferred hardening: External Secrets, tainted worker node pool, Cloud SQL, Okta
