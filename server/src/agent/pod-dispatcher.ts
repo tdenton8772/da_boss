@@ -19,6 +19,10 @@ import { logger } from "../utils/logger.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
 const WORKER_IMAGE = process.env.WORKER_IMAGE || "da-boss:local";
+// da_boss's OS-only base (the Dockerfile's `os` stage). Set → repo agent images
+// hold only the repo's toolchain and get da_boss's /app from WORKER_IMAGE as an
+// image volume, so a da_boss deploy doesn't rebuild them. See agent/agent-image.ts.
+const AGENT_BASE_IMAGE = process.env.DABOSS_AGENT_BASE_IMAGE || "";
 const APP_SECRET = process.env.APP_SECRET_NAME || "daboss-app";
 
 let coreApi: k8s.CoreV1Api | null = null;
@@ -252,15 +256,17 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
   // build it once (kaniko, keyed by base+Dockerfile) and run the agent in it; else the
   // generic base. A deploy/custom agent (worker_image already set) keeps its image.
   let agentImage = agent.worker_image || WORKER_IMAGE;
+  let mountApp = false;
   if (!agent.worker_image && agent.repo_url && hasGit) {
-    agentImage = await resolveAgentImage({
+    ({ image: agentImage, mountApp } = await resolveAgentImage({
       repoUrl: agent.repo_url,
       ref: agent.repo_ref || undefined,
       gitToken: secretData.GIT_TOKEN,
       baseImage: WORKER_IMAGE,
+      toolchainBase: AGENT_BASE_IMAGE || undefined,
       target: agent.toolchain || undefined,
       onProgress: (msg) => { void queries.insertAgentEvent(agentId, "message", { role: "system", content: `🧱 ${msg}` }).catch(() => {}); },
-    });
+    }));
   }
 
   const secretName = agentSecretName(agentId);
@@ -347,6 +353,9 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
           // gcloud/kubectl image for a deploy-manager agent), else the generic base.
           image: agentImage,
           imagePullPolicy: "IfNotPresent",
+          // A toolchain-only image has no /app or WORKDIR of its own — run from the
+          // mounted worker code.
+          ...(mountApp ? { workingDir: "/app/server" } : {}),
           command: ["node", "dist/worker/index.js"],
           env: [
             { name: "AGENT_ID", value: agentId },
@@ -366,6 +375,7 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
             { name: "work", mountPath: "/work" },
             { name: "workspace", mountPath: "/ws" },
             ...(hasSeed ? [{ name: "seed", mountPath: "/daboss-seed", readOnly: true }] : []),
+            ...(mountApp ? [{ name: "daboss-app", mountPath: "/app", subPath: "app", readOnly: true }] : []),
           ],
           resources: { requests: agentPreset.requests, limits: agentPreset.limits },
         },
@@ -395,6 +405,11 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
         { name: "work", emptyDir: {} },
         { name: "workspace", persistentVolumeClaim: { claimName: wsPvc } },
         ...(hasSeed ? [{ name: "seed", secret: { secretName, items: [{ key: "DABOSS_SEED", path: "seed" }] } }] : []),
+        // da_boss's code for a toolchain-only image: WORKER_IMAGE's filesystem as a
+        // read-only image volume (k8s ImageVolume) — no copy, no build, and always
+        // the deployed worker. The sidecar runs from it too, so it is usually already
+        // on the node.
+        ...(mountApp ? [{ name: "daboss-app", image: { reference: WORKER_IMAGE, pullPolicy: "IfNotPresent" } }] : []),
       ],
     },
   };
