@@ -23,6 +23,7 @@ import { startAgentReaper } from "./supervisor/reaper.js";
 import { startMainWatch } from "./pipeline/main-watch.js";
 import { startModelCatalogRefresher } from "./models.js";
 import { prewarmAllRepoImages } from "./agent/image-prewarm.js";
+import { startDevEnvReaper } from "./dev/dev-env.js";
 import { startScheduler } from "./pipeline/scheduler.js";
 import { logger } from "./utils/logger.js";
 
@@ -157,6 +158,9 @@ async function main() {
   // so the first agent after a deploy doesn't wait on a ~10 min build. Delayed so
   // it doesn't compete with startup; background, never throws.
   setTimeout(() => { void prewarmAllRepoImages(); }, 30_000).unref();
+
+  // Dev environments: expire idle ones, fail ones orphaned by a restart.
+  startDevEnvReaper();
 
   // Start server
   server.listen(config.port, () => {

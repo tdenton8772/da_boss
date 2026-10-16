@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 356 tests, 41 files (offline, pg-mem)
+npm run test         # 396 tests, 43 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -73,6 +73,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `pipeline/deploy-agent.ts` | Deploy agent dispatch, branch→staging deploys, deploy-run reconciliation |
 | `pipeline/main-watch.ts` | Polls active repos' main HEAD; re-runs test phases when it moves (manual merges bypass da_boss) |
 | `pipeline/scheduler.ts` | `schedule: nightly` phase sweeps |
+| `dev/config.ts` / `manifest.ts` / `dev-env.ts` / `handback.ts` | **Dev environments**: parse a repo's `.daboss/dev.yaml`; build the dev Deployment + in-pod scripts (clone/setup/start/sync — git token on stdin only) + the human's port-forward/copy commands + a local-Claude prompt; lifecycle (start → provision in background, sync, extend, stop, expiry reaper); hand-back = ensure PR + run gates + queue review |
 | `worker/index.ts` | Pod-side agent loop: clone, SDK loop, DB-mediated permissions, steer listener, uploads → `/work/uploads`, plan capture from `~/.claude/plans`, auto-commit + push + draft PR per turn, `WORKER_SCRIPT` scripted mode |
 | `worker/project-context.ts` / `repo-mcp.ts` | Inject repo CLAUDE.md; load repo `.mcp.json` (skipped for reviewers/untrusted) |
 | `worker/cleanup.ts` | State-cleanup pod — prunes deleted agents' transcripts from the user's workspace shard |
@@ -85,12 +86,12 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `supervisor/credential.ts` | Headless Claude calls borrow a designated admin's vault credential; degrades to rules-only |
 | `forge/github.ts` / `sync-branch.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent |
 | `api/router.ts` | Main REST router (~1650 lines) — agents, reviews, merge (land gate), deploys, pipeline, files, admin, budget |
-| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 21 tools (create/control agents, `list_models`, reviews, deploys, checks) |
+| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 26 tools (create/control agents, `list_models`, dev envs: `start_dev_env`/`get_dev_env`/`sync_dev_env`/`stop_dev_env`/`handback_change`, reviews, deploys, checks) |
 | `api/auth.ts` / `tokens.ts` | Local (scrypt, first user = admin) + provider-neutral OIDC; `dbt_` API tokens, scoped, default-deny |
 | `api/live-relay.ts` / `websocket.ts` | PG LISTEN → in-process bus → WS broadcast |
 | `api/agent-status.ts` | Canonical rolled-up `status` (testing/reviewing/ready/landing/merged/deploying/deployed/…) — server-computed wins in UI |
 | `api/discovery.ts` / `usage.ts` | Import host `~/.claude` sessions; Claude account usage widget |
-| `db/` | pg pool; **36 migrations** (`migrations.ts`); ALL SQL in `queries.ts` (async, `$N` params, no raw SQL elsewhere) |
+| `db/` | pg pool; **37 migrations** (`migrations.ts`); ALL SQL in `queries.ts` (async, `$N` params, no raw SQL elsewhere) |
 | `crypto/cipher.ts` | `SecretCipher` seam — `local` AES-256-GCM today; KMS/Vault are config seams, no provider hardcoding |
 | `tokens/budget.ts` | Daily/monthly budgets, priority-tier pause |
 | `testing/` | Live-agent scenarios, scripted land-conflict fixture, hidden `usr_test_harness` user |
@@ -102,9 +103,9 @@ Pages: `Dashboard` (agent grid, search/filter/sort, budget, usage), `AgentDetail
 
 Notable components: `PermissionDialog` (per-tool approval incl. AskUserQuestion + ExitPlanMode plan review), `AgentActivity` (linked runs + child agents with inline logs), `PipelineBuilder` (authors `.daboss/pipeline.yaml`, live-validated against the server parser), `CreateAgentForm` (templates, PR/branch adoption, model + effort pickers fed by `GET /api/models`), `ModelDefaultsPanel` (admin: per-role model + effort, catalog refresh). `agentStatus.ts` derives one status everywhere; server-computed `status` wins.
 
-### Database (Postgres, 36 migrations, 23 tables)
+### Database (Postgres, 37 migrations, 24 tables)
 
-`agents`, `agent_events`, `agent_commands`, `agent_files`, `token_usage`, `permission_requests`, `budget_config`, `supervisor_runs`, `audit_log`, `fleet_nodes`, `users`, `user_credentials`, `user_git_credentials`, `user_secrets`, `offboarded_identities`, `app_settings`, `leases`, `intents`, `dev_delta_materialization`, `pipeline_runs`, `reviews`, `api_tokens`, `schema_version`.
+`agents`, `agent_events`, `agent_commands`, `agent_files`, `token_usage`, `permission_requests`, `budget_config`, `supervisor_runs`, `audit_log`, `fleet_nodes`, `users`, `user_credentials`, `user_git_credentials`, `user_secrets`, `offboarded_identities`, `app_settings`, `dev_envs`, `leases`, `intents`, `dev_delta_materialization`, `pipeline_runs`, `reviews`, `api_tokens`, `schema_version`.
 
 ### Agent state machine + status
 
@@ -117,6 +118,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 ## Per-repo contract (`.daboss/` in the TARGET repo)
 
 - `.daboss/agent.Dockerfile` — `FROM ${DABOSS_BASE}` + toolchain; kaniko-built once, content-addressed (base + Dockerfile + `# daboss-hash-include: <paths>`); build targets = per-agent toolchain flavors; falls back to base image on failure. **Split layout** (`DABOSS_AGENT_BASE_IMAGE` set — GKE): `DABOSS_BASE` is the OS-only `da-boss-os` (node/git/ctags, **no `/app`** — don't use da_boss code at build time), keyed by its layer digests so da_boss deploys reuse the image; the pod mounts `WORKER_IMAGE`'s `/app` read-only as a k8s image volume. Unset (local kind): `DABOSS_BASE` = the full worker image, rebuilt per deploy.
+- `.daboss/dev.yaml` — optional **dev environment** (see `dev/config.ts`): namespace, port, image (`agent` = the toolchain image), service account, sidecars, env / secret_env / env_from (`${user.email}`, `${branch}` templating), `setup`/`start`/`sync` commands, `ready_check`, `ttl_hours`, `sync_exclude`. Read from the default branch only (it names namespaces/SAs/secrets — a branch can't change what da_boss applies). The namespace must be in `DABOSS_DEV_NAMESPACES` and da_boss needs RBAC there (`k8s/gke/RUNBOOK.md`).
 - `.daboss/pipeline.yaml` — phases (see `pipeline/config.ts`). Runner contract: env in, exit code = verdict, stdout streamed, `$DABOSS_ARTIFACT` = review artifact.
 - Runtime scratch `/work/.daboss/{log,exit,artifact}` is git-excluded by the worker.
 
@@ -142,7 +144,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 
 See `.env.example` for the documented set. Core: `DATABASE_URL`, `SESSION_SECRET`, `DABOSS_CIPHER_KEY` (required — credential vault key), `PORT` (3847), `AUTH_MODE` (`local`|`oidc` + `OIDC_*` block), `CRYPTO_PROVIDER` (`local`).
 
-Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `DABOSS_AGENT_BASE_IMAGE` (split agent-image layout), `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
+Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `DABOSS_AGENT_BASE_IMAGE` (split agent-image layout), `DABOSS_DEV_NAMESPACES` (dev envs allowed here; empty = off), `DABOSS_DEV_KUBE_CONTEXT` (kubectl context named in the human's port-forward command), `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
 
 Behavior: `MAX_CONCURRENT_AGENTS` (3), `SUPERVISOR_INTERVAL_MINUTES` (5), `SUPERVISOR_CREDENTIAL_USER`, `PERMISSION_TIMEOUT_MINUTES` (30), `STUCK_THRESHOLD_MINUTES` (15), `DABOSS_AUTO_TEST` (false), `LEASE_MODE` (`advisory`|`enforce`|`off`), `DABOSS_MAIN_WATCH_INTERVAL_SECONDS` (600), `DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS` (300), `DABOSS_REAPER_*`, `SIDECAR_*`.
 

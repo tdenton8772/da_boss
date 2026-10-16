@@ -1781,3 +1781,72 @@ export async function getAgentPlans(agentId: string): Promise<Array<{ id: number
     })
     .filter((p) => p.plan.trim().length > 0);
 }
+
+// ── Dev environments ────────────────────────────────────
+
+export type DevEnvStatus = "starting" | "ready" | "failed" | "stopping" | "stopped";
+export interface DevEnvRecord {
+  id: string;
+  agent_id: string;
+  user_id: string | null;
+  repo_url: string;
+  branch: string;
+  namespace: string;
+  name: string;
+  image: string | null;
+  port: number;
+  ttl_hours: number;
+  status: DevEnvStatus;
+  detail: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  stopped_at: string | null;
+}
+
+export async function insertDevEnv(e: {
+  id: string; agent_id: string; user_id: string | null; repo_url: string; branch: string;
+  namespace: string; name: string; image: string | null; port: number; ttl_hours: number; expires_at: Date;
+}): Promise<DevEnvRecord> {
+  await getPool().query(
+    `INSERT INTO dev_envs (id, agent_id, user_id, repo_url, branch, namespace, name, image, port, ttl_hours, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [e.id, e.agent_id, e.user_id, e.repo_url, e.branch, e.namespace, e.name, e.image, e.port, e.ttl_hours, e.expires_at.toISOString()]
+  );
+  return (await getDevEnv(e.id))!;
+}
+
+export async function getDevEnv(id: string): Promise<DevEnvRecord | undefined> {
+  const res = await getPool().query<DevEnvRecord>("SELECT * FROM dev_envs WHERE id = $1", [id]);
+  return res.rows[0];
+}
+
+/** The agent's live (not stopped) dev env, if any. */
+export async function getLiveDevEnvForAgent(agentId: string): Promise<DevEnvRecord | undefined> {
+  const res = await getPool().query<DevEnvRecord>(
+    "SELECT * FROM dev_envs WHERE agent_id = $1 AND status <> 'stopped' ORDER BY created_at DESC LIMIT 1",
+    [agentId]
+  );
+  return res.rows[0];
+}
+
+export async function getLiveDevEnvs(): Promise<DevEnvRecord[]> {
+  const res = await getPool().query<DevEnvRecord>("SELECT * FROM dev_envs WHERE status <> 'stopped' ORDER BY created_at");
+  return res.rows;
+}
+
+export async function updateDevEnv(
+  id: string,
+  patch: { status?: DevEnvStatus; detail?: string | null; image?: string | null; expires_at?: Date; stopped?: boolean }
+): Promise<void> {
+  const sets: string[] = ["updated_at = NOW()"];
+  const vals: unknown[] = [];
+  const add = (col: string, v: unknown) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+  if (patch.status !== undefined) add("status", patch.status);
+  if (patch.detail !== undefined) add("detail", patch.detail);
+  if (patch.image !== undefined) add("image", patch.image);
+  if (patch.expires_at !== undefined) add("expires_at", patch.expires_at.toISOString());
+  if (patch.stopped) sets.push("stopped_at = NOW()");
+  vals.push(id);
+  await getPool().query(`UPDATE dev_envs SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
+}

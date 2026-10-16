@@ -61,3 +61,16 @@ describe("computeAgentStatus", () => {
     expect(computeAgentStatus({ state: "verified" }).key).toBe("merged");
   });
 });
+
+describe("local dev status", () => {
+  it("a change with a live dev env and no agent run reads 'Local dev'", () => {
+    expect(computeAgentStatus({ state: "pending", dev_env: "ready" }).key).toBe("local_dev");
+    expect(computeAgentStatus({ state: "pending", dev_env: "starting" })).toMatchObject({ key: "local_dev_starting", spin: true });
+    expect(computeAgentStatus({ state: "paused", dev_env: "failed" }).key).toBe("local_dev_failed");
+  });
+  it("an agent run or a handed-back change keeps its own status", () => {
+    expect(computeAgentStatus({ state: "running", dev_env: "ready" }).key).toBe("running");
+    expect(computeAgentStatus({ state: "completed", dev_env: "ready", reviewing: true }).key).toBe("reviewing");
+    expect(computeAgentStatus({ state: "pending" }).key).toBe("pending");
+  });
+});

@@ -15,6 +15,7 @@ import { PermissionDialog } from "../components/PermissionDialog";
 import { useToastHelpers } from "../components/Toast";
 import { ArrowLeft } from "lucide-react";
 import { FileBrowser } from "../components/FileBrowser";
+import { DevEnvPanel } from "../components/DevEnvPanel";
 
 interface AgentData {
   id: string;
@@ -413,6 +414,9 @@ export function AgentDetail() {
           </div>
         </div>
       )}
+
+      {/* Dev environment — run this branch in a repo-declared pod for local work. */}
+      <DevEnvPanel agentId={agent.id} hasBranch={!!agent.repo_url && !!agent.branch && !agent.review_of_agent_id && !agent.is_deploy_agent} />
 
       {/* Plans (ExitPlanMode plan docs) + user file uploads to the agent. */}
       <AgentPlans agentId={agent.id} />

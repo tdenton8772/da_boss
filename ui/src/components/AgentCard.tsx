@@ -14,6 +14,7 @@ import {
   Rocket,
   GitMerge,
   Eye,
+ Laptop,
 } from "lucide-react";
 
 const STATE_CONFIG: Record<
@@ -92,6 +93,9 @@ const ICON_BY_KEY: Record<string, React.ReactNode> = {
   done: <CheckCircle size={14} />,
   fix: <AlertTriangle size={14} />,
   hold: <AlertTriangle size={14} />,
+  local_dev: <Laptop size={14} />,
+  local_dev_starting: <Loader size={14} className="animate-spin" />,
+  local_dev_failed: <XCircle size={14} />,
 };
 
 export function AgentCard({ agent, processCount, queuedCount }: { agent: AgentWithTokens; processCount?: number; queuedCount?: number }) {

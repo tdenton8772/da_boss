@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router";
 import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef, type ModelsInfo } from "../api";
 import { ModelSelect, EffortSelect, effortLevelsFor } from "./ModelPicker";
 import { X, GitBranch, Loader, CheckCircle } from "lucide-react";
@@ -35,6 +36,10 @@ export function CreateAgentForm({
     issue_id: "",
   });
   const [autoStart, setAutoStart] = useState(true);
+  // Work locally: create the change with no agent run and start the repo's dev
+  // environment for it, then open the change's page (where the env panel lives).
+  const [localDev, setLocalDev] = useState(false);
+  const navigate = useNavigate();
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
@@ -128,10 +133,21 @@ export function CreateAgentForm({
       // Resolve), resolveAdopt's setForm has not been applied yet — reading
       // form.name on this line would still see the template's "PR Adopter".
       const adoptedName = adoption && isTemplateName(form.name) ? prAgentName(adoption) : "";
-      const payload: CreateAgentData = adoption
+      const base: CreateAgentData = adoption
         ? { ...form, name: adoptedName || form.name, branch: adoption.branch, adopted_ref: adoption.adoptedRef }
         : form;
-      const agent = (await api.createAgent(payload)) as { id: string };
+      const payload: CreateAgentData = localDev
+        ? { ...base, local_dev: true, prompt: base.prompt.trim() || "(local work — developed against a dev environment, no agent run)" }
+        : base;
+      if (localDev && !payload.repo_url?.trim()) { setError("Working locally needs a Repo URL."); return; }
+      const agent = (await api.createAgent(payload)) as { id: string; dev_env_error?: string | null };
+      if (localDev) {
+        onCreated();
+        // The env panel on the change's page shows progress — or the reason it
+        // couldn't start, with a Restart button.
+        navigate(`/agent/${agent.id}`);
+        return;
+      }
       if (autoStart) {
         await api.startAgent(agent.id);
       }
@@ -208,8 +224,8 @@ export function CreateAgentForm({
                 setForm((f) => ({ ...f, prompt: e.target.value }))
               }
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 h-24 resize-y"
-              placeholder="Implement the auth module..."
-              required
+              placeholder={localDev ? "What you're working on (optional — no agent reads it)" : "Implement the auth module..."}
+              required={!localDev}
             />
           </div>
           <div>
@@ -401,15 +417,32 @@ export function CreateAgentForm({
             />
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-gray-400">
+          <label className="flex items-start gap-2 text-sm text-gray-400">
             <input
               type="checkbox"
-              checked={autoStart}
-              onChange={(e) => setAutoStart(e.target.checked)}
-              className="rounded bg-gray-800 border-gray-700"
+              checked={localDev}
+              onChange={(e) => setLocalDev(e.target.checked)}
+              className="rounded bg-gray-800 border-gray-700 mt-0.5"
             />
-            Start immediately
+            <span>
+              Work locally — no agent run
+              <span className="block text-xs text-gray-600">
+                Starts the repo's dev environment (<code>.daboss/dev.yaml</code>) on this branch for you and your
+                local Claude; hand it back for checks + review when done.
+              </span>
+            </span>
           </label>
+          {!localDev && (
+            <label className="flex items-center gap-2 text-sm text-gray-400">
+              <input
+                type="checkbox"
+                checked={autoStart}
+                onChange={(e) => setAutoStart(e.target.checked)}
+                className="rounded bg-gray-800 border-gray-700"
+              />
+              Start immediately
+            </label>
+          )}
         </div>
 
         {error && <p className="text-red-400 text-sm mt-3">{error}</p>}
@@ -419,7 +452,7 @@ export function CreateAgentForm({
           disabled={submitting}
           className="w-full mt-4 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white font-medium rounded px-4 py-2"
         >
-          {submitting ? "Creating..." : "Create Agent"}
+          {submitting ? "Creating..." : localDev ? "Create + start dev environment" : "Create Agent"}
         </button>
       </form>
     </div>
