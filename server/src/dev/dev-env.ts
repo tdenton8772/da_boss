@@ -106,7 +106,12 @@ export async function loadDevConfig(repoUrl: string, token: string): Promise<Dev
     throw new DevEnvError(400, "Dev environments aren't enabled on this da_boss (DABOSS_DEV_NAMESPACES is empty).");
   }
   const text = await getFileContents(repoUrl, DEV_CONFIG_PATH, undefined, token).catch(() => null);
-  if (!text?.trim()) throw new DevEnvError(404, `This repo has no ${DEV_CONFIG_PATH} on its default branch, so it doesn't declare a dev environment.`);
+  if (!text?.trim()) {
+    throw new DevEnvError(404,
+      `This repo has no ${DEV_CONFIG_PATH} on its default branch, so it doesn't declare a dev environment. ` +
+      `It's read from the default branch only — never from a change's branch, since it picks the namespace, ` +
+      `service account and secrets da_boss runs with — so adding or changing it takes effect once merged.`);
+  }
   let cfg: DevConfig;
   try {
     cfg = parseDevConfig(text);
