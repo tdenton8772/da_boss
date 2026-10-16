@@ -38,7 +38,7 @@ export function AgentFiles({ agentId }: { agentId: string }) {
       onDrop={(e) => { e.preventDefault(); setDrag(false); void upload(e.dataTransfer.files); }}
     >
       <div className="flex items-center justify-between mb-2 gap-2">
-        <div className="text-sm font-medium text-gray-300">Files <span className="text-gray-500">— dropped into <code className="text-gray-400">/work/uploads</code> for the agent</span></div>
+        <div className="text-sm font-medium text-gray-300">Files <span className="text-gray-500">— dropped into <code className="text-gray-400">/work/uploads</code> for the agent; click a name to download it for local work</span></div>
         <button disabled={busy} onClick={() => inputRef.current?.click()} className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded px-2 py-1 disabled:opacity-40 shrink-0">
           {busy ? "Uploading…" : "＋ Upload"}
         </button>
@@ -50,7 +50,7 @@ export function AgentFiles({ agentId }: { agentId: string }) {
         <ul className="space-y-1">
           {files.map((f) => (
             <li key={f.id} className="flex items-center gap-2 text-sm text-gray-300">
-              📎 <span className="truncate flex-1" title={f.name}>{f.name}</span>
+              📎 <a href={api.agentFileUrl(agentId, f.id)} download={f.name} className="truncate flex-1 hover:text-violet-300 hover:underline" title={`Download ${f.name}`}>{f.name}</a>
               <span className="text-xs text-gray-600 font-mono">/work/uploads/{f.name}</span>
               <span className="text-xs text-gray-600">{Math.max(1, Math.round(f.size / 1024))} KB</span>
               <button onClick={() => api.deleteAgentFile(agentId, f.id).then(load).catch(() => {})} className="text-xs text-gray-500 hover:text-red-400" title="Remove">✕</button>

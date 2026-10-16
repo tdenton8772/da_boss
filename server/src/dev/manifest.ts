@@ -200,32 +200,45 @@ export function devCommands(o: {
   };
 }
 
-/** A prompt to paste into a local Claude Code session so it can adopt the change. */
+/** A prompt to paste into a local Claude Code session so it can adopt the change.
+ *  Works with or without da_boss's MCP server connected: the da_boss steps are
+ *  "call the tool if you have it, else ask me to click the button". */
 export function localClaudePrompt(o: {
   agentId: string;
   agentName: string;
   repoUrl: string;
   branch: string;
   cmds: DevCommands;
+  files?: string[];
 }): string {
+  const files = o.files ?? [];
   return [
     `You're picking up a da_boss change to work on locally against its dev environment.`,
     ``,
     `- Change: ${o.agentName} (da_boss agent ${o.agentId})`,
-    `- Repo: ${o.repoUrl}`,
-    `- Branch: ${o.branch} — check it out: \`${o.cmds.checkout}\``,
-    `- The app runs in a dev pod. I'll keep this port-forward open in another terminal:`,
+    `- Repo: ${o.repoUrl} — work in my local checkout of it.`,
+    `- Branch: ${o.branch} — check it out first: \`${o.cmds.checkout}\``,
+    `- The app runs in a dev pod. I keep this port-forward open in another terminal:`,
     `  \`${o.cmds.port_forward}\` → ${o.cmds.url}`,
     ...(o.cmds.context_hint ? [`  (${o.cmds.context_hint})`] : []),
+    ...(files.length
+      ? [
+          `- Files attached to the change (screenshots/docs): ${files.join(", ")}. Read them with the da_boss MCP tool`,
+          `  \`read_agent_file\` (agent_id ${o.agentId}) if you have it; otherwise ask me to download them from the change's page.`,
+        ]
+      : []),
     ``,
     `How to iterate:`,
-    `- Fast, uncommitted: copy changed files into the pod from the repo root:`,
-    `  \`${o.cmds.copy_files}\` (or the whole tree: \`${o.cmds.copy_tree}\`). Then I refresh the browser.`,
-    `- Committed: commit + push to ${o.branch}, then call the da_boss MCP tool \`sync_dev_env\` (agent_id ${o.agentId}) — the pod pulls and runs its sync steps.`,
+    `- Fast, uncommitted: after editing, copy the changed files into the pod (run from the repo root):`,
+    `  \`${o.cmds.copy_files}\` (or the whole tree: \`${o.cmds.copy_tree}\`).`,
+    `  Then tell me to refresh the browser.`,
+    `- Committed: commit and push to ${o.branch}, then sync the pod — call the da_boss MCP tool`,
+    `  \`sync_dev_env\` (agent_id ${o.agentId}) if you have it; otherwise ask me to click **Sync** on the change's da_boss page.`,
     `- App log: \`${o.cmds.logs}\``,
     ``,
-    `When the change is done: commit and push everything to ${o.branch}, then call the da_boss MCP tool`,
-    `\`handback_change\` (agent_id ${o.agentId}). da_boss opens/updates the PR, runs the repo's checks, and`,
-    `queues its review. When I say we're finished with the environment, call \`stop_dev_env\` (agent_id ${o.agentId}).`,
+    `When the change is done: commit and push everything to ${o.branch}. Then hand it back — call`,
+    `\`handback_change\` (agent_id ${o.agentId}) if you have the da_boss MCP tools; otherwise ask me to click **Hand back**.`,
+    `da_boss then opens/updates the PR, runs the repo's checks and queues its review.`,
+    `Don't stop the dev environment yourself unless I ask (\`stop_dev_env\`, or I'll click **Stop**).`,
   ].join("\n");
 }

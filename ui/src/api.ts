@@ -356,6 +356,8 @@ export const api = {
     return res.json() as Promise<{ id: string; name: string; size: number }>;
   },
   listAgentFiles: (agentId: string) => request<AgentFile[]>(`/agents/${agentId}/files`),
+  /** Download URL for an uploaded file (session-authed, same origin). */
+  agentFileUrl: (agentId: string, fileId: string) => `${PREFIX}/api/agents/${agentId}/files/${fileId}/content`,
   deleteAgentFile: (agentId: string, fileId: string) => request<{ ok: boolean }>(`/agents/${agentId}/files/${fileId}`, { method: "DELETE" }),
 
 };

@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 396 tests, 43 files (offline, pg-mem)
+npm run test         # 399 tests, 43 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -86,7 +86,7 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `supervisor/credential.ts` | Headless Claude calls borrow a designated admin's vault credential; degrades to rules-only |
 | `forge/github.ts` / `sync-branch.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent |
 | `api/router.ts` | Main REST router (~1650 lines) — agents, reviews, merge (land gate), deploys, pipeline, files, admin, budget |
-| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 26 tools (create/control agents, `list_models`, dev envs: `start_dev_env`/`get_dev_env`/`sync_dev_env`/`stop_dev_env`/`handback_change`, reviews, deploys, checks) |
+| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 28 tools (create/control agents, `list_models`, dev envs: `start_dev_env`/`get_dev_env`/`sync_dev_env`/`stop_dev_env`/`handback_change`, uploads: `list_agent_files`/`read_agent_file`, reviews, deploys, checks) |
 | `api/auth.ts` / `tokens.ts` | Local (scrypt, first user = admin) + provider-neutral OIDC; `dbt_` API tokens, scoped, default-deny |
 | `api/live-relay.ts` / `websocket.ts` | PG LISTEN → in-process bus → WS broadcast |
 | `api/agent-status.ts` | Canonical rolled-up `status` (testing/reviewing/ready/landing/merged/deploying/deployed/…) — server-computed wins in UI |

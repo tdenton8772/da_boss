@@ -57,6 +57,7 @@ describe("MCP surface", () => {
       "list_reviewable_changes", "request_review", "run_checks", "deploy_branch", "sync_main", "resize_agent", "get_verdict",
       "list_deploys", "get_deploy_verdict",
       "start_dev_env", "get_dev_env", "sync_dev_env", "stop_dev_env", "handback_change",
+      "list_agent_files", "read_agent_file",
     ]) expect(tools.has(t)).toBe(true);
     await client.close();
   });
@@ -116,6 +117,42 @@ describe("MCP surface", () => {
     const verdict = await client.callTool({ name: "get_verdict", arguments: { agent_id: "ag_target" } });
     expect(JSON.stringify(verdict.content)).toContain("running");
     await client.close();
+  });
+
+  it("files uploaded to a change: list, download over HTTP, and read via MCP (image as image, text as text)", async () => {
+    await queries.createUser({ id: "usr_bot", email: "bot@test.co", role: "bot" }).catch(() => {});
+    await queries.insertAgent({
+      id: "ag_files", name: "local work", prompt: "x", cwd: "/work", state: "pending",
+      priority: "medium", permission_mode: "default", sdk_session_id: null, model: "opus",
+      max_turns: null, max_budget_usd: null, error_message: null, supervisor_instructions: "",
+      permission_policy: "auto", created_by_user_id: "usr_bot", repo_url: "https://github.com/o/r",
+      repo_ref: "main", branch: "feat/x", service_account: null, worker_image: null, adopted_ref: null,
+    });
+    // pg-mem mangles non-UTF-8 bytea (0x89 → U+FFFD); real Postgres doesn't. Keep the
+    // bytes ASCII here — binary integrity is checked against real PG on staging.
+    const png = Buffer.from("fake-png-bytes-for-pg-mem");
+    const shotName = "Screenshot 2026-10-16 at 10.11.12\u202fAM.png"; // macOS's narrow no-break space
+    await queries.insertAgentFile({ id: "af_png", agent_id: "ag_files", name: shotName, mime: "image/png", size: png.length, bytes: png });
+    await queries.insertAgentFile({ id: "af_txt", agent_id: "ag_files", name: "notes.md", mime: "text/markdown", size: 11, bytes: Buffer.from("# fix this\n") });
+
+    const client = await connect(port, await mintMcpToken("mcp,agent:read"));
+    const list = await client.callTool({ name: "list_agent_files", arguments: { agent_id: "ag_files" } });
+    expect(JSON.stringify(list.content)).toContain("notes.md");
+    const img = await client.callTool({ name: "read_agent_file", arguments: { agent_id: "ag_files", file: "af_png" } });
+    expect((img.content as Array<{ type: string; data?: string; mimeType?: string }>)[0]).toMatchObject({ type: "image", mimeType: "image/png", data: png.toString("base64") });
+    const txt = await client.callTool({ name: "read_agent_file", arguments: { agent_id: "ag_files", file: "notes.md" } });
+    expect(JSON.stringify(txt.content)).toContain("# fix this");
+    await client.close();
+
+    // The UI's download link (session-authed): exact bytes, a Unicode-safe filename.
+    const agentReq = (await import("supertest")).default.agent(`http://127.0.0.1:${port}`);
+    await agentReq.post("/api/auth/register").send({ email: "dl@test.co", password: "password123" }).expect(201);
+    const dl = await agentReq.get("/api/agents/ag_files/files/af_png/content").buffer(true).parse((res, cb) => {
+      const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => cb(null, Buffer.concat(chunks)));
+    }).expect(200);
+    expect(Buffer.compare(dl.body as Buffer, png)).toBe(0);
+    expect(dl.headers["content-disposition"]).toContain("filename*=UTF-8''Screenshot%202026-10-16%20at%2010.11.12%E2%80%AFAM.png");
+    await agentReq.get("/api/agents/ag_files/files/af_nope/content").expect(404);
   });
 
   it("sync_main is denied without the agent:control scope", async () => {
