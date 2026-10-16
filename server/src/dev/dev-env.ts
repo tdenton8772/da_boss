@@ -346,6 +346,31 @@ export async function devEnvView(env: DevEnvRecord, agent: AgentRecord): Promise
   };
 }
 
+/** What a change's dev env WILL look like, before it's started — so the panel can
+ *  show the real commands up front, or the reason the repo can't have one. */
+export type DevEnvPreview =
+  | { available: true; namespace: string; name: string; port: number; commands: DevCommands; local_claude_prompt: string }
+  | { available: false; reason: string };
+
+export async function previewDevEnv(agent: AgentRecord, viewer: { userId: string; email: string | null }): Promise<DevEnvPreview> {
+  if (!agent.repo_url || !agent.branch) return { available: false, reason: "This change has no repo/branch." };
+  try {
+    const cfg = await loadDevConfig(agent.repo_url, await gitTokenFor(viewer.userId));
+    const name = devEnvName(agent.id, viewer.email);
+    const commands = devCommands({
+      name, namespace: cfg.namespace, port: cfg.port, branch: agent.branch,
+      context: config.devKubeContext || undefined, syncExclude: cfg.sync_exclude,
+    });
+    const files = (await queries.listAgentFiles(agent.id).catch(() => [])).map((f) => f.name);
+    return {
+      available: true, namespace: cfg.namespace, name, port: cfg.port, commands,
+      local_claude_prompt: localClaudePrompt({ agentId: agent.id, agentName: agent.name, repoUrl: agent.repo_url, branch: agent.branch, cmds: commands, files }),
+    };
+  } catch (err) {
+    return { available: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ── Reaper ───────────────────────────────────────────────────────────────────
 
 /** Stop expired envs; fail envs whose provisioning died with a previous boss. */

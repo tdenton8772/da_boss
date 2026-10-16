@@ -144,7 +144,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 
 See `.env.example` for the documented set. Core: `DATABASE_URL`, `SESSION_SECRET`, `DABOSS_CIPHER_KEY` (required — credential vault key), `PORT` (3847), `AUTH_MODE` (`local`|`oidc` + `OIDC_*` block), `CRYPTO_PROVIDER` (`local`).
 
-Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `DABOSS_AGENT_BASE_IMAGE` (split agent-image layout), `DABOSS_DEV_NAMESPACES` (dev envs allowed here; empty = off), `DABOSS_DEV_KUBE_CONTEXT` (kubectl context named in the human's port-forward command), `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
+Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `WORKER_IMAGE`, `DABOSS_AGENT_BASE_IMAGE` (split agent-image layout), `DABOSS_DEV_NAMESPACES` (dev envs allowed here; empty = off), `DABOSS_DEV_KUBE_CONTEXT` (kubectl context named in the human's port-forward command), `DABOSS_DEV_KUBE_SETUP` (one-time command that creates it, shown as step 0), `POD_NAMESPACE` (`daboss`), `APP_SECRET_NAME`, `WORKSPACE_PVC_SIZE` (20Gi), `TRUST_PROXY`.
 
 Behavior: `MAX_CONCURRENT_AGENTS` (3), `SUPERVISOR_INTERVAL_MINUTES` (5), `SUPERVISOR_CREDENTIAL_USER`, `PERMISSION_TIMEOUT_MINUTES` (30), `STUCK_THRESHOLD_MINUTES` (15), `DABOSS_AUTO_TEST` (false), `LEASE_MODE` (`advisory`|`enforce`|`off`), `DABOSS_MAIN_WATCH_INTERVAL_SECONDS` (600), `DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS` (300), `DABOSS_REAPER_*`, `SIDECAR_*`.
 

@@ -33,7 +33,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { config } from "../config.js";
 import { AGENT_TEMPLATES } from "../agent/templates.js";
 import {
-  startDevEnv, syncDevEnv, stopDevEnv, extendDevEnv, devEnvLogs, devEnvView, DevEnvError, ensureRemoteBranch,
+  startDevEnv, syncDevEnv, stopDevEnv, extendDevEnv, devEnvLogs, devEnvView, previewDevEnv, DevEnvError, ensureRemoteBranch,
 } from "../dev/dev-env.js";
 import { handbackChange } from "../dev/handback.js";
 
@@ -773,7 +773,14 @@ export function createRouter(manager: AgentManager): Router {
   router.get("/api/agents/:id/dev-env", async (req, res) => {
     const agent = await loadAgent(req, res); if (!agent) return;
     const env = await queries.getLiveDevEnvForAgent(agent.id);
-    res.json({ enabled: config.devNamespaces.length > 0, view: env ? await devEnvView(env, agent) : null });
+    const enabled = config.devNamespaces.length > 0;
+    res.json({
+      enabled,
+      kube_setup: config.devKubeSetup || null,
+      view: env ? await devEnvView(env, agent) : null,
+      // Not started yet: the commands it WILL have (or why it can't), so they're visible up front.
+      preview: !env && enabled && req.user ? await previewDevEnv(agent, { userId: req.user.userId, email: req.user.email ?? null }) : null,
+    });
   });
   router.post("/api/agents/:id/dev-env", async (req, res) => {
     const agent = await loadAgent(req, res); if (!agent || !req.user) return;

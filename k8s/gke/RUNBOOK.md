@@ -195,6 +195,9 @@ Then set on the control plane (30-daboss.yaml):
 - `DABOSS_DEV_NAMESPACES=YOUR_APP_NAMESPACE` — the namespaces dev.yaml may target.
 - `DABOSS_DEV_KUBE_CONTEXT=<the kubectl context name your users have>` — so the
   port-forward command da_boss shows is copy-paste exact (otherwise it shows `$CTX`).
+- `DABOSS_DEV_KUBE_SETUP=<one-time command that creates that context>` (optional) —
+  shown verbatim as the panel's "once per laptop" step, e.g. your cloud's
+  get-credentials command.
 
 Users need their own kubectl access to the namespace to port-forward (and
 `pods/exec` to use the copy-files command).

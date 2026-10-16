@@ -27,6 +27,9 @@ export const config = {
   // cluster, so the port-forward command is copy-paste exact.
   devNamespaces: (process.env.DABOSS_DEV_NAMESPACES || "").split(",").map((s) => s.trim()).filter(Boolean),
   devKubeContext: process.env.DABOSS_DEV_KUBE_CONTEXT || "",
+  // One-time command that gives a user kubectl access to this cluster (shown
+  // verbatim as step 0), e.g. a `gcloud ... get-credentials` line. Optional.
+  devKubeSetup: process.env.DABOSS_DEV_KUBE_SETUP || "",
   agentExecution: (process.env.AGENT_EXECUTION || "inprocess") as "inprocess" | "pod",
   // Auto-run the test gate every time an agent completes a turn. OFF by default:
   // agents iterate freely, and a test cycle is queued ONLY on demand — the agent

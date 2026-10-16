@@ -204,7 +204,8 @@ export const api = {
   revokeToken: (id: string) => request<{ ok: boolean }>(`/tokens/${id}`, { method: "DELETE" }),
 
   // Dev environments (server/src/dev): a repo-declared pod running a change's branch
-  getDevEnv: (id: string) => request<{ enabled: boolean; view: DevEnvView | null }>(`/agents/${id}/dev-env`),
+  getDevEnv: (id: string) =>
+    request<{ enabled: boolean; kube_setup: string | null; view: DevEnvView | null; preview: DevEnvPreview | null }>(`/agents/${id}/dev-env`),
   startDevEnv: (id: string) => request<DevEnvView>(`/agents/${id}/dev-env`, { method: "POST" }),
   syncDevEnv: (id: string) => request<{ output: string }>(`/agents/${id}/dev-env/sync`, { method: "POST" }),
   extendDevEnv: (id: string) => request<DevEnvView>(`/agents/${id}/dev-env/extend`, { method: "POST" }),
@@ -692,3 +693,8 @@ export interface DevEnvView {
   };
   local_claude_prompt: string;
 }
+
+/** A not-yet-started dev env: the commands it will have, or why it can't exist. */
+export type DevEnvPreview =
+  | { available: true; namespace: string; name: string; port: number; commands: DevEnvView["commands"]; local_claude_prompt: string }
+  | { available: false; reason: string };
