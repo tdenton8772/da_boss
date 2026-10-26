@@ -22,6 +22,7 @@ import pg from "pg";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { sdkModelOptions } from "../models.js";
+import { repoConfigOptions } from "./isolation.js";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { shouldAutoApprove, mapPermissionDecision, type PermissionPolicy } from "../agent/tool-policy.js";
@@ -639,11 +640,11 @@ async function main(): Promise<void> {
         options: {
           cwd: WORK_DIR,
           canUseTool,
-          // Keep settingSources for .claude/settings.json (permissions + command
-          // hooks like the repo's PreToolUse guards, which DO fire) and CLAUDE.md.
-          settingSources: ["project"],
-          // The repo's own MCP servers (from its .mcp.json) — the SDK doesn't
-          // auto-load these, so we pass them. Empty for review agents (see above).
+          // The repo's settings (hooks, permissions) for its own agents only, and
+          // ONLY the MCP servers passed here — never auto-loaded (worker/isolation.ts).
+          ...repoConfigOptions(!!agent.review_of_agent_id),
+          // The repo's own MCP servers (from its .mcp.json), loaded by the worker.
+          // Empty for review agents (see above).
           ...(repoMcpNames.length ? { mcpServers: repoMcpServers } : {}),
           ...sdkModelOptions(agent),
           systemPrompt: {
