@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link } from "react-router";
-import { Laptop, Play, Square, RefreshCw, Clock, Copy, Check, Loader, ScrollText, Undo2, AlertTriangle } from "lucide-react";
+import { Laptop, Play, Square, RefreshCw, Clock, Copy, Check, Loader, ScrollText, Undo2, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 import { api, type DevEnvView, type DevEnvPreview } from "../api";
 import { useToastHelpers } from "./Toast";
 
@@ -98,6 +98,9 @@ export function DevEnvPanel({ agentId, hasBranch, prNumber, prUrl, status, onCha
   const [busy, setBusy] = useState<string>("");
   const [log, setLog] = useState<string | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
+  // Collapsed unless the change is in local mode (it has a dev env). The user can
+  // still expand it to start one.
+  const [open, setOpen] = useState(false);
   const { success, error } = useToastHelpers();
 
   const load = useCallback(() => {
@@ -106,6 +109,8 @@ export function DevEnvPanel({ agentId, hasBranch, prNumber, prUrl, status, onCha
     }).catch(() => {});
   }, [agentId]);
   useEffect(() => { load(); }, [load]);
+  const hasEnv = !!view;
+  useEffect(() => { if (hasEnv) setOpen(true); }, [hasEnv]);
   // Poll while something is in motion.
   useEffect(() => {
     if (!view || !["starting", "stopping"].includes(view.env.status)) return;
@@ -136,10 +141,20 @@ export function DevEnvPanel({ agentId, hasBranch, prNumber, prUrl, status, onCha
   let n = 0;
   const next = () => ++n;
 
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-2 bg-gray-900 border border-gray-800 hover:border-violet-900/60 rounded-lg px-4 py-2.5 mb-4 text-sm text-gray-400 hover:text-gray-200 text-left">
+        <ChevronRight size={14} /> <Laptop size={14} className="text-violet-400" /> Dev environment — work on this branch locally
+      </button>
+    );
+  }
+
   return (
     <div className="bg-gray-900 border border-violet-900/50 rounded-lg p-4 mb-4">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h3 className="flex items-center gap-2 text-sm font-medium text-gray-200">
+          <button onClick={() => setOpen(false)} title="Collapse" className="text-gray-500 hover:text-gray-300"><ChevronDown size={14} /></button>
           <Laptop size={16} className="text-violet-400" /> Dev environment — work on this branch locally
           {st && (
             <span className={`flex items-center gap-1 text-xs ${st.color}`}>
