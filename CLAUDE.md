@@ -127,7 +127,7 @@ Agent branch → auto-commit + draft PR each turn → test phases (`test`/`test-
 - `query({ prompt, options })` → `AsyncGenerator<SDKMessage>` — iterated in `worker/index.ts` (pods) and `agent/runner.ts` (legacy)
 - `options.resume` (session id), `options.canUseTool` (permission control point), `options.includePartialMessages` (live streaming), `options.abortController`, `options.maxTurns` / `maxBudgetUsd`, `options.model` / `options.effort` (via `sdkModelOptions()`)
 - `Query.supportedModels()` — the CLI's model catalog (aliases + `resolvedModel` + `supportedEffortLevels`); answered at session init, so the catalog fetch sends no prompt and costs no tokens
-- `settingSources: ["project"]` loads repo CLAUDE.md + fires command hooks, but the SDK does NOT auto-load `.mcp.json` — the worker loads it (gated, graceful)
+- **Repo-config trust boundary** (`worker/isolation.ts`): `strictMcpConfig: true` for every agent — CLI 2.1 otherwise auto-starts every server in a repo's `.mcp.json` — and the worker passes the repo's servers itself (non-review agents only). `settingSources: ["project"]` (repo hooks + permissions) for a repo's own agents, `[]` for review agents so a fork PR's hooks never run. Reviewers still get CLAUDE.md (the worker injects it).
 - Plan capture: `ExitPlanMode` input is `{}`; the real plan is the file the agent Writes to `~/.claude/plans/` — worker instructs agents accordingly and captures it
 
 ## Development Patterns
