@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useToastHelpers } from "./Toast";
+import { useAttachments, uploadAttachments, AttachButton, AttachmentChips } from "./Attachments";
 import { Play, Pause, Square, RotateCcw, Send, Trash2, Zap } from "lucide-react";
 
 export function ControlBar({
@@ -19,6 +20,18 @@ export function ControlBar({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const toast = useToastHelpers();
+  const att = useAttachments();
+  const canSend = !sending && (!!input.trim() || att.files.length > 0);
+
+  /** Upload any attachments, then the message to send — naming them, so the
+   *  thread shows what was attached (the agent is told via its prompt too). */
+  const prepare = async (): Promise<string> => {
+    if (!att.files.length) return input;
+    const names = await uploadAttachments(agentId, att.files);
+    att.clear();
+    const list = names.join(", ");
+    return input.trim() ? `${input}\n\n📎 Attached: ${list}` : `📎 I've attached ${list} — please take a look.`;
+  };
 
   const exec = async (fn: () => Promise<unknown>) => {
     try {
@@ -30,10 +43,10 @@ export function ControlBar({
   };
 
   const handleSendInput = async () => {
-    if (!input.trim()) return;
+    if (!canSend) return;
     setSending(true);
     try {
-      await api.sendInput(agentId, input);
+      await api.sendInput(agentId, await prepare());
       setInput("");
       onAction();
       toast.success("Input queued");
@@ -45,10 +58,10 @@ export function ControlBar({
   };
 
   const handleSendUrgent = async () => {
-    if (!input.trim()) return;
+    if (!canSend) return;
     setSending(true);
     try {
-      const result = await api.sendUrgent(agentId, input);
+      const result = await api.sendUrgent(agentId, await prepare());
       setInput("");
       onAction();
       if (result.delivered === "immediate") {
@@ -149,7 +162,10 @@ export function ControlBar({
       </div>
 
       {showInput && (
+        <div {...att.dropProps} className={`space-y-2 rounded ${att.dragging ? "ring-2 ring-blue-500/60" : ""}`}>
+        <AttachmentChips files={att.files} onRemove={att.remove} />
         <div className="flex gap-2 items-end">
+          <AttachButton onFiles={att.add} />
           <textarea
             value={input}
             onChange={(e) => {
@@ -164,13 +180,14 @@ export function ControlBar({
                 handleSendInput();
               }
             }}
+            onPaste={att.onPaste}
             rows={1}
-            placeholder="Send input to agent... (Shift+Enter for newline)"
+            placeholder="Send input to agent... (Shift+Enter for newline · paste or drop screenshots/files)"
             className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none overflow-hidden min-h-[38px] max-h-48"
           />
           <button
             onClick={handleSendInput}
-            disabled={sending || !input.trim()}
+            disabled={!canSend}
             className="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 text-white rounded"
             title="Queue message (delivered when agent is ready)"
           >
@@ -178,12 +195,13 @@ export function ControlBar({
           </button>
           <button
             onClick={handleSendUrgent}
-            disabled={sending || !input.trim()}
+            disabled={!canSend}
             className="px-3 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white rounded"
             title="Interrupt agent with urgent message (delivered immediately)"
           >
             <Zap size={16} />
           </button>
+        </div>
         </div>
       )}
     </div>

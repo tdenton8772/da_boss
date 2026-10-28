@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { api, type CreateAgentData, type AgentTemplate, type ResolvedRef, type ModelsInfo } from "../api";
 import { ModelSelect, EffortSelect, effortLevelsFor } from "./ModelPicker";
+import { useAttachments, uploadAttachments, AttachButton, AttachmentChips } from "./Attachments";
 import { X, GitBranch, Loader, CheckCircle } from "lucide-react";
 
 /** What to call an agent that adopts a PR. Every adoption used to land on the
@@ -39,6 +40,9 @@ export function CreateAgentForm({
   // Work locally: create the change with no agent run and start the repo's dev
   // environment for it, then open the change's page (where the env panel lives).
   const [localDev, setLocalDev] = useState(false);
+  // Screenshots / example files for the task — uploaded once the agent exists,
+  // before it starts, so its first turn has them.
+  const att = useAttachments();
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -141,6 +145,17 @@ export function CreateAgentForm({
         : base;
       if (localDev && !payload.repo_url?.trim()) { setError("Working locally needs a Repo URL."); return; }
       const agent = (await api.createAgent(payload)) as { id: string; dev_env_error?: string | null };
+      if (att.files.length) {
+        try {
+          await uploadAttachments(agent.id, att.files);
+        } catch (e) {
+          // The agent exists but isn't started: say so, and open it so the files can be re-added there.
+          setError(`Created the agent, but ${e instanceof Error ? e.message : "an upload failed"} — it wasn't started.`);
+          onCreated();
+          navigate(`/agent/${agent.id}`);
+          return;
+        }
+      }
       if (localDev) {
         onCreated();
         // The env panel on the change's page shows progress — or the reason it
@@ -226,7 +241,19 @@ export function CreateAgentForm({
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 h-24 resize-y"
               placeholder={localDev ? "What you're working on (optional — no agent reads it)" : "Implement the auth module..."}
               required={!localDev}
+              onPaste={att.onPaste}
             />
+          </div>
+          <div {...att.dropProps}
+            className={`rounded border border-dashed px-3 py-2 ${att.dragging ? "border-blue-500 bg-blue-950/20" : "border-gray-700"}`}>
+            <div className="flex items-center gap-3">
+              <AttachButton onFiles={att.add} />
+              <span className="text-xs text-gray-500">
+                Attach screenshots or example files — or paste / drop them here. The agent gets them in{" "}
+                <code className="text-gray-400">/work/uploads</code> and is told to read them.
+              </span>
+            </div>
+            {att.files.length > 0 && <div className="mt-2"><AttachmentChips files={att.files} onRemove={att.remove} /></div>}
           </div>
           <div>
             <label className="block text-sm text-gray-400 mb-1">

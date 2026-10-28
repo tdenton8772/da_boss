@@ -23,6 +23,7 @@ import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { sdkModelOptions } from "../models.js";
 import { repoConfigOptions } from "./isolation.js";
+import { attachmentNote, unannounced } from "./uploads.js";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { shouldAutoApprove, mapPermissionDecision, type PermissionPolicy } from "../agent/tool-policy.js";
@@ -609,6 +610,7 @@ async function main(): Promise<void> {
     }
   } else try {
     let turnPrompt = TURN_PROMPT || agent.prompt;
+    const announcedUploads = new Set<string>(); // attached files this pod has told the agent about
     // The SDK's settingSources:["project"] is SUPPOSED to load the repo's CLAUDE.md,
     // but CLI 2.0.77 does NOT honor it in print/stream mode — verified in-pod, the
     // repo's project context never reaches the model. So load it ourselves and inject
@@ -635,8 +637,19 @@ async function main(): Promise<void> {
     }
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      // Attached files: on disk BEFORE the turn starts, and named in its prompt —
+      // an agent never looks in /work/uploads unless it's told (worker/uploads.ts).
+      const uploaded = await writeUploadedFiles();
+      const fresh = unannounced(uploaded, announcedUploads);
+      fresh.forEach((n) => announcedUploads.add(n));
+      if (fresh.length) {
+        await queries.insertAgentEvent(AGENT_ID, "message", {
+          role: "system",
+          content: `📎 Gave the agent ${fresh.length} attached file(s) in \`/work/uploads/\`: ${fresh.map((n) => `\`${n}\``).join(", ")}`,
+        }).catch(() => {});
+      }
       const q = sdkQuery({
-        prompt: turnPrompt,
+        prompt: turnPrompt + attachmentNote(fresh),
         options: {
           cwd: WORK_DIR,
           canUseTool,
@@ -668,15 +681,7 @@ async function main(): Promise<void> {
       });
       currentQuery = q as unknown as { interrupt?: () => Promise<void> };
 
-      // Drop any user-uploaded files into /work/uploads so the agent can read them.
       RUN_STARTED_AT = Date.now(); // mark turn start (after clone) so only THIS turn's plan is captured
-      const uploaded = await writeUploadedFiles();
-      if (uploaded.length) {
-        await queries.insertAgentEvent(AGENT_ID, "message", {
-          role: "system",
-          content: `📎 ${uploaded.length} uploaded file(s) available in \`/work/uploads/\`: ${uploaded.map((n) => `\`${n}\``).join(", ")}`,
-        }).catch(() => {});
-      }
 
       try {
         for await (const msg of q) {
