@@ -46,6 +46,14 @@ function actorOf(req: { user?: { email?: string; name?: string } }): string {
   return req.user?.email || req.user?.name || "someone";
 }
 
+/** `name` if unused, else `stem-2.ext`, `stem-3.ext`, … */
+export function uniqueName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  for (let i = 2; ; i++) if (!taken.has(`${stem}-${i}${ext}`)) return `${stem}-${i}${ext}`;
+}
+
 /** Adopted PRs/branches are recorded with an `adopted_ref` but NO `pr_number`
  *  (adoption never opens a PR, so it was never set) — which broke Merge, the deploy
  *  proposal, and the sync-main fast path for any adopted change. Resolve the OPEN PR
@@ -638,8 +646,11 @@ export function createRouter(manager: AgentManager): Router {
   router.post("/api/agents/:id/files", async (req, res) => {
     const agent = await queries.getAgent(req.params.id);
     if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
-    const name = String(req.query.name || "").replace(/[/\\]/g, "_").trim();
-    if (!name) { res.status(400).json({ error: "name query param required" }); return; }
+    const requested = String(req.query.name || "").replace(/[/\\]/g, "_").trim();
+    if (!requested) { res.status(400).json({ error: "name query param required" }); return; }
+    // Unique per agent: files land in one directory (/work/uploads), and every
+    // pasted screenshot is called image.png — a repeat name gets -2, -3, …
+    const name = uniqueName(requested, new Set((await queries.listAgentFiles(agent.id)).map((f) => f.name)));
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
