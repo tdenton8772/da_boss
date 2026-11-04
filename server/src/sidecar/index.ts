@@ -19,7 +19,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { computeFreezeSet, isNameVariant } from "../leasing/freeze-set.js";
@@ -137,29 +137,12 @@ async function leaseCycle(repoKey: string): Promise<void> {
 /** Dedicated LISTEN connection (a pooled one would get recycled). Reconnects on
  *  error and re-drains any commands missed while disconnected. */
 function startCommandListener(): void {
-  let client: pg.Client | null = null;
-  const reconnect = () => {
-    try { client?.removeAllListeners(); void client?.end(); } catch { /* ignore */ }
-    client = null;
-    setTimeout(connect, 2000);
-  };
-  const connect = async () => {
-    try {
-      client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-      client.on("error", () => reconnect());
-      client.on("notification", (msg) => {
-        if (msg.payload === AGENT_ID) void drainCommands();
-      });
-      await client.connect();
-      await client.query(`LISTEN ${CMD_CHANNEL}`);
-      await drainCommands(); // catch-up: anything issued while we were away
-      logger.info({ agentId: AGENT_ID, channel: CMD_CHANNEL }, "Sidecar command listener ready");
-    } catch (err) {
-      logger.warn({ agentId: AGENT_ID, err: err instanceof Error ? err.message : String(err) }, "Command listener connect failed — retrying");
-      reconnect();
-    }
-  };
-  void connect();
+  listenWithReconnect({
+    label: "sidecar-commands",
+    channels: [CMD_CHANNEL],
+    onNotification: (msg) => { if (msg.payload === AGENT_ID) void drainCommands().catch(() => {}); },
+    onConnect: drainCommands, // catch-up: anything issued while we were away
+  });
 }
 
 /** Connect to PG, retrying — a sidecar must never crash-loop and never block its

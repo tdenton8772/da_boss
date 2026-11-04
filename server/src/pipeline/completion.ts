@@ -6,7 +6,7 @@
  *
  * Boss-side listener on daboss_pipeline_done (mirrors the live-relay pattern).
  */
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
 import { postPrComment, markReadyForReview, mergePr } from "../forge/github.js";
@@ -226,24 +226,9 @@ async function gateTestBatch(run: PipelineRun): Promise<void> {
 
 export function startPipelineCompletionListener(manager: AgentManager): void {
   mgr = manager;
-  let client: pg.Client | null = null;
-  const reconnect = () => {
-    try { client?.removeAllListeners(); void client?.end(); } catch { /* ignore */ }
-    client = null;
-    setTimeout(() => void connect(), 2000);
-  };
-  const connect = async () => {
-    try {
-      client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-      client.on("error", () => reconnect());
-      client.on("notification", (msg) => { if (msg.payload) void gatePr(msg.payload); });
-      await client.connect();
-      await client.query(`LISTEN ${CHANNEL}`);
-      logger.info({ channel: CHANNEL }, "Pipeline completion listener ready");
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Pipeline listener connect failed — retrying");
-      reconnect();
-    }
-  };
-  void connect();
+  listenWithReconnect({
+    label: "pipeline-completion",
+    channels: [CHANNEL],
+    onNotification: (msg) => { if (msg.payload) void gatePr(msg.payload); },
+  });
 }

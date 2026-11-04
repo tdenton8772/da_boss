@@ -18,7 +18,7 @@ import { promisify } from "node:util";
 import { mkdir, copyFile, readdir, unlink, readFile, writeFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { sdkModelOptions } from "../models.js";
@@ -135,8 +135,6 @@ function authedUrl(src: string): string {
  * supervisor able to course-correct WITHOUT killing the turn.
  */
 function startSteerListener(agentId: string, onSteer: (message: string) => void): () => void {
-  let client: pg.Client | null = null;
-  let closed = false;
   const drain = async () => {
     for (const cmd of await queries.getPendingCommands(agentId)) {
       if (cmd.command !== "steer") continue; // not ours — leave it for the sidecar
@@ -145,25 +143,12 @@ function startSteerListener(agentId: string, onSteer: (message: string) => void)
       if (message) onSteer(message);
     }
   };
-  const connect = async () => {
-    if (closed) return;
-    try {
-      client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-      client.on("error", () => {
-        try { void client?.end(); } catch { /* ignore */ }
-        client = null;
-        if (!closed) setTimeout(connect, 2000);
-      });
-      client.on("notification", (msg) => { if (msg.payload === agentId) void drain(); });
-      await client.connect();
-      await client.query("LISTEN daboss_agent_cmd");
-      await drain();
-    } catch {
-      if (!closed) setTimeout(connect, 2000);
-    }
-  };
-  void connect();
-  return () => { closed = true; try { void client?.end(); } catch { /* ignore */ } };
+  return listenWithReconnect({
+    label: "steer",
+    channels: ["daboss_agent_cmd"],
+    onNotification: (msg) => { if (msg.payload === agentId) void drain().catch(() => {}); },
+    onConnect: drain, // catch-up: anything issued while we were away
+  });
 }
 
 /**

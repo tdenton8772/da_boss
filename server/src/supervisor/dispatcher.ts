@@ -5,7 +5,7 @@
  * SIZE if the caller didn't specify one, then builds the pod. Concentrating
  * dispatch here is what lets the supervisor later assess MORE than size.
  */
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import * as queries from "../db/queries.js";
 import type { AgentRecord, AgentState } from "../types/agent.js";
@@ -140,25 +140,10 @@ export async function drainDispatches(): Promise<void> {
 
 /** LISTEN for queued agents and sweep on connect (catch-up for a missed NOTIFY). */
 export function startQueueListener(): void {
-  let client: pg.Client | null = null;
-  const reconnect = () => {
-    try { client?.removeAllListeners(); void client?.end(); } catch { /* ignore */ }
-    client = null;
-    setTimeout(() => void connect(), 2000);
-  };
-  const connect = async () => {
-    try {
-      client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-      client.on("error", () => reconnect());
-      client.on("notification", () => void processQueue());
-      await client.connect();
-      await client.query(`LISTEN ${QUEUE_CHANNEL}`);
-      logger.info({ channel: QUEUE_CHANNEL }, "Agent queue listener ready");
-      void processQueue(); // catch-up sweep on (re)connect
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "queue listener connect failed — retrying");
-      reconnect();
-    }
-  };
-  void connect();
+  listenWithReconnect({
+    label: "agent-queue",
+    channels: [QUEUE_CHANNEL],
+    onNotification: () => void processQueue(),
+    onConnect: () => void processQueue(), // catch-up sweep on (re)connect
+  });
 }

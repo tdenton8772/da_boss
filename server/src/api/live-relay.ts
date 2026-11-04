@@ -5,7 +5,7 @@
  * which the existing WebSocket server already broadcasts to browsers. This is how
  * the live view works once agents run out-of-process.
  */
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import type { EventEmitter } from "node:events";
 import * as queries from "../db/queries.js";
 import { maybeAutoTest } from "../pipeline/autochain.js";
@@ -20,17 +20,6 @@ const CHANNEL = "daboss_agent_event";
 const PERMISSION_CHANNEL = "daboss_permission";
 
 export function startLiveRelay(eventBus: EventEmitter): void {
-  let client: pg.Client | null = null;
-
-  const reconnect = () => {
-    try {
-      client?.removeAllListeners();
-      void client?.end();
-    } catch { /* ignore */ }
-    client = null;
-    setTimeout(() => void connect(), 2000);
-  };
-
   // A worker pod raised a permission request — surface the dialog to the UI. The
   // resolution round-trips back through the normal /permissions/:id/resolve path
   // (which updates the DB row the worker is polling).
@@ -83,28 +72,12 @@ export function startLiveRelay(eventBus: EventEmitter): void {
     }
   };
 
-  const connect = async () => {
-    try {
-      client = new pg.Client({
-        connectionString: process.env.DATABASE_URL || "postgres://daboss:daboss@localhost:5432/daboss",
-      });
-      client.on("error", (e) => {
-        logger.warn({ err: e.message }, "Live relay connection error — reconnecting");
-        reconnect();
-      });
-      client.on("notification", (msg) => {
-        if (msg.channel === PERMISSION_CHANNEL) void handlePermission(msg.payload);
-        else void handle(msg.payload);
-      });
-      await client.connect();
-      await client.query(`LISTEN ${CHANNEL}`);
-      await client.query(`LISTEN ${PERMISSION_CHANNEL}`);
-      logger.info({ channels: [CHANNEL, PERMISSION_CHANNEL] }, "Live relay listening");
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Live relay connect failed — retrying");
-      reconnect();
-    }
-  };
-
-  void connect();
+  listenWithReconnect({
+    label: "live-relay",
+    channels: [CHANNEL, PERMISSION_CHANNEL],
+    onNotification: (msg) => {
+      if (msg.channel === PERMISSION_CHANNEL) void handlePermission(msg.payload);
+      else void handle(msg.payload);
+    },
+  });
 }

@@ -9,7 +9,7 @@
  * Entrypoint: `node dist/orchestrator/index.js` (same image as the boss).
  */
 import { EventEmitter } from "node:events";
-import pg from "pg";
+import { listenWithReconnect } from "../db/listen.js";
 import { initDb, closeDb } from "../db/index.js";
 import * as queries from "../db/queries.js";
 import { runChecks, type SupervisorDeps } from "../supervisor/checks.js";
@@ -116,24 +116,15 @@ async function main(): Promise<void> {
   // request and schedule a focused cycle exactly at its staleness deadline; the
   // interval loop stays as the backstop if the listener connection drops.
   const STALENESS_MS = 5 * 60_000 + 5_000; // checks.ts requires minutes > 5
-  const listener = new pg.Client({
-    connectionString: process.env.DATABASE_URL || "postgres://daboss:daboss@localhost:5432/daboss",
+  const stopListener = listenWithReconnect({
+    label: "permission-deadline",
+    channels: ["daboss_permission"],
+    onNotification: () => { setTimeout(() => void runGuarded(deps), STALENESS_MS); },
   });
-  listener.on("error", (e) => logger.warn({ err: e.message }, "Permission listener connection error — interval loop remains the backstop"));
-  listener.on("notification", () => {
-    setTimeout(() => void runGuarded(deps), STALENESS_MS);
-  });
-  try {
-    await listener.connect();
-    await listener.query("LISTEN daboss_permission");
-    logger.info("Permission-deadline listener up (stale requests judged at ~5 min)");
-  } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Permission listener failed to start — interval loop remains the backstop");
-  }
 
   const shutdown = async () => {
     clearInterval(timer);
-    await listener.end().catch(() => {});
+    stopListener();
     await closeDb();
     process.exit(0);
   };

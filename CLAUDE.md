@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 399 tests, 43 files (offline, pg-mem)
+npm run test         # 414 tests, 46 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -47,7 +47,7 @@ MCP clients ──POST /mcp──▶                 │                       �
                               Supervisor (cron + dispatch queue; optional standalone orchestrator pod)
 ```
 
-**Pod↔boss bus:** pods talk to the boss ONLY via Postgres — LISTEN/NOTIFY channels (`daboss_agent_event`, `daboss_permission`, `daboss_pipeline_done`, `daboss_agent_queued`, `daboss_agent_cmd`) plus row polling. No shared memory. `api/live-relay.ts` re-emits pod events onto the in-process bus.
+**Pod↔boss bus:** pods talk to the boss ONLY via Postgres — LISTEN/NOTIFY channels (`daboss_agent_event`, `daboss_permission`, `daboss_pipeline_done`, `daboss_agent_queued`, `daboss_agent_cmd`) plus row polling. No shared memory. `api/live-relay.ts` re-emits pod events onto the in-process bus. Every LISTEN goes through `db/listen.ts` (`listenWithReconnect`) — one client per attempt, retired before the single retry, so a flapping DB never leaves a stale listener double-handling NOTIFYs.
 
 ### Server (`server/src/`)
 
