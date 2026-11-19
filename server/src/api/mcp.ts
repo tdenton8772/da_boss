@@ -23,6 +23,8 @@ import {
   startDevEnv, syncDevEnv, stopDevEnv, devEnvLogs, devEnvView, ensureRemoteBranch, DevEnvError,
 } from "../dev/dev-env.js";
 import { handbackChange } from "../dev/handback.js";
+import { resolveAdoptRef, userGitToken, ensureAdoptedPrNumber, AdoptError, type ResolvedAdoptRef } from "../forge/adopt.js";
+import type { AgentRecord } from "../types/agent.js";
 
 /** Gate /mcp on a Bearer token with the `mcp` scope. Token-only (no sessions). */
 export function requireMcpAuth(req: Request, res: Response, next: NextFunction): void {
@@ -56,6 +58,8 @@ function denyIfMissing(principal: AuthedUser, scope: string): ReturnType<typeof 
 
 function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer {
   const server = new McpServer({ name: "da_boss-review", version: "1.0.0" });
+  const devError = (err: unknown) =>
+    asError(err instanceof DevEnvError || err instanceof Error ? err.message : (err as { message?: string })?.message || String(err));
 
   server.registerTool(
     "list_reviewable_changes",
@@ -74,17 +78,45 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     }
   );
 
+  /** Resolve an adopt reference (branch | PR number | PR URL) as the principal.
+   *  Fork PRs are refused: da_boss can't push to the fork, and running its code
+   *  through test gates with our creds is exactly the untrusted path. */
+  const resolveAdopt = async (repoUrl: string, ref: string): Promise<ResolvedAdoptRef> => {
+    const r = await resolveAdoptRef(repoUrl, ref, await userGitToken(principal.userId));
+    if (r.fork) throw new AdoptError(400, `${r.adoptedRef} comes from a fork (${r.headRepo || "deleted fork"}) — da_boss can't push to it or run its code through the gates. Use request_review on it read-only, or push the branch to ${repoUrl} first.`);
+    return r;
+  };
+  const adoptFields = (r: ResolvedAdoptRef, baseRef: string | undefined) => ({
+    branch: r.branch,
+    adopted_ref: r.adoptedRef,
+    // A PR targets its own base — land/rebase against that, not the repo default.
+    repo_ref: baseRef ?? r.prBase,
+  });
+  /** Record the adopted PR on the change now (adoption alone only stores adopted_ref). */
+  const recordAdoptedPr = async (agent: AgentRecord, r: ResolvedAdoptRef): Promise<AgentRecord> => {
+    if (r.prNumber) {
+      await queries.setAgentPullRequest(agent.id, r.prUrl || "", r.prNumber);
+      return { ...agent, pr_number: r.prNumber, pr_url: r.prUrl || "" };
+    }
+    const pr = await ensureAdoptedPrNumber(agent).catch(() => null);
+    return pr ? { ...agent, pr_number: pr.number, pr_url: pr.url } : agent;
+  };
+
   server.registerTool(
     "create_agent",
     {
       description:
-        "Create and START a da_boss agent to do a task (make a change, fix a bug, write a test, etc.). It runs in its own isolated pod on YOUR principal's Claude + git credentials, on its own branch, and da_boss opens a PR when it pushes. Returns the agent id — track it with list_agents / get_agent. Requires the 'agent:create' scope.",
+        "Create and START a da_boss agent to do a task (make a change, fix a bug, write a test, etc.). It runs in its own isolated pod on YOUR principal's Claude + git credentials, on its own branch, and da_boss opens a PR when it pushes. " +
+        "Pass `adopt` to have the agent work ON an existing branch or open PR instead of cutting a new branch (its commits land on that branch/PR). " +
+        "To hand an already-finished branch to da_boss for gates + review WITHOUT an agent run, use adopt_change instead. " +
+        "Returns the agent id — track it with list_agents / get_agent. Requires the 'agent:create' scope.",
       inputSchema: {
-        name: z.string().describe("Short name for the task (used in the branch name)"),
+        name: z.string().describe("Short name for the task (used in the branch name when not adopting)"),
         prompt: z.string().describe("The full task instructions for the agent"),
         repo_url: z.string().optional().describe("Git repo URL. Defaults to the server's configured default repo."),
-        repo_ref: z.string().optional().describe("Base ref to branch from (default: main / the default repo ref)."),
-        branch_type: z.string().optional().describe("feat | fix | chore | docs | refactor | test (default feat)"),
+        repo_ref: z.string().optional().describe("Base ref to branch from / land onto (default: main / the default repo ref; an adopted PR defaults to the PR's base)."),
+        adopt: z.string().optional().describe("Adopt an existing branch or OPEN PR instead of cutting a new branch: a branch name, a PR number ('17' / '#17'), or a PR URL. Must already be on the remote; fork PRs are refused."),
+        branch_type: z.string().optional().describe("feat | fix | chore | docs | refactor | test (default feat). Ignored when adopting."),
         model: z.string().optional().describe("Model id or family alias (e.g. 'opus' = newest Opus). Omit for the server's configured default. See list_models."),
         effort: z.string().optional().describe("Reasoning effort, e.g. low | medium | high | xhigh | max — must be one the model supports (see list_models). Omit for the default."),
         max_budget_usd: z.number().optional().describe("Optional spend cap in USD."),
@@ -95,19 +127,21 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
     async (args) => {
       const deny = denyIfMissing(principal, "agent:create"); if (deny) return deny;
       const repoUrl = args.repo_url ?? (await queries.getAppSetting("default_repo_url")) ?? undefined;
-      const repoRef = args.repo_ref ?? (await queries.getAppSetting("default_repo_ref")) ?? undefined;
       if (!repoUrl) return asError("No repo_url given and no default repo configured. Pass repo_url.");
       const modelError = await checkAgentModelRequest(args.model, args.effort);
       if (modelError) return asError(modelError);
       try {
-        const agent = await manager.createAgent(
+        const adopted = args.adopt?.trim() ? await resolveAdopt(repoUrl, args.adopt) : null;
+        const repoRef = (adopted ? adoptFields(adopted, args.repo_ref).repo_ref : args.repo_ref)
+          ?? (await queries.getAppSetting("default_repo_ref")) ?? undefined;
+        let agent = await manager.createAgent(
           {
             name: args.name,
             prompt: args.prompt,
             cwd: "/work",
             repo_url: repoUrl,
             repo_ref: repoRef,
-            branch_type: args.branch_type ?? "feat",
+            ...(adopted ? { branch: adopted.branch, adopted_ref: adopted.adoptedRef } : { branch_type: args.branch_type ?? "feat" }),
             model: args.model,
             effort: args.effort,
             max_budget_usd: args.max_budget_usd,
@@ -117,11 +151,65 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
           principal.userId,
           principal.email?.split("@")[0] ?? null
         );
+        if (adopted) agent = await recordAdoptedPr(agent, adopted);
         await manager.startAgent(agent.id);
-        return asText({ agent_id: agent.id, state: "pending", branch: agent.branch });
+        return asText({
+          agent_id: agent.id, state: "pending", branch: agent.branch,
+          ...(adopted ? { adopted_ref: adopted.adoptedRef, pr_number: agent.pr_number ?? null } : {}),
+        });
       } catch (err) {
         return asError(`Couldn't create the agent: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+  );
+
+  server.registerTool(
+    "adopt_change",
+    {
+      description:
+        "Hand an EXISTING, already-pushed branch or open PR to da_boss as a change — NO agent run. da_boss records the change, opens/finds its PR, runs the repo's test gates and queues the review agent; from there it lands and deploys like any agent's change (poll get_verdict, then merge/deploy as usual). " +
+        "Use this for work finished outside da_boss (e.g. in a local Claude session) that only needs gates + review + the deploy gate. If a da_boss change already owns that branch, it is handed back instead of duplicated. " +
+        "To have an agent keep working on the branch, use create_agent with `adopt`. Requires 'agent:create' and 'review:create'.",
+      inputSchema: {
+        ref: z.string().describe("The branch name, PR number ('17' / '#17'), or PR URL to adopt. Must already be pushed; fork PRs are refused."),
+        repo_url: z.string().optional().describe("Git repo URL. Defaults to the server's configured default repo."),
+        name: z.string().optional().describe("Name for the change (default: the PR title or branch)."),
+        base_ref: z.string().optional().describe("Branch it lands onto (default: the PR's base, else main)."),
+      },
+    },
+    async (args) => {
+      const deny = denyIfMissing(principal, "agent:create") ?? denyIfMissing(principal, "review:create"); if (deny) return deny;
+      const repoUrl = args.repo_url ?? (await queries.getAppSetting("default_repo_url")) ?? undefined;
+      if (!repoUrl) return asError("No repo_url given and no default repo configured. Pass repo_url.");
+      try {
+        const adopted = await resolveAdopt(repoUrl, args.ref);
+        const existingId = await queries.getChangeAgentIdByBranch(repoUrl, adopted.branch);
+        let agent = existingId ? await queries.getAgent(existingId) : undefined;
+        const reused = !!agent;
+        if (agent && ["running", "queued", "waiting_permission", "waiting_input"].includes(agent.state)) {
+          return asError(`Change ${agent.id} already owns '${adopted.branch}' and its agent is ${agent.state} — wait for it to stop (or pause it) before handing the branch back.`);
+        }
+        if (!agent) {
+          const fields = adoptFields(adopted, args.base_ref?.trim() || undefined);
+          agent = await manager.createAgent(
+            {
+              name: args.name?.trim() || adopted.prTitle || adopted.branch.split("/").pop()!,
+              prompt: `(adopted ${adopted.adoptedRef} — work done outside da_boss, handed over for gates + review; no agent run)`,
+              cwd: "/work",
+              repo_url: repoUrl,
+              repo_ref: fields.repo_ref ?? (await queries.getAppSetting("default_repo_ref")) ?? undefined,
+              branch: fields.branch,
+              adopted_ref: fields.adopted_ref,
+            },
+            principal.userId,
+            principal.email?.split("@")[0] ?? null
+          );
+          agent = await recordAdoptedPr(agent, adopted);
+          await queries.insertAgentEvent(agent.id, "message", { role: "system", content: `📥 **${principal.email ?? "MCP"}** adopted ${adopted.adoptedRef} as a change (no agent run) — handing it to the gates + review.` });
+        }
+        const result = await handbackChange(manager, agent, { userId: principal.userId, label: principal.email ?? "MCP" });
+        return asText({ agent_id: agent.id, branch: agent.branch, adopted_ref: adopted.adoptedRef, reused_existing_change: reused, ...result });
+      } catch (err) { return devError(err); }
     }
   );
 
@@ -249,8 +337,6 @@ function buildMcpServer(manager: AgentManager, principal: AuthedUser): McpServer
   );
 
   // ── Dev environments: work on a change locally, hand it back ──────
-  const devError = (err: unknown) =>
-    asError(err instanceof DevEnvError || err instanceof Error ? err.message : (err as { message?: string })?.message || String(err));
   const actor = { userId: principal.userId, email: principal.email, name: principal.name };
 
   server.registerTool(

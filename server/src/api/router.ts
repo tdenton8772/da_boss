@@ -13,7 +13,8 @@ import * as pipelineService from "../pipeline/service.js";
 import { maybeProposeDeploy } from "../pipeline/completion.js";
 import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
-import { mergePr, updateBranch, getPullRequest, getBranchHead, markReadyForReview, resolveOpenPrByBranch } from "../forge/github.js";
+import { mergePr, updateBranch, markReadyForReview } from "../forge/github.js";
+import { resolveAdoptRef, userGitToken, ensureAdoptedPrNumber, AdoptError } from "../forge/adopt.js";
 import { syncMainIntoBranch } from "../forge/sync-branch.js";
 import { computeAgentStatus } from "./agent-status.js";
 import { nanoid } from "nanoid";
@@ -52,25 +53,6 @@ export function uniqueName(name: string, taken: Set<string>): string {
   const dot = name.lastIndexOf(".");
   const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
   for (let i = 2; ; i++) if (!taken.has(`${stem}-${i}${ext}`)) return `${stem}-${i}${ext}`;
-}
-
-/** Adopted PRs/branches are recorded with an `adopted_ref` but NO `pr_number`
- *  (adoption never opens a PR, so it was never set) — which broke Merge, the deploy
- *  proposal, and the sync-main fast path for any adopted change. Resolve the OPEN PR
- *  by head branch and persist it, so those all work. Best-effort; returns the
- *  resolved {number,url}, the already-set PR, or null when there's no open PR. */
-async function ensureAdoptedPrNumber(agent: {
-  id: string; pr_number: number | null; pr_url: string | null;
-  repo_url: string | null; branch: string | null; created_by_user_id: string | null;
-}): Promise<{ number: number; url: string } | null> {
-  if (agent.pr_number) return { number: agent.pr_number, url: agent.pr_url || "" };
-  if (!agent.repo_url || !agent.branch || !agent.created_by_user_id) return null;
-  const gc = await queries.getUserGitCredential(agent.created_by_user_id);
-  if (!gc) return null;
-  const token = await getCipher().decrypt({ ciphertext: gc.ciphertext, nonce: gc.nonce, keyRef: gc.key_ref });
-  const pr = await resolveOpenPrByBranch(agent.repo_url, agent.branch, token);
-  if (pr) await queries.setAgentPullRequest(agent.id, pr.url, pr.number);
-  return pr;
 }
 
 export function createRouter(manager: AgentManager): Router {
@@ -466,39 +448,14 @@ export function createRouter(manager: AgentManager): Router {
     const repo = String(req.query.repo || "").trim();
     const ref = String(req.query.ref || "").trim();
     if (!repo || !ref) { res.status(400).json({ error: "repo and ref are required" }); return; }
-    const gc = await queries.getUserGitCredential(req.user!.userId);
-    if (!gc) { res.status(400).json({ error: "Set a git credential first (Settings) so we can look up the branch/PR." }); return; }
-    let token: string;
     try {
-      token = await getCipher().decrypt({ ciphertext: gc.ciphertext, nonce: gc.nonce, keyRef: gc.key_ref });
-    } catch {
-      res.status(400).json({ error: "Could not decrypt your git credential." });
-      return;
-    }
-
-    // Is this a PR reference (a #N / N number, or a .../pull/N URL) or a branch?
-    const urlMatch = ref.match(/\/pull\/(\d+)/);
-    const numMatch = ref.match(/^#?(\d+)$/);
-    const prNumber = urlMatch ? Number(urlMatch[1]) : numMatch ? Number(numMatch[1]) : null;
-
-    try {
-      if (prNumber !== null) {
-        const pr = await getPullRequest(repo, prNumber, token);
-        if (!pr) { res.status(404).json({ error: `PR #${prNumber} not found in ${repo}.` }); return; }
-        if (pr.state !== "open") { res.status(400).json({ error: `PR #${prNumber} is ${pr.state}, not open — can't adopt a closed/merged PR.` }); return; }
-        // NOTE: pr.crossRepo flags a fork PR. We surface it (fork/headRepo below)
-        // rather than hard-block: a fork PR is safe to REVIEW read-only, only
-        // dangerous if its code reaches a test/deploy phase with privileged creds.
-        // The proper handling (fetch refs/pull/N/head, review-only, no execute) is
-        // a follow-up; for now the caller is told it's a fork so it can decide.
-        res.json({ kind: "pr", branch: pr.head, prNumber: pr.number, prState: pr.state, prUrl: pr.url, prTitle: pr.title, adoptedRef: `PR #${pr.number}`, fork: pr.crossRepo, headRepo: pr.headRepo });
-        return;
-      }
-      const head = await getBranchHead(repo, ref, token);
-      if (!head) { res.status(404).json({ error: `Branch '${ref}' not found on the remote.` }); return; }
-      res.json({ kind: "branch", branch: ref, adoptedRef: ref });
+      // NOTE: a fork PR is surfaced (fork/headRepo) rather than hard-blocked: it's
+      // safe to REVIEW read-only, only dangerous if its code reaches a test/deploy
+      // phase with privileged creds. The caller is told it's a fork so it can decide.
+      res.json(await resolveAdoptRef(repo, ref, await userGitToken(req.user!.userId)));
     } catch (err) {
-      res.status(502).json({ error: `Forge lookup failed: ${err instanceof Error ? err.message : String(err)}` });
+      const status = err instanceof AdoptError ? err.status : 502;
+      res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 

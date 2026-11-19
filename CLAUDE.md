@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 414 tests, 46 files (offline, pg-mem)
+npm run test         # 419 tests, 47 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -84,9 +84,9 @@ MCP clients ──POST /mcp──▶                 │                       �
 | `supervisor/dispatcher.ts` | The dispatch queue: `LISTEN daboss_agent_queued` + fallback sweep, slot-limited, auto-sizes unsized agents via one Claude call. Dispatches run **concurrently** (in-flight map counts against the cap) — one agent waiting on an image build never blocks the rest |
 | `supervisor/reaper.ts` | Heartbeat reaper (pod mode) — dead pods → paused, unsticks reviews |
 | `supervisor/credential.ts` | Headless Claude calls borrow a designated admin's vault credential; degrades to rules-only |
-| `forge/github.ts` / `sync-branch.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent |
+| `forge/github.ts` / `sync-branch.ts` / `adopt.ts` | GitHub REST (PRs, branches, merges, comments, diffs); merge base→head else hand conflict to the agent; resolve a branch/PR#/PR URL to adopt (shared by UI + MCP) |
 | `api/router.ts` | Main REST router (~1650 lines) — agents, reviews, merge (land gate), deploys, pipeline, files, admin, budget |
-| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 28 tools (create/control agents, `list_models`, dev envs: `start_dev_env`/`get_dev_env`/`sync_dev_env`/`stop_dev_env`/`handback_change`, uploads: `list_agent_files`/`read_agent_file`, reviews, deploys, checks) |
+| `api/mcp.ts` | MCP Streamable-HTTP server at `POST /mcp` — 29 tools (create/control agents — `create_agent` can `adopt` an existing branch/PR; `adopt_change` hands a finished branch to gates + review with no agent run — `list_models`, dev envs: `start_dev_env`/`get_dev_env`/`sync_dev_env`/`stop_dev_env`/`handback_change`, uploads: `list_agent_files`/`read_agent_file`, reviews, deploys, checks) |
 | `api/auth.ts` / `tokens.ts` | Local (scrypt, first user = admin) + provider-neutral OIDC; `dbt_` API tokens, scoped, default-deny |
 | `api/live-relay.ts` / `websocket.ts` | PG LISTEN → in-process bus → WS broadcast |
 | `api/agent-status.ts` | Canonical rolled-up `status` (testing/reviewing/ready/landing/merged/deploying/deployed/…) — server-computed wins in UI |

@@ -184,6 +184,7 @@ export async function getPullRequest(
   title: string;
   crossRepo: boolean; // head lives on a fork, not the base repo — untrusted
   headRepo: string; // full_name of the head repo (fork owner/name), for the error
+  base: string; // the branch the PR targets
 } | null> {
   const gh = parseRepo(repoUrl);
   if (!gh) return null;
@@ -193,7 +194,7 @@ export async function getPullRequest(
     number: number;
     state: string;
     head?: { ref?: string; repo?: { full_name?: string } };
-    base?: { repo?: { full_name?: string } };
+    base?: { ref?: string; repo?: { full_name?: string } };
     html_url?: string;
     title?: string;
   };
@@ -210,6 +211,7 @@ export async function getPullRequest(
     title: pr.title || "",
     crossRepo,
     headRepo,
+    base: pr.base?.ref || "",
   };
 }
 

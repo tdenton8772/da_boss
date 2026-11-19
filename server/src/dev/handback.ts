@@ -37,7 +37,7 @@ export async function handbackChange(manager: ReviewDispatcher, agent: AgentReco
     branch: agent.branch,
     base: agent.repo_ref || undefined,
     title: agent.name,
-    body: `Developed outside an agent run (local work against a da_boss dev environment) and handed back by ${actor.label} for testing + review.\n\nda_boss change: \`${agent.id}\``,
+    body: `Developed outside an agent run and handed back to da_boss by ${actor.label} for testing + review.\n\nda_boss change: \`${agent.id}\``,
     draft: (process.env.DABOSS_PR_DRAFT || "true") !== "false",
   });
   if (!pr) throw new DevEnvError(400, `No PR could be opened for '${agent.branch}' — does it have commits ahead of the base branch?`);
