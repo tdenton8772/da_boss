@@ -165,6 +165,14 @@ builder shouldn't). If `DABOSS_BUILD_SERVICE_ACCOUNT` is unset or the grant is m
 kaniko can't push → da_boss falls back to the generic base image (agents still run,
 just without the repo's declared toolchain).
 
+Build pods never get a Kubernetes API token (`automountServiceAccountToken: false`, even
+when `DABOSS_BUILD_SERVICE_ACCOUNT` is set): kaniko runs the repo's Dockerfile `RUN`
+steps, and the identity is only for the registry. Off GKE (no workload identity), give
+kaniko a `kubernetes.io/dockerconfigjson` Secret instead and set
+`DABOSS_REGISTRY_SECRET=<its name>`: it's mounted as kaniko's docker config, used as the
+pods' `imagePullSecrets`, and used by the "already built?" check (grant the boss `get` on
+that Secret, by `resourceNames`).
+
 ## 12. Dev environments (optional)
 
 A repo that ships `.daboss/dev.yaml` can get per-change dev pods: da_boss runs the

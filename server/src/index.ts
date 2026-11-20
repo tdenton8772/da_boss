@@ -26,8 +26,16 @@ import { prewarmAllRepoImages } from "./agent/image-prewarm.js";
 import { startDevEnvReaper } from "./dev/dev-env.js";
 import { startScheduler } from "./pipeline/scheduler.js";
 import { logger } from "./utils/logger.js";
+import { podDefaults } from "./agent/pod-spec.js";
 
 async function main() {
+  // Pod placement / registry settings: refuse to start on a malformed value rather
+  // than silently scheduling agents on the wrong nodes.
+  if (config.agentExecution === "pod") {
+    const pd = podDefaults();
+    logger.info({ nodeSelector: pd.nodeSelector, tolerations: pd.tolerations.length, registrySecret: pd.registrySecret || null }, "Pod placement");
+  }
+
   // Initialize database
   await initDb();
   logger.info("Database initialized");

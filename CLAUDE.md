@@ -7,7 +7,7 @@ Multi-user platform that runs Claude Code agents in Kubernetes pods (one pod per
 ## Quick Start
 
 ```bash
-npm run test         # 419 tests, 47 files (offline, pg-mem)
+npm run test         # 434 tests, 48 files (offline, pg-mem)
 npm run build        # production build (server tsc + ui vite)
 npm run dev          # local dev server (:3847) + vite UI (:3848) — needs PG port-forward (below)
 ```
@@ -148,7 +148,9 @@ Cluster: `AGENT_EXECUTION` (`inprocess`|`pod`), `AGENT_SIDECAR` (`on`|`off`), `W
 
 Behavior: `MAX_CONCURRENT_AGENTS` (3), `SUPERVISOR_INTERVAL_MINUTES` (5), `SUPERVISOR_CREDENTIAL_USER`, `PERMISSION_TIMEOUT_MINUTES` (30), `STUCK_THRESHOLD_MINUTES` (15), `DABOSS_AUTO_TEST` (false), `LEASE_MODE` (`advisory`|`enforce`|`off`), `DABOSS_MAIN_WATCH_INTERVAL_SECONDS` (600), `DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS` (300), `DABOSS_REAPER_*`, `SIDECAR_*`.
 
-Builds/sizing: `DABOSS_BUILD_SERVICE_ACCOUNT`, `DABOSS_KANIKO_IMAGE`/`_MEMORY`/`_CPU`, `DABOSS_BUILD_TIMEOUT_MS`, `DABOSS_SIZE_PRESETS`, `DABOSS_MODEL_DEFAULTS` (JSON `{role: {model, effort}}`), `DABOSS_DEPLOY_AGENT_IMAGE`. Misc: `NTFY_TOPIC`, `ANTHROPIC_ADMIN_API_KEY`, `CLAUDE_PATH`, `DABOSS_PR_DRAFT` (worker, default true).
+Pods: `DABOSS_POD_NODE_SELECTOR` / `DABOSS_POD_TOLERATIONS` (JSON; placement of agent, pipeline, build and cleanup pods), `DABOSS_REGISTRY_SECRET` (dockerconfigjson Secret: imagePullSecrets, kaniko push, registry check auth) — all in `agent/pod-spec.ts`. Pods get **no service-account token** (`automountServiceAccountToken: false`) unless they run as a named SA that needs the API (phase/agent `service_account`, the cleanup pod); image builds never get one.
+
+Builds/sizing: `DABOSS_BUILD_SERVICE_ACCOUNT`, `DABOSS_KANIKO_IMAGE` (default: last upstream release, pinned by digest)/`_MEMORY`/`_CPU`, `DABOSS_BUILD_TIMEOUT_MS`, `DABOSS_SIZE_PRESETS`, `DABOSS_MODEL_DEFAULTS` (JSON `{role: {model, effort}}`), `DABOSS_DEPLOY_AGENT_IMAGE`. Misc: `NTFY_TOPIC`, `ANTHROPIC_ADMIN_API_KEY`, `CLAUDE_PATH`, `DABOSS_PR_DRAFT` (worker, default true).
 
 ## Working Conventions
 

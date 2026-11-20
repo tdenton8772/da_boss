@@ -16,6 +16,7 @@ import { resolveAgentImage } from "./agent-image.js";
 import { getFileContents } from "../forge/github.js";
 import { parsePipeline, PIPELINE_PATH } from "../pipeline/config.js";
 import { logger } from "../utils/logger.js";
+import { workloadPodSpec } from "./pod-spec.js";
 
 const NAMESPACE = process.env.POD_NAMESPACE || "daboss";
 const WORKER_IMAGE = config.workerImage;
@@ -314,10 +315,10 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     spec: {
       restartPolicy: "Never",
       ...pinToNode(volumeNode),
-      // Opt-in identity: a deploy-manager agent runs as the Workload-Identity deploy
-      // SA so its gcloud/kubectl can drive a real deploy. Default agents omit this
-      // (namespace default SA — no privileged k8s access from agent code).
-      ...(agent.service_account ? { serviceAccountName: agent.service_account } : {}),
+      // Opt-in identity: a deploy-manager agent runs as its deploy SA so its
+      // kubectl/cloud CLI can drive a real deploy. Default agents get no service-account
+      // token at all (no k8s access from agent code). Plus node placement + pull secret.
+      ...workloadPodSpec({ serviceAccount: agent.service_account }),
       // Native sidecar (initContainer with restartPolicy: Always) — starts before
       // the agent, shares its volumes for live C2, and is auto-terminated by k8s
       // when the agent (main container) exits, so the pod still completes. No k8s
@@ -508,7 +509,7 @@ export async function launchStateCleanupPod(agent: AgentRecord): Promise<boolean
     spec: {
       restartPolicy: "Never",
       ...pinToNode(volumeNode),
-      serviceAccountName: "daboss", // needs pods-delete RBAC to remove itself
+      ...workloadPodSpec({ serviceAccount: "daboss" }), // needs pods-delete RBAC to remove itself
       containers: [
         {
           name: "cleanup",
@@ -625,7 +626,7 @@ export async function launchPipelineRunner(opts: {
       metadata: { name, namespace: NAMESPACE, labels: { app: "daboss-pipeline" }, annotations: { "daboss.run-id": opts.runId } },
       spec: {
         restartPolicy: "Never",
-        ...(opts.serviceAccount ? { serviceAccountName: opts.serviceAccount } : {}),
+        ...workloadPodSpec({ serviceAccount: opts.serviceAccount }),
         initContainers: [
           ...serviceSidecars,
           {
@@ -681,7 +682,7 @@ export async function launchPipelineRunner(opts: {
       metadata: { name, namespace: NAMESPACE, labels: { app: "daboss-pipeline" }, annotations: { "daboss.run-id": opts.runId } },
       spec: {
         restartPolicy: "Never",
-        ...(opts.serviceAccount ? { serviceAccountName: opts.serviceAccount } : {}),
+        ...workloadPodSpec({ serviceAccount: opts.serviceAccount }),
         containers: [
           {
             name: "runner",
