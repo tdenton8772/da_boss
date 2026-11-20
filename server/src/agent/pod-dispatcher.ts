@@ -803,11 +803,18 @@ export async function reapFinishedAgentPods(): Promise<void> {
       const app = pod.metadata?.labels?.app;
       const agentId = pod.metadata?.annotations?.["daboss.agent-id"];
       if (name && (phase === "Succeeded" || phase === "Failed")) {
+        // A failed pipeline pod's last log lines are the only record of WHY (clone,
+        // image pull…) once it's deleted: read them first.
+        const logTail = phase === "Failed" && app === "daboss-pipeline" ? await failedContainerLogTail(pod) : "";
         await api().deleteNamespacedPod({ name, namespace: NAMESPACE });
         // agent pods carry an ephemeral cred secret; pipeline pods carry <name>-cred
         if (app === "daboss-agent" && agentId) await deleteAgentCredSecret(agentId);
         if (app === "daboss-pipeline") await deleteNamespacedSecretSafe(`${name}-cred`);
         logger.info({ pod: name, phase, app }, "Reaped finished pod");
+        if (phase === "Failed" && app === "daboss-pipeline") {
+          await failUnrecordedPipelineRun(pod, logTail).catch((err) =>
+            logger.warn({ pod: name, err: err instanceof Error ? err.message : String(err) }, "Failed-pipeline-pod reconcile failed"));
+        }
         // A FAILED agent pod means the worker died before recording a terminal
         // state — reconcile the agent NOW, with the pod's actual death reason
         // (OOMKilled etc.), instead of waiting for the heartbeat reaper to write
@@ -867,6 +874,46 @@ export async function reapFinishedAgentPods(): Promise<void> {
 /** Why a finished pod died, from its container statuses. Keeps the literal
  *  "OOMKilled"/"exit code N" tokens the dispatcher's resource-failure regex
  *  keys on, so a requeue auto-bumps the size. */
+/** The first container (init containers included) that exited non-zero. */
+function failedContainerName(pod: k8s.V1Pod): string | undefined {
+  const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])];
+  return statuses.find((cs) => { const t = cs.state?.terminated; return t && t.exitCode !== 0; })?.name;
+}
+
+/** Credentials in URLs (an authed clone URL in a git error) never reach the run log. */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@");
+}
+
+async function failedContainerLogTail(pod: k8s.V1Pod): Promise<string> {
+  const container = failedContainerName(pod);
+  if (!container || !pod.metadata?.name) return "";
+  const log = await api()
+    .readNamespacedPodLog({ name: pod.metadata.name, namespace: NAMESPACE, container, tailLines: 30 })
+    .catch(() => "");
+  return typeof log === "string" ? log : "";
+}
+
+/** A pipeline pod that went Failed before its runner/recorder wrote a verdict (the
+ *  clone init container failed, the toolchain image wouldn't run, the recorder was
+ *  OOM-killed…) leaves its run pending: nothing else ever finishes it, and the
+ *  orphan sweep only aborts it after ORPHAN_RUN_GRACE_MS with a reason that hides
+ *  the real one. Fail it now, with the pod's own cause and log tail. A run the pod
+ *  already recorded (terminal) is left alone. */
+export async function failUnrecordedPipelineRun(pod: k8s.V1Pod, logTail = ""): Promise<boolean> {
+  const runId = pod.metadata?.annotations?.["daboss.run-id"];
+  if (!runId) return false;
+  const run = await queries.getPipelineRun(runId);
+  if (!run || !["pending", "running"].includes(run.status)) return false;
+  const reason = podFailureReason(pod);
+  const log = redactUrlCredentials(
+    `Pipeline pod failed before recording a result: ${reason}${logTail ? `\n\n${logTail.trimEnd()}` : ""}`
+  );
+  await queries.updatePipelineRun(runId, { status: "failed", log, completed: true });
+  logger.warn({ runId, pod: pod.metadata?.name, reason }, "Pipeline run failed with its pod");
+  return true;
+}
+
 export function podFailureReason(pod: k8s.V1Pod): string {
   const statuses = [...(pod.status?.containerStatuses ?? []), ...(pod.status?.initContainerStatuses ?? [])];
   for (const cs of statuses) {
