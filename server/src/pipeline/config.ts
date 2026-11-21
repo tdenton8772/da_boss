@@ -68,6 +68,11 @@ export interface PipelinePhase {
   // nightly DB snapshot) instead of improvising blank databases. At most one
   // phase per pipeline should set this; the first declaring phase wins.
   expose_to_agents?: boolean;
+  // Hand this phase's `requires` secrets to runs on refs other than TRUSTED_REF too.
+  // Off by default: a branch's command is whatever the branch says, so any secret it
+  // gets is readable by whoever (or whatever agent) wrote the branch. Only honoured
+  // when TRUSTED_REF's pipeline declares it (see applyTrustedPolicy).
+  branch_secrets?: boolean;
 }
 
 /** Repo-declared agent policy — the repo's side of the permission contract. */
@@ -199,6 +204,7 @@ export function parsePipeline(yamlText: string): Pipeline {
         return p.artifact_from;
       })(),
       expose_to_agents: p.expose_to_agents === true,
+      branch_secrets: p.branch_secrets === true,
     };
   }
   for (const [name, ph] of Object.entries(phases)) {
@@ -218,4 +224,44 @@ export function parsePipeline(yamlText: string): Pipeline {
   }
 
   return { version: typeof d.version === "number" ? d.version : undefined, phases, agents };
+}
+
+
+/** The ref whose pipeline file is trusted for privileges (secrets, identity, gates). */
+export const TRUSTED_REF = "main";
+
+/** A phase as it may run on `ref`. The pipeline file lives in the repo, so on any ref
+ *  but TRUSTED_REF it is written by whoever pushed that branch (a person, or an agent
+ *  that may have been steered by what it read). The branch decides WHAT runs (command,
+ *  image, build, params, size, services, lease); TRUSTED_REF's file decides what it is
+ *  ALLOWED to have: secrets (`requires`), its identity (`service_account`), `only_ref`,
+ *  `gate`, `agent`, `adapter`, `artifact_from` and `expose_to_agents`.
+ *  - A phase TRUSTED_REF doesn't declare gets none of those privileges.
+ *  - Secrets reach a branch run only when TRUSTED_REF's phase sets branch_secrets: true, or a
+ *    person explicitly approved running this branch (opts.personApprovedBranch).
+ *  - The branch may only ADD restrictions: a stricter only_ref, or gate: human. */
+export function applyTrustedPolicy(
+  branch: PipelinePhase,
+  trusted: PipelinePhase | undefined,
+  ref: string | undefined,
+  opts?: { personApprovedBranch?: boolean }
+): PipelinePhase {
+  if (ref === undefined || ref === TRUSTED_REF) return branch;
+  // A person explicitly chose to run THIS branch with the phase's privileges (e.g. "deploy
+  // this branch to staging"): their click is the approval for its secrets. The privileges
+  // are still TRUSTED_REF's, not whatever the branch names.
+  const secretsAllowed = !!trusted && (trusted.branch_secrets === true || opts?.personApprovedBranch === true);
+  const gate: "human" | "auto" = trusted?.gate === "human" || branch.gate === "human" ? "human" : "auto";
+  return {
+    ...branch,
+    requires: secretsAllowed ? (trusted!.requires ?? []) : [],
+    service_account: trusted?.service_account,
+    only_ref: trusted?.only_ref ?? branch.only_ref,
+    gate,
+    agent: trusted?.agent ?? false,
+    adapter: trusted?.adapter,
+    artifact_from: trusted?.artifact_from,
+    expose_to_agents: trusted?.expose_to_agents ?? false,
+    branch_secrets: trusted?.branch_secrets ?? false,
+  };
 }

@@ -9,7 +9,7 @@ import { getCipher } from "../crypto/cipher.js";
 import { getFileContents, getRepoAccess } from "../forge/github.js";
 import { launchPipelineRunner } from "../agent/pod-dispatcher.js";
 import { ensurePipelineImages } from "../agent/image-builder.js";
-import { parsePipeline, PIPELINE_PATH, isTestPhase, type PipelinePhase } from "./config.js";
+import { parsePipeline, PIPELINE_PATH, isTestPhase, applyTrustedPolicy, TRUSTED_REF, type PipelinePhase } from "./config.js";
 import { produceReview } from "./review.js";
 import { logger } from "../utils/logger.js";
 import type { AgentRecord } from "../types/agent.js";
@@ -53,8 +53,16 @@ export async function resolvePhase(
     throw { status: 400, message: `No ${PIPELINE_PATH} at '${ref ?? "default"}' in ${repoUrl}. Add the pipeline file on that ref.` };
   }
   const pipeline = parsePipeline(yamlText);
-  const ph = pipeline.phases[phaseName];
-  if (!ph) throw { status: 404, message: `No phase '${phaseName}'. Available: ${Object.keys(pipeline.phases).join(", ")}` };
+  const branchPh = pipeline.phases[phaseName];
+  if (!branchPh) throw { status: 404, message: `No phase '${phaseName}'. Available: ${Object.keys(pipeline.phases).join(", ")}` };
+  // Privileges come from TRUSTED_REF's pipeline file, never the branch's (applyTrustedPolicy).
+  let trustedPh: PipelinePhase | undefined;
+  if (ref !== undefined && ref !== TRUSTED_REF) {
+    const trustedYaml = await getFileContents(repoUrl, PIPELINE_PATH, TRUSTED_REF, gitToken);
+    trustedPh = trustedYaml ? parsePipeline(trustedYaml).phases[phaseName] : undefined;
+  }
+  // allowAnyRef is only passed by a person's explicit "run this branch" action (deployAgentBranch).
+  const ph = applyTrustedPolicy(branchPh, trustedPh, ref, { personApprovedBranch: opts?.allowAnyRef === true });
   if (ph.only_ref && ref !== ph.only_ref && !opts?.allowAnyRef) {
     throw { status: 400, message: `Phase '${phaseName}' may only run on '${ph.only_ref}' (got '${ref ?? "default"}'). Deploy from the trusted ref, not a PR branch.` };
   }
