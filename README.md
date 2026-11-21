@@ -127,6 +127,8 @@ phases:
 
 Other phase fields: `build` (kaniko-build the image from the repo), `size` (`s`|`m`|`l`|`xl`: the task container's CPU/memory from the size presets, for a phase that runs work in parallel), `params`, `adapter`, `lease` (phase concurrency, e.g. terraform state), `schedule: nightly`, `artifact_from` (inject another phase's latest passed artifact at `$DABOSS_SEED`), `expose_to_agents` (deliver that artifact into every agent pod for the repo).
 
+**Privileges come from `main`'s pipeline file, never a branch's.** The file lives in the repo, so on any other ref it says whatever that branch (or the agent that wrote it) says. A branch run uses the branch's `command`, `image`, `build`, `params`, `size`, `services` and `lease`. Its `requires` (secrets), `service_account`, `only_ref`, `gate`, `agent`, `adapter`, `artifact_from` and `expose_to_agents` are taken from the same-named phase on `main`. A phase that `main` doesn't declare gets none of them. A branch may only add restrictions (a stricter `only_ref`, or `gate: human`). Secrets aren't handed to branch runs at all unless `main`'s phase sets `branch_secrets: true`, or a person explicitly deploys that branch (e.g. to staging). Even then they're `main`'s secrets, not the branch's list.
+
 The runner contract is deliberately dumb: env in, **exit code = verdict**, stdout streamed to the UI, and a file at `$DABOSS_ARTIFACT` becomes the human-review artifact. A live-validated builder for this file is in the UI (Settings → Pipeline).
 
 ## The change lifecycle
