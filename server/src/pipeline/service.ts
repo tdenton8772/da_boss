@@ -90,7 +90,7 @@ export async function launchResolved(runId: string, repoUrl: string, ref: string
   await launchPipelineRunner({
     runId, repoUrl, ref, sha: sha ?? null, command: r.ph.command, image: r.ph.image ?? null,
     params: r.ph.params || {}, secrets: r.secrets, gitToken: r.gitToken,
-    services: r.ph.services, serviceAccount: r.ph.service_account,
+    services: r.ph.services, serviceAccount: r.ph.service_account, size: r.ph.size ?? null,
     seedArtifact: r.seedArtifact,
   });
 }

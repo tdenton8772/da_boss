@@ -40,6 +40,11 @@ export interface PipelinePhase {
   adapter?: string; // optional richer handling (e.g. "terraform"); default generic
   lease?: { kind: string; ref: string }; // optional concurrency lease (e.g. tf_state)
   services?: PipelineService[]; // backing services (e.g. postgres for mix test)
+  // Pod size for the phase's task container: a t-shirt size (s|m|l|xl) from the
+  // same presets as agent pods (DABOSS_SIZE_PRESETS / admin settings). Lets a
+  // phase that runs work in parallel request the CPU it uses, so the scheduler
+  // (and a node autoscaler) places it honestly. Absent: the default task size.
+  size?: "s" | "m" | "l" | "xl";
   // k8s ServiceAccount the phase's pod runs as — the identity seam. A deploy phase
   // names a Workload-Identity-bound KSA so it can auth to GCP; default phases use
   // the namespace default. da_boss never bakes in an identity — the repo config does.
@@ -176,6 +181,12 @@ export function parsePipeline(yamlText: string): Pipeline {
       lease,
       services,
       service_account: typeof p.service_account === "string" ? p.service_account : undefined,
+      size: p.size === undefined ? undefined : (() => {
+        if (typeof p.size !== "string" || !["s", "m", "l", "xl"].includes(p.size)) {
+          throw new Error(`phase '${name}'.size must be one of s, m, l, xl`);
+        }
+        return p.size as "s" | "m" | "l" | "xl";
+      })(),
       agent: p.agent === true,
       schedule: p.schedule === undefined ? undefined : (() => {
         if (p.schedule !== "nightly") throw new Error(`phase '${name}'.schedule must be "nightly"`);

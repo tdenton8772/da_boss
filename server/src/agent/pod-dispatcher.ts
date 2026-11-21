@@ -575,6 +575,7 @@ export async function launchPipelineRunner(opts: {
   gitToken?: string;
   services?: Array<{ image: string; name?: string; port?: number; env?: Record<string, string> }>;
   serviceAccount?: string; // KSA the pod runs as (Workload Identity for deploy phases)
+  size?: string | null; // phase `size:` → the task container's resources from the size presets
   // Bytes for the $DABOSS_SEED file (an upstream phase's artifact — e.g. a data
   // snapshot). Rides in the pod Secret, surfaced as a mounted file, never env.
   seedArtifact?: string;
@@ -600,6 +601,11 @@ export async function launchPipelineRunner(opts: {
   const dbEnv = { name: "DATABASE_URL", valueFrom: { secretKeyRef: { name: APP_SECRET, key: "DATABASE_URL" } } };
   const paramEnv = Object.entries(opts.params).map(([k, v]) => ({ name: k, value: v }));
   const secretEnv = Object.keys(opts.secrets).map((k) => ({ name: k, valueFrom: { secretKeyRef: { name: secretName, key: k } } }));
+
+  // The phase's declared size, else the task defaults below (unchanged).
+  const sized = opts.size && normalizeSize(opts.size) ? await resolvePresetConfigured(opts.size) : null;
+  const taskResources = (dflt: { requests: Record<string, string>; limits: Record<string, string> }) =>
+    sized ? { requests: { cpu: sized.requests.cpu, memory: sized.requests.memory }, limits: { memory: sized.limits.memory } } : dflt;
 
   let pod: k8s.V1Pod;
   if (opts.image) {
@@ -669,7 +675,7 @@ export async function launchPipelineRunner(opts: {
               ...secretEnv,
             ],
             volumeMounts: [{ name: "work", mountPath: "/work" }, ...seedMount],
-            resources: { requests: { cpu: "250m", memory: "512Mi" }, limits: { memory: "2Gi" } },
+            resources: taskResources({ requests: { cpu: "250m", memory: "512Mi" }, limits: { memory: "2Gi" } }),
           },
           {
             name: "recorder",
@@ -711,7 +717,7 @@ export async function launchPipelineRunner(opts: {
               ...(opts.gitToken ? [{ name: "GIT_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "GIT_TOKEN" } } }] : []),
             ],
             volumeMounts: [{ name: "work", mountPath: "/work" }, ...seedMount],
-            resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "1Gi" } },
+            resources: taskResources({ requests: { cpu: "100m", memory: "256Mi" }, limits: { memory: "1Gi" } }),
           },
         ],
         volumes: [{ name: "work", emptyDir: {} }, ...seedVolume],

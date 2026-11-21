@@ -43,6 +43,12 @@ phases:
     expect(p.phases.deploy.adapter).toBeUndefined();
   });
 
+  it("parses a phase size, and rejects one that isn't s|m|l|xl", () => {
+    expect(parsePipeline("phases:\n  t:\n    command: x\n    size: xl\n").phases.t.size).toBe("xl");
+    expect(parsePipeline("phases:\n  t:\n    command: x\n").phases.t.size).toBeUndefined();
+    expect(() => parsePipeline("phases:\n  t:\n    command: x\n    size: huge\n")).toThrow(/size must be one of/);
+  });
+
   it("parses agent-managed and service_account on a deploy phase", () => {
     const p = parsePipeline(`
 phases:

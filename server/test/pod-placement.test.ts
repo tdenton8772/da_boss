@@ -187,6 +187,19 @@ describe("pipeline and cleanup pods", () => {
     expect(k.pods.get("daboss-pl-s3")!.spec.initContainers.find((c: any) => c.name === "clone").command[2]).not.toContain("PIPELINE_SHA");
   });
 
+  it("a phase size sets the task container's resources from the presets; no size keeps the defaults", async () => {
+    setPoolEnv();
+    await launchPipelineRunner({ runId: "z1", command: "t", image: "reg.example/ci:1", params: {}, secrets: {}, size: "xl" });
+    const task = k.pods.get("daboss-pl-z1")!.spec.containers.find((c: any) => c.name === "task");
+    expect(task.resources).toEqual({ requests: { cpu: "1", memory: "2Gi" }, limits: { memory: "8Gi" } });
+    await launchPipelineRunner({ runId: "z2", command: "t", image: "reg.example/ci:1", params: {}, secrets: {} });
+    expect(k.pods.get("daboss-pl-z2")!.spec.containers.find((c: any) => c.name === "task").resources)
+      .toEqual({ requests: { cpu: "250m", memory: "512Mi" }, limits: { memory: "2Gi" } });
+    await launchPipelineRunner({ runId: "z3", command: "t", params: {}, secrets: {}, size: "l" });
+    expect(k.pods.get("daboss-pl-z3")!.spec.containers[0].resources)
+      .toEqual({ requests: { cpu: "500m", memory: "1Gi" }, limits: { memory: "4Gi" } });
+  });
+
   it("the cleanup pod is placed too and keeps the boss SA token (it deletes itself)", async () => {
     setPoolEnv();
     k.pvcs.add("daboss-ws-usr-a");

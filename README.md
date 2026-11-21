@@ -125,7 +125,7 @@ phases:
     requires: [gcp-sa]       # named vault secrets injected as env
 ```
 
-Other phase fields: `build` (kaniko-build the image from the repo), `params`, `adapter`, `lease` (phase concurrency, e.g. terraform state), `schedule: nightly`, `artifact_from` (inject another phase's latest passed artifact at `$DABOSS_SEED`), `expose_to_agents` (deliver that artifact into every agent pod for the repo).
+Other phase fields: `build` (kaniko-build the image from the repo), `size` (`s`|`m`|`l`|`xl`: the task container's CPU/memory from the size presets, for a phase that runs work in parallel), `params`, `adapter`, `lease` (phase concurrency, e.g. terraform state), `schedule: nightly`, `artifact_from` (inject another phase's latest passed artifact at `$DABOSS_SEED`), `expose_to_agents` (deliver that artifact into every agent pod for the repo).
 
 The runner contract is deliberately dumb: env in, **exit code = verdict**, stdout streamed to the UI, and a file at `$DABOSS_ARTIFACT` becomes the human-review artifact. A live-validated builder for this file is in the UI (Settings → Pipeline).
 
