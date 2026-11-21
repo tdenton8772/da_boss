@@ -78,7 +78,7 @@ export async function resolvePhase(
   return { ph, secrets, gitToken, seedArtifact };
 }
 
-export async function launchResolved(runId: string, repoUrl: string, ref: string | undefined, r: ResolvedPhase): Promise<void> {
+export async function launchResolved(runId: string, repoUrl: string, ref: string | undefined, r: ResolvedPhase, sha?: string): Promise<void> {
   // Build any toolchain images the phase declares a `build:` for, if they're missing
   // from the registry (kaniko); reuse them if present. Keeps image definitions in the
   // repo and self-bootstraps a fresh registry. A build failure fails the launch — the
@@ -88,7 +88,7 @@ export async function launchResolved(runId: string, repoUrl: string, ref: string
     onProgress: (msg) => logger.info({ runId, msg }, "pipeline image build"),
   });
   await launchPipelineRunner({
-    runId, repoUrl, ref, command: r.ph.command, image: r.ph.image ?? null,
+    runId, repoUrl, ref, sha: sha ?? null, command: r.ph.command, image: r.ph.image ?? null,
     params: r.ph.params || {}, secrets: r.secrets, gitToken: r.gitToken,
     services: r.ph.services, serviceAccount: r.ph.service_account,
     seedArtifact: r.seedArtifact,

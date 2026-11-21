@@ -10,7 +10,7 @@
  * the phase + decrypts only the required secrets into this pod's ephemeral Secret.
  *
  * Entrypoint: `node dist/pipeline/runner.js` with env RUN_ID, PIPELINE_COMMAND,
- * PIPELINE_REPO_URL?, PIPELINE_REF?, GIT_TOKEN?, WORK_DIR (+ DATABASE_URL and the
+ * PIPELINE_REPO_URL?, PIPELINE_REF?, PIPELINE_SHA?, GIT_TOKEN?, WORK_DIR (+ DATABASE_URL and the
  * injected secret/param env vars).
  */
 import { spawn } from "node:child_process";
@@ -29,6 +29,7 @@ const RUN_ID = process.env.RUN_ID;
 const COMMAND = process.env.PIPELINE_COMMAND || "";
 const REPO_URL = process.env.PIPELINE_REPO_URL || "";
 const REF = process.env.PIPELINE_REF || "";
+const SHA = process.env.PIPELINE_SHA || "";
 const GIT_TOKEN = process.env.GIT_TOKEN || "";
 const WORK_DIR = process.env.WORK_DIR || "/work";
 const ARTIFACT_PATH = `${WORK_DIR}/.daboss-artifact`;
@@ -51,6 +52,10 @@ async function main(): Promise<void> {
         ["clone", "--depth", "1", ...(REF ? ["--branch", REF] : []), authedUrlWithToken(normalizeGitUrl(REPO_URL), GIT_TOKEN), WORK_DIR],
         { timeout: 300_000, maxBuffer: 32 * 1024 * 1024 }
       );
+      if (SHA) {
+        await execFileAsync("git", ["-C", WORK_DIR, "fetch", "-q", "--depth", "1", "origin", SHA], { timeout: 300_000, maxBuffer: 32 * 1024 * 1024 });
+        await execFileAsync("git", ["-C", WORK_DIR, "checkout", "-q", "--detach", "FETCH_HEAD"], { timeout: 60_000 });
+      }
     } catch (err) {
       const e = err as { stderr?: string; message?: string };
       const detail = (e.stderr && e.stderr.trim()) || e.message || String(err);

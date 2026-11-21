@@ -557,10 +557,17 @@ const WAIT_SERVICES_SCRIPT =
   "const check=p=>new Promise(r=>{const s=net.connect(p,'127.0.0.1');s.on('connect',()=>{s.destroy();r(true)});s.on('error',()=>r(false));s.setTimeout(1000,()=>{s.destroy();r(false)})});" +
   "(async function loop(){const res=await Promise.all(ports.map(check));if(res.every(Boolean)){console.log('services ready');process.exit(0)}if(Date.now()-start>180000){console.error('timeout waiting for services');process.exit(1)}setTimeout(loop,1500)})();";
 
+/** After a shallow clone of the ref, move /work to $PIPELINE_SHA (fetched by sha:
+ *  GitHub serves any reachable commit). Fails the clone step if it can't. */
+export const PIN_SHA_SH = `git -C /work fetch -q --depth 1 origin "$PIPELINE_SHA" && git -C /work checkout -q --detach FETCH_HEAD`;
+
 export async function launchPipelineRunner(opts: {
   runId: string;
   repoUrl?: string | null;
   ref?: string | null;
+  // Test exactly this commit of `ref` (the main watcher pins a run to the head it
+  // saw, so a phase launched minutes later doesn't test a newer push).
+  sha?: string | null;
   command: string;
   image?: string | null; // toolchain image; when set → split-container pod
   params: Record<string, string>;
@@ -634,10 +641,11 @@ export async function launchPipelineRunner(opts: {
             image: WORKER_IMAGE,
             imagePullPolicy: "IfNotPresent",
             command: ["sh", "-c", opts.repoUrl
-              ? `git clone --depth 1 ${opts.ref ? `--branch "$PIPELINE_REF"` : ""} "$CLONE_URL" /work && mkdir -p /work/.daboss`
+              ? `git clone --depth 1 ${opts.ref ? `--branch "$PIPELINE_REF"` : ""} "$CLONE_URL" /work${opts.sha ? ` && ${PIN_SHA_SH}` : ""} && mkdir -p /work/.daboss`
               : `mkdir -p /work/.daboss`],
             env: [
               ...(opts.ref ? [{ name: "PIPELINE_REF", value: opts.ref }] : []),
+              ...(opts.sha ? [{ name: "PIPELINE_SHA", value: opts.sha }] : []),
               ...(opts.repoUrl ? [{ name: "CLONE_URL", valueFrom: { secretKeyRef: { name: secretName, key: "CLONE_URL" } } }] : []),
             ],
             volumeMounts: [{ name: "work", mountPath: "/work" }],
@@ -695,6 +703,7 @@ export async function launchPipelineRunner(opts: {
               { name: "WORK_DIR", value: "/work" },
               ...(opts.repoUrl ? [{ name: "PIPELINE_REPO_URL", value: opts.repoUrl }] : []),
               ...(opts.ref ? [{ name: "PIPELINE_REF", value: opts.ref }] : []),
+              ...(opts.sha ? [{ name: "PIPELINE_SHA", value: opts.sha }] : []),
               dbEnv,
               ...seedEnv,
               ...paramEnv,

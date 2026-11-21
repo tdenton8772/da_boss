@@ -52,6 +52,42 @@ describe("nextWatchAction — one repo, one sweep (pure)", () => {
   });
 });
 
+describe("nextWatchAction — coalescing (settle window + parallel cap)", () => {
+  const T = 1_000_000;
+  it("settles a new head: waits until it has stayed put for the window", () => {
+    const o = { settleSeconds: 300, now: T };
+    expect(nextWatchAction("bbb", state({ sha: "aaa" }), [], o)).toBe("settle");
+    expect(nextWatchAction("bbb", state({ sha: "aaa", nextSha: "bbb", nextSeenAt: T - 299_000 }), [], o)).toBe("settle");
+    expect(nextWatchAction("bbb", state({ sha: "aaa", nextSha: "bbb", nextSeenAt: T - 300_000 }), [], o)).toBe("launch");
+  });
+
+  it("a push during the window restarts it (only the last head is tested)", () => {
+    expect(nextWatchAction("ccc", state({ sha: "aaa", nextSha: "bbb", nextSeenAt: T - 900_000 }), [], { settleSeconds: 300, now: T })).toBe("settle");
+  });
+
+  it("first sight settles too", () => {
+    expect(nextWatchAction("aaa", null, [], { settleSeconds: 60, now: T })).toBe("settle");
+  });
+
+  it("never launches a newer head while the one under test is still going", () => {
+    const st = state({ sha: "aaa", status: "testing" });
+    expect(nextWatchAction("bbb", st, [{ status: "running" }], { maxParallel: 3 })).toBe("wait");
+    expect(nextWatchAction("bbb", st, [{ status: "passed" }], { maxParallel: 3 })).toBe("conclude");
+  });
+
+  it("fills queued phases as slots free, up to the cap", () => {
+    const st = state({ sha: "aaa", status: "testing", queued: ["p4"] });
+    const o = { maxParallel: 3 };
+    expect(nextWatchAction("aaa", st, [{ status: "running" }, { status: "running" }, { status: "pending" }], o)).toBe("wait");
+    expect(nextWatchAction("aaa", st, [{ status: "running" }, { status: "running" }, { status: "passed" }], o)).toBe("fill");
+  });
+
+  it("does not conclude while phases are still queued", () => {
+    const st = state({ sha: "aaa", status: "testing", queued: ["p4"] });
+    expect(nextWatchAction("aaa", st, [{ status: "passed" }], { maxParallel: 1 })).toBe("fill");
+  });
+});
+
 describe("getWatchedRepos — active repos with a credentialed owner", () => {
   async function mkUser(id: string, withCred: boolean) {
     await queries.createUser({ id, email: `${id}@t.co` }).catch(() => {});
@@ -97,5 +133,22 @@ describe("getWatchedRepos — active repos with a credentialed owner", () => {
     const repos = await queries.getWatchedRepos();
     expect(repos).toHaveLength(1);
     expect(repos[0].repo_url).toBe("https://github.com/o/same");
+  });
+
+  it("includes repos only pipelines have run on (no agent), by the run's credentialed creator", async () => {
+    await mkUser("usr_ci", true);
+    await mkUser("usr_nocred", false);
+    await queries.insertPipelineRun({ id: "run_w1", repoUrl: "https://github.com/o/ci-only", ref: "main", phase: "test", createdByUserId: "usr_ci" });
+    await queries.insertPipelineRun({ id: "run_w2", repoUrl: "https://github.com/o/nocred", ref: "main", phase: "test", createdByUserId: "usr_nocred" });
+    const repos = await queries.getWatchedRepos();
+    expect(repos).toEqual([{ repo_url: "https://github.com/o/ci-only", user_id: "usr_ci" }]);
+  });
+
+  it("an allowlist narrows the watch to exactly those repos (URL forms normalized)", async () => {
+    await mkUser("usr_a", true);
+    await mkAgent("ag_x", "https://github.com/o/keep.git", "usr_a");
+    await mkAgent("ag_y", "https://github.com/o/skip.git", "usr_a");
+    const repos = await queries.getWatchedRepos(["git@github.com:o/keep.git"]);
+    expect(repos.map((r) => r.repo_url)).toEqual(["https://github.com/o/keep"]);
   });
 });

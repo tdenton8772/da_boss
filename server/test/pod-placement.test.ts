@@ -175,6 +175,18 @@ describe("pipeline and cleanup pods", () => {
     expect(spec.tolerations).toHaveLength(1);
   });
 
+  it("a pinned sha: both layouts check out exactly that commit after the shallow clone", async () => {
+    setPoolEnv();
+    await launchPipelineRunner({ runId: "s1", repoUrl: "https://github.com/o/r", ref: "main", sha: "abc123", command: "t", image: "reg.example/ci:1", params: {}, secrets: {} });
+    const clone = k.pods.get("daboss-pl-s1")!.spec.initContainers.find((c: any) => c.name === "clone");
+    expect(clone.command[2]).toContain('fetch -q --depth 1 origin "$PIPELINE_SHA"');
+    expect(clone.env).toContainEqual({ name: "PIPELINE_SHA", value: "abc123" });
+    await launchPipelineRunner({ runId: "s2", repoUrl: "https://github.com/o/r", ref: "main", sha: "abc123", command: "t", params: {}, secrets: {} });
+    expect(k.pods.get("daboss-pl-s2")!.spec.containers[0].env).toContainEqual({ name: "PIPELINE_SHA", value: "abc123" });
+    await launchPipelineRunner({ runId: "s3", repoUrl: "https://github.com/o/r", ref: "main", command: "t", image: "reg.example/ci:1", params: {}, secrets: {} });
+    expect(k.pods.get("daboss-pl-s3")!.spec.initContainers.find((c: any) => c.name === "clone").command[2]).not.toContain("PIPELINE_SHA");
+  });
+
   it("the cleanup pod is placed too and keeps the boss SA token (it deletes itself)", async () => {
     setPoolEnv();
     k.pvcs.add("daboss-ws-usr-a");

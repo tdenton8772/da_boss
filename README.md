@@ -35,7 +35,7 @@ MCP clients      ──POST /mcp────────▶       │           
 - On-demand review agents that read the diff and return a verdict: `merge`, `fix`, or `hold` — with a merge-anyway override guard in the UI
 - Land gate: merge rebases the branch on `main`, re-runs tests, and merges only on green (409 on conflict — the agent resolves it)
 - Branch deploys to staging that bypass the main-only gate, run by a conversable deploy agent whose outcome feeds back to the originating change
-- Main watcher: re-runs test phases when `main` moves outside da_boss (manual merges included)
+- Main watcher: re-runs test phases when `main` moves outside da_boss (manual merges included), pinned to the head commit; optional push coalescing, a parallel-phase cap and GitHub commit statuses
 - Scheduled (`nightly`) phases with artifact seeding — e.g. a nightly DB snapshot whose artifact seeds test phases and agent pods
 
 **Governance & safety**

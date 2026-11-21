@@ -869,22 +869,31 @@ export async function completeCommand(id: number, status: "done" | "failed"): Pr
 
 // ── App settings (generic singleton key/value) ─────────────
 
-/** Repos the main-watcher should poll: every repo an agent has worked in, each
- *  attributed to its most recent owner that still has a git credential. Ordered
- *  scan + JS dedupe (DISTINCT ON is not pg-mem-safe). Dedupe key is the
- *  normalized URL sans `.git` — agents rows carry both forms of the same repo,
- *  which double-launched the watcher's main tests until deduped here. */
-export async function getWatchedRepos(): Promise<Array<{ repo_url: string; user_id: string }>> {
-  const res = await getPool().query<{ repo_url: string; user_id: string }>(
-    `SELECT a.repo_url, a.created_by_user_id AS user_id
+/** Repos the main-watcher should poll: every repo an agent has worked in or a
+ *  pipeline has run on, each attributed to its most recent owner (agent or run
+ *  creator) that still has a git credential. `only` (normalized URLs) narrows it
+ *  to those repos. Ordered scan + JS dedupe (DISTINCT ON is not pg-mem-safe).
+ *  Dedupe key is the normalized URL sans `.git` — rows carry both forms of the
+ *  same repo, which double-launched the watcher's main tests until deduped here. */
+export async function getWatchedRepos(only: string[] = []): Promise<Array<{ repo_url: string; user_id: string }>> {
+  const res = await getPool().query<{ repo_url: string; user_id: string; at: Date }>(
+    `SELECT a.repo_url, a.created_by_user_id AS user_id, a.created_at AS at
        FROM agents a
        JOIN user_git_credentials g ON g.user_id = a.created_by_user_id
       WHERE a.repo_url IS NOT NULL AND a.created_by_user_id IS NOT NULL
-      ORDER BY a.created_at DESC`
+     UNION ALL
+     SELECT r.repo_url, r.created_by_user_id AS user_id, r.created_at AS at
+       FROM pipeline_runs r
+       JOIN user_git_credentials g ON g.user_id = r.created_by_user_id
+      WHERE r.repo_url IS NOT NULL AND r.created_by_user_id IS NOT NULL`
   );
+  const norm = (u: string) => normalizeGitUrl(u).replace(/\.git$/, "");
+  const allow = new Set(only.map(norm));
+  const rows = [...res.rows].sort((x, y) => new Date(y.at).getTime() - new Date(x.at).getTime());
   const seen = new Map<string, { repo_url: string; user_id: string }>();
-  for (const row of res.rows) {
-    const key = normalizeGitUrl(row.repo_url).replace(/\.git$/, "");
+  for (const row of rows) {
+    const key = norm(row.repo_url);
+    if (allow.size && !allow.has(key)) continue;
     if (!seen.has(key)) seen.set(key, { repo_url: key, user_id: row.user_id });
   }
   return [...seen.values()];

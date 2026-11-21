@@ -223,6 +223,33 @@ export async function getBranchHead(repoUrl: string, branch: string, token: stri
   return ((await res.json()) as { object?: { sha?: string } }).object?.sha ?? null;
 }
 
+export type CommitState = "pending" | "success" | "failure" | "error";
+
+/** Set a commit status (context = one check, e.g. "daboss/test-api"). Needs a token
+ *  that may write statuses (classic `repo:status`, or fine-grained "Commit
+ *  statuses: write"). Returns the HTTP status (0 = network error), never throws. */
+export async function setCommitStatus(
+  repoUrl: string, sha: string, token: string,
+  s: { state: CommitState; context: string; description?: string; targetUrl?: string }
+): Promise<number> {
+  const gh = parseRepo(repoUrl);
+  if (!gh) return 0;
+  try {
+    const res = await ghFetch(`${API}/repos/${gh.owner}/${gh.repo}/statuses/${encodeURIComponent(sha)}`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        state: s.state, context: s.context,
+        ...(s.description ? { description: s.description.slice(0, 140) } : {}),
+        ...(s.targetUrl ? { target_url: s.targetUrl } : {}),
+      }),
+    });
+    return res.status;
+  } catch {
+    return 0;
+  }
+}
+
 /** Create a branch ref at a commit sha. */
 export async function createBranch(repoUrl: string, branch: string, fromSha: string, token: string): Promise<boolean> {
   const gh = parseRepo(repoUrl);

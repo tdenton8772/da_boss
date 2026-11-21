@@ -49,6 +49,20 @@ export const config = {
   // Main watcher: how often to check each active repo's main HEAD for un-tested
   // merges (manual GitHub merges bypass da_boss entirely).
   mainWatchIntervalSeconds: parseInt(process.env.DABOSS_MAIN_WATCH_INTERVAL_SECONDS || "600", 10),
+  // Coalescing: a new main HEAD is tested only once it has stayed put this long
+  // (pushes landing within the window are tested once, at the last one), and never
+  // while the previous head's runs are still going. 0 = launch at first sight.
+  mainWatchSettleSeconds: parseInt(process.env.DABOSS_MAIN_WATCH_SETTLE_SECONDS || "0", 10),
+  // At most this many of one head's test phases run at once; the rest queue and
+  // start as slots free (bounds the node pool a merge can scale up). 0 = all at once.
+  mainWatchMaxParallel: parseInt(process.env.DABOSS_MAIN_WATCH_MAX_PARALLEL || "0", 10),
+  // Comma-separated repo URLs: watch exactly these (plus nothing else). Empty =
+  // every repo an agent has worked in or a pipeline has run on.
+  mainWatchRepos: (process.env.DABOSS_MAIN_WATCH_REPOS || "").split(",").map((s) => s.trim()).filter(Boolean),
+  // Post each test phase's result on the commit as a GitHub status ("daboss/<phase>").
+  commitStatus: ["1", "on", "true"].includes((process.env.DABOSS_COMMIT_STATUS || "").toLowerCase()),
+  // Link from a commit status back to da_boss (optional).
+  publicUrl: (process.env.DABOSS_PUBLIC_URL || "").replace(/\/$/, ""),
   // Phase scheduler: how often to sweep repos for due `schedule:` phases.
   scheduleSweepIntervalSeconds: parseInt(process.env.DABOSS_SCHEDULE_SWEEP_INTERVAL_SECONDS || "300", 10),
   sidecarTelemetrySeconds: parseInt(process.env.SIDECAR_TELEMETRY_SECONDS || "30", 10),
