@@ -8,10 +8,10 @@ import { existsSync, statSync } from "node:fs";
 import type { AgentManager } from "../agent/manager.js";
 import type { AgentRecord } from "../types/agent.js";
 import { deleteAgentRemoteBranch, launchStateCleanupPod, launchPipelineRunner } from "../agent/pod-dispatcher.js";
-import { parsePipeline } from "../pipeline/config.js";
+import { parsePipeline, pipelineWarnings } from "../pipeline/config.js";
 import * as pipelineService from "../pipeline/service.js";
 import { maybeProposeDeploy } from "../pipeline/completion.js";
-import { dispatchDeployAgent, deployAgentBranch } from "../pipeline/deploy-agent.js";
+import { dispatchDeployAgent, deployAgentBranch, runsAsAgent } from "../pipeline/deploy-agent.js";
 import { dispatchReviewAgent } from "../pipeline/review-agent.js";
 import { mergePr, updateBranch, markReadyForReview } from "../forge/github.js";
 import { resolveAdoptRef, userGitToken, ensureAdoptedPrNumber, AdoptError } from "../forge/adopt.js";
@@ -1169,7 +1169,7 @@ export function createRouter(manager: AgentManager): Router {
       const ip = req.ip || req.socket.remoteAddress || null;
       // Agent-managed phase → dispatch a deploy-manager agent (live trace + rollback)
       // instead of a plain pod. The approval IS the human gate; the agent executes.
-      if (r.ph.agent) {
+      if (runsAsAgent(r.ph)) {
         const agentId = await dispatchDeployAgent(manager, run, r.ph);
         await queries.insertAgentEvent(agentId, "message", { role: "system", content: `👤 **${actorOf(req)}** approved this deploy of \`${run.git_ref || "main"}\` — running it now.` });
         await queries.insertAuditLog(ip, "pipeline.approve", "pipeline", run.id, `${run.phase} @ ${run.repo_url} → agent ${agentId} (by ${actorOf(req)})`, req.user?.userId);
@@ -1387,7 +1387,9 @@ export function createRouter(manager: AgentManager): Router {
         phases: Object.entries(p.phases).map(([name, ph]) => ({
           name, image: ph.image || "(da_boss default)", gate: ph.gate,
           requires: ph.requires || [], only_ref: ph.only_ref || null,
+          agent: !!ph.agent, agent_explicit: !!ph.agent_explicit,
         })),
+        warnings: pipelineWarnings(p),
       });
     } catch (err) {
       res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });

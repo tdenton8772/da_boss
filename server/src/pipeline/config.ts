@@ -49,11 +49,20 @@ export interface PipelinePhase {
   // names a Workload-Identity-bound KSA so it can auth to GCP; default phases use
   // the namespace default. da_boss never bakes in an identity — the repo config does.
   service_account?: string;
-  // When true, approving this (gate:human) phase dispatches a MANAGED AGENT to run
-  // the command instead of a dumb pod — so the run streams live and the agent can
-  // interpret results + roll back on failure. da_boss supplies its own agent-capable
-  // image (config: deployAgentImage); the phase keeps supplying command + identity.
+  // How an approved (gate: human) run of this phase executes.
+  //   true  — a MANAGED deploy agent runs the command on da_boss's agent-capable image
+  //           (config: deployAgentImage, NOT the phase's `image`): it streams live, digs out
+  //           the real error and rolls back on failure, and CLAIMS the merged changes it
+  //           ships, so they show "Deployed".
+  //   false — a plain pod runs the command on the phase's `image`: exit code = verdict, no
+  //           narration or rollback, and merged changes are NOT marked deployed.
+  // DEFAULT: true for the phase named `deploy` (fail closed: a deploy is tracked unless
+  // you opt out with `agent: false`); false for every other phase. A defaulted `deploy`
+  // falls back to a plain pod if da_boss has no deploy-agent image; an explicit
+  // `agent: true` refuses instead.
   agent?: boolean;
+  // Whether `agent` was written in the file (vs. defaulted) — see above.
+  agent_explicit?: boolean;
   // Boss-triggered recurrence: "nightly" runs the phase on main roughly once every
   // 24h with no human trigger (e.g. a data-snapshot or drift-check phase). The
   // phase failing IS the alert — no extra config.
@@ -96,6 +105,9 @@ export const PIPELINE_PATH = ".daboss/pipeline.yaml";
 /** A phase is a PR-gating test phase if it's named `test` or `test-<suite>`
  *  (e.g. test-elixir, test-web). All of a repo's test phases must pass to gate a
  *  PR / land — so a repo can split suites by toolchain into separate phases. */
+/** The phase da_boss treats as "the deploy": it runs as a managed agent by default. */
+export const DEPLOY_PHASE = "deploy";
+
 export function isTestPhase(name: string): boolean {
   return name === "test" || name.startsWith("test-");
 }
@@ -192,7 +204,13 @@ export function parsePipeline(yamlText: string): Pipeline {
         }
         return p.size as "s" | "m" | "l" | "xl";
       })(),
-      agent: p.agent === true,
+      agent: (() => {
+        if (p.agent !== undefined && typeof p.agent !== "boolean") {
+          throw new Error(`phase '${name}'.agent must be true or false`);
+        }
+        return p.agent === undefined ? name === DEPLOY_PHASE : (p.agent as boolean);
+      })(),
+      agent_explicit: p.agent !== undefined,
       schedule: p.schedule === undefined ? undefined : (() => {
         if (p.schedule !== "nightly") throw new Error(`phase '${name}'.schedule must be "nightly"`);
         return "nightly" as const;
@@ -259,9 +277,28 @@ export function applyTrustedPolicy(
     only_ref: trusted?.only_ref ?? branch.only_ref,
     gate,
     agent: trusted?.agent ?? false,
+    agent_explicit: trusted?.agent_explicit ?? false,
     adapter: trusted?.adapter,
     artifact_from: trusted?.artifact_from,
     expose_to_agents: trusted?.expose_to_agents ?? false,
     branch_secrets: trusted?.branch_secrets ?? false,
   };
+}
+
+/** Advice for the pipeline builder: settings that parse fine but probably don't do what
+ *  the author expects. Never blocks a pipeline. */
+export function pipelineWarnings(p: Pipeline): string[] {
+  const out: string[] = [];
+  for (const [name, ph] of Object.entries(p.phases)) {
+    if (name === DEPLOY_PHASE && !ph.agent) {
+      out.push(`'${name}' has agent: false: it runs as a plain pod (exit code only, no live narration or rollback), and merged changes will NOT be marked Deployed.`);
+    }
+    if (ph.agent && ph.gate !== "human") {
+      out.push(`'${name}' runs as an agent only when a person approves it: add gate: human, or the agent setting has no effect.`);
+    }
+    if (ph.agent && ph.image) {
+      out.push(`'${name}' runs as an agent, so its image (${ph.image}) is ignored: the deploy agent uses da_boss's deploy-agent image.`);
+    }
+  }
+  return out;
 }

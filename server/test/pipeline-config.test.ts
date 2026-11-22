@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePipeline, isTestPhase } from "../src/pipeline/config.js";
+import { parsePipeline, isTestPhase, pipelineWarnings } from "../src/pipeline/config.js";
 
 describe("isTestPhase", () => {
   it("matches 'test' and 'test-<suite>' but not others", () => {
@@ -95,5 +95,51 @@ phases:
     expect(parsePipeline("phases:\n  test:\n    command: pytest\n").agents).toBeUndefined();
     expect(() => parsePipeline("phases:\n  t:\n    command: x\nagents: [a]\n")).toThrow(/agents must be a mapping/);
     expect(() => parsePipeline("phases:\n  t:\n    command: x\nagents:\n  auto_approve_tools: nope\n")).toThrow(/must be a list of strings/);
+  });
+});
+
+describe("agent default (fail closed for deploy)", () => {
+  it("defaults agent to true for 'deploy' and false for other phases", () => {
+    const p = parsePipeline(`
+phases:
+  test: { command: "true" }
+  deploy: { command: "./deploy.sh", gate: human }
+  beta: { command: "./beta.sh", gate: human }
+`);
+    expect(p.phases.deploy.agent).toBe(true);
+    expect(p.phases.deploy.agent_explicit).toBe(false);
+    expect(p.phases.test.agent).toBe(false);
+    expect(p.phases.beta.agent).toBe(false);
+  });
+  it("honours an explicit agent: false on deploy, and agent: true elsewhere", () => {
+    const p = parsePipeline(`
+phases:
+  deploy: { command: "./deploy.sh", gate: human, agent: false }
+  apply: { command: "./apply.sh", gate: human, agent: true }
+`);
+    expect(p.phases.deploy.agent).toBe(false);
+    expect(p.phases.deploy.agent_explicit).toBe(true);
+    expect(p.phases.apply.agent).toBe(true);
+    expect(p.phases.apply.agent_explicit).toBe(true);
+  });
+  it("rejects a non-boolean agent", () => {
+    expect(() => parsePipeline(`
+phases:
+  deploy: { command: "x", agent: "yes" }
+`)).toThrow(/agent must be true or false/);
+  });
+  it("warns about an untracked deploy, an ungated agent, and an ignored image", () => {
+    const w = pipelineWarnings(parsePipeline(`
+phases:
+  deploy: { command: "x", gate: human, agent: false }
+  apply: { command: "y", agent: true, image: "alpine" }
+`));
+    expect(w.some((s) => s.includes("'deploy' has agent: false") && s.includes("NOT be marked Deployed"))).toBe(true);
+    expect(w.some((s) => s.includes("'apply'") && s.includes("gate: human"))).toBe(true);
+    expect(w.some((s) => s.includes("'apply'") && s.includes("image (alpine) is ignored"))).toBe(true);
+    expect(pipelineWarnings(parsePipeline(`
+phases:
+  deploy: { command: "x", gate: human }
+`))).toEqual([]);
   });
 });

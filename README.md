@@ -120,10 +120,19 @@ phases:
     command: ./deploy.sh
     only_ref: main           # main-only
     gate: human              # requires approval in the UI
-    agent: true              # approval dispatches a managed agent (streams live, can roll back)
+    # agent: true is the default for `deploy` (see below)
     service_account: deployer  # Workload-Identity-bound KSA — identity is injected, never baked in
     requires: [gcp-sa]       # named vault secrets injected as env
 ```
+
+**`agent`: how an approved (`gate: human`) run executes.**
+
+| `agent` | Runs as | What you get |
+| --- | --- | --- |
+| `true` | a deploy-manager agent on da_boss's deploy-agent image (`DABOSS_DEPLOY_AGENT_IMAGE`; the phase's `image` is ignored) | live narration; on failure it finds the real error and rolls back; it claims the merged changes it ships, so they show **Deployed** |
+| `false` | a plain pod on the phase's `image` | exit code = verdict, nothing else; merged changes are **not** marked deployed |
+
+It defaults to `true` for the phase named `deploy` (fail closed: deploys are tracked unless you write `agent: false`) and to `false` for every other phase. If da_boss has no deploy-agent image, a defaulted `deploy` runs as a plain pod; an explicit `agent: true` refuses instead. The pipeline builder shows each phase's value and warns about an untracked deploy.
 
 Other phase fields: `build` (kaniko-build the image from the repo), `size` (`s`|`m`|`l`|`xl`: the task container's CPU/memory from the size presets, for a phase that runs work in parallel), `params`, `adapter`, `lease` (phase concurrency, e.g. terraform state), `schedule: nightly`, `artifact_from` (inject another phase's latest passed artifact at `$DABOSS_SEED`), `expose_to_agents` (deliver that artifact into every agent pod for the repo).
 

@@ -53,6 +53,15 @@ function deployPrompt(command: string, ref: string): string {
   ].join("\n");
 }
 
+/** Whether an approved run of this phase goes to a deploy-manager agent (vs. a plain pod).
+ *  `agent: true` written in the file always does (and dispatch refuses without an agent
+ *  image). A DEFAULTED agent (the `deploy` phase with no `agent:` line) needs the image:
+ *  without one da_boss runs a plain pod rather than failing every deploy. */
+export function runsAsAgent(phase: PipelinePhase): boolean {
+  if (!phase.agent) return false;
+  return phase.agent_explicit === true || !!config.deployAgentImage;
+}
+
 /** Create + start a deploy-manager agent for an approved run. Returns the agent id.
  *  Throws {status,message} if da_boss has no agent image configured. */
 export async function dispatchDeployAgent(
@@ -118,7 +127,7 @@ export async function deployAgentBranch(manager: AgentManager, agent: AgentRecor
   const runId = `run_${nanoid(12)}`;
   await queries.insertPipelineRun({ id: runId, repoUrl: agent.repo_url, ref: agent.branch, phase: "deploy", status: "running", createdByUserId: agent.created_by_user_id, agentId: agent.id });
   const run = (await queries.getPipelineRun(runId))!;
-  if (r.ph.agent) {
+  if (runsAsAgent(r.ph)) {
     const deployAgentId = await dispatchDeployAgent(manager, run, r.ph);
     return { runId, agentId: deployAgentId };
   }

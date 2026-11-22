@@ -8,16 +8,18 @@ phases:
     image: "python:3.12"
     command: "pip install -e '.[dev]' && pytest"
   deploy:
-    image: "google/cloud-sdk:slim"
     only_ref: main
     gate: human
+    # agent: true is the default for 'deploy' (runs on da_boss's deploy-agent image).
+    # agent: false = a plain pod on its own image: exit code only, no rollback, and
+    # merged changes are NOT marked Deployed.
     requires: [gcp-sa]
     command: >
       gcloud auth activate-service-account --key-file=$GCP_SA &&
       scripts/deploy.sh
 `;
 
-type Validation = { ok: boolean; error?: string; phases?: Array<{ name: string; image: string; gate: string; requires: string[]; only_ref: string | null }> };
+type Validation = { ok: boolean; error?: string; warnings?: string[]; phases?: Array<{ name: string; image: string; gate: string; requires: string[]; only_ref: string | null; agent?: boolean; agent_explicit?: boolean }> };
 
 /**
  * Author a .daboss/pipeline.yaml with live validation against the real parser.
@@ -46,7 +48,16 @@ export function PipelineBuilder() {
         real parser — what passes here is exactly what the runner accepts. Each phase: an{" "}
         <code className="text-blue-400">image</code> (its toolchain), a <code className="text-blue-400">command</code>,{" "}
         <code className="text-blue-400">requires</code> (named secrets → env), <code className="text-blue-400">gate</code>,{" "}
-        <code className="text-blue-400">only_ref</code>.
+        <code className="text-blue-400">only_ref</code>, <code className="text-blue-400">agent</code>.
+      </p>
+      <p className="text-gray-400 text-sm mb-3">
+        <code className="text-blue-400">agent</code> decides how an approved run executes.{" "}
+        <span className="text-gray-300">true</span>: a deploy agent runs the command on da_boss's deploy-agent image,
+        narrates it live, rolls back on failure, and marks the merged changes it ships as Deployed.{" "}
+        <span className="text-gray-300">false</span>: a plain pod on the phase's image, exit code only, and changes are
+        not marked Deployed. The <code className="text-blue-400">deploy</code> phase defaults to{" "}
+        <span className="text-gray-300">true</span> (set <code className="text-blue-400">agent: false</code> to opt
+        out); every other phase defaults to false.
       </p>
       <textarea
         value={yaml}
@@ -68,7 +79,11 @@ export function PipelineBuilder() {
                   {p.name}: image={p.image}, gate={p.gate}
                   {p.only_ref ? `, only_ref=${p.only_ref}` : ""}
                   {p.requires.length ? `, requires=[${p.requires.join(",")}]` : ""}
+                  {`, agent=${p.agent ? "true" : "false"}${p.agent_explicit ? "" : " (default)"}`}
                 </div>
+              ))}
+              {result.warnings?.map((w) => (
+                <div key={w} className="text-xs text-amber-400 mt-1">⚠ {w}</div>
               ))}
             </div>
           ) : (
