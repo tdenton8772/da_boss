@@ -10,7 +10,7 @@
 import { nanoid } from "nanoid";
 import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
-import { getBranchHead, setCommitStatus, type CommitState } from "../forge/github.js";
+import { getBranchHead, getCommitMessage, setCommitStatus, type CommitState } from "../forge/github.js";
 import { resolvePhase, launchResolved, listTestPhases } from "./service.js";
 import { sendNotification } from "../notifications/ntfy.js";
 import { prewarmRepoImage } from "../agent/image-prewarm.js";
@@ -19,7 +19,7 @@ import { logger } from "../utils/logger.js";
 
 export interface WatchState {
   sha: string;
-  status: "testing" | "green" | "red" | "no-tests";
+  status: "testing" | "green" | "red" | "no-tests" | "skipped";
   runIds: string[];
   /** Phases of `sha` not launched yet (max-parallel cap). */
   queued?: string[];
@@ -37,6 +37,12 @@ export interface WatchOptions {
 }
 
 const TERMINAL = ["passed", "failed", "error", "aborted"];
+
+/** A head whose message asks for no CI ("[skip ci]", "[ci skip]", "[no ci]", GitHub's spellings) isn't
+ *  tested: e.g. a release's pin commit, which only records image digests of an already-tested parent. */
+export function skipsCi(message: string | null | undefined): boolean {
+  return /\[(skip ci|ci skip|no ci|skip actions|actions skip)\]/i.test(message ?? "");
+}
 const isTerminal = (r: { status: string }) => TERMINAL.includes(r.status);
 
 /** What a sweep should do for one repo — pure, so the launch/wait/notify
@@ -136,6 +142,11 @@ async function sweepRepo(repoUrl: string, userId: string): Promise<void> {
       if (!state) await saveState(repoUrl, { sha: "", status: "green", runIds: [], nextSha: head, nextSeenAt: now });
       return;
     case "launch": {
+      if (skipsCi(await getCommitMessage(repoUrl, head, token))) {
+        await saveState(repoUrl, { sha: head, status: "skipped", runIds: [] });
+        logger.info({ repoUrl, head: head.slice(0, 7) }, "Main moved to a [skip ci] commit — not testing it");
+        return;
+      }
       // main moved — maybe the repo's agent.Dockerfile or a lockfile it bakes did
       // too. Build the new toolchain image now, not when the next agent waits on it.
       void prewarmRepoImage(repoUrl, userId);

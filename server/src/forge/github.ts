@@ -223,6 +223,19 @@ export async function getBranchHead(repoUrl: string, branch: string, token: stri
   return ((await res.json()) as { object?: { sha?: string } }).object?.sha ?? null;
 }
 
+/** A commit's message (null when it can't be read). */
+export async function getCommitMessage(repoUrl: string, sha: string, token: string): Promise<string | null> {
+  const gh = parseRepo(repoUrl);
+  if (!gh) return null;
+  try {
+    const res = await ghFetch(`${API}/repos/${gh.owner}/${gh.repo}/commits/${encodeURIComponent(sha)}`, token);
+    if (!res.ok) return null;
+    return ((await res.json()) as { commit?: { message?: string } }).commit?.message ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export type CommitState = "pending" | "success" | "failure" | "error";
 
 /** Set a commit status (context = one check, e.g. "daboss/test-api"). Needs a token

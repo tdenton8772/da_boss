@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { nextWatchAction, type WatchState } from "../src/pipeline/main-watch.js";
+import { nextWatchAction, type WatchState, skipsCi } from "../src/pipeline/main-watch.js";
 import * as queries from "../src/db/queries.js";
 import { getPool } from "../src/db/index.js";
 
@@ -150,5 +150,19 @@ describe("getWatchedRepos — active repos with a credentialed owner", () => {
     await mkAgent("ag_y", "https://github.com/o/skip.git", "usr_a");
     const repos = await queries.getWatchedRepos(["git@github.com:o/keep.git"]);
     expect(repos.map((r) => r.repo_url)).toEqual(["https://github.com/o/keep"]);
+  });
+});
+
+describe("[skip ci] heads", () => {
+  it("recognises GitHub's spellings, anywhere in the message", () => {
+    expect(skipsCi("k8s: pin api 1234 (fix) [skip ci]")).toBe(true);
+    expect(skipsCi("[CI SKIP] docs")).toBe(true);
+    expect(skipsCi("x\n\n[no ci]")).toBe(true);
+    expect(skipsCi("skip ci without brackets")).toBe(false);
+    expect(skipsCi(null)).toBe(false);
+  });
+  it("a skipped head is concluded; the next head launches", () => {
+    expect(nextWatchAction("aaa", state({ status: "skipped" }), [])).toBe("nothing");
+    expect(nextWatchAction("bbb", state({ sha: "aaa", status: "skipped" }), [])).toBe("launch");
   });
 });
