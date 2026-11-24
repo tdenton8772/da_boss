@@ -253,6 +253,23 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
     }
   }
 
+  // A deploy-manager agent (pipeline_run_id) runs its phase's command itself, so it needs the phase's
+  // declared secrets (`requires`) just as the plain runner gets them: resolved the same way (resolvePhase:
+  // the trusted ref's pipeline file, the run owner's secrets). A missing secret fails the dispatch loudly.
+  const phaseSecretKeys: string[] = [];
+  if (agent.pipeline_run_id) {
+    const run = await queries.getPipelineRun(agent.pipeline_run_id);
+    if (run && run.repo_url && run.created_by_user_id) {
+      const { resolvePhase } = await import("../pipeline/service.js");   // service imports this module
+      const r = await resolvePhase(run.created_by_user_id, run.repo_url, run.git_ref || undefined, run.phase);
+      for (const [k, v] of Object.entries(r.secrets)) {
+        if (k in secretData) continue;                                     // never shadow the agent's own tokens
+        secretData[k] = v;
+        phaseSecretKeys.push(k);
+      }
+    }
+  }
+
   // Self-provisioning agent image: if the repo declares `.daboss/agent.Dockerfile`,
   // build it once (kaniko, keyed by base+Dockerfile) and run the agent in it; else the
   // generic base. A deploy/custom agent (worker_image already set) keeps its image.
@@ -371,6 +388,7 @@ export async function createAgentPod(agentId: string, turnPrompt?: string): Prom
               ? [{ name: "GIT_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "GIT_TOKEN" } } }]
               : []),
             ...(hasSeed ? [{ name: "DABOSS_SEED", value: "/daboss-seed/seed" }] : []),
+            ...phaseSecretKeys.map((k) => ({ name: k, valueFrom: { secretKeyRef: { name: secretName, key: k } } })),
           ],
           volumeMounts: [
             { name: "work", mountPath: "/work" },
