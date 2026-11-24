@@ -386,6 +386,9 @@ async function main(): Promise<void> {
       logger.error({ agentId: AGENT_ID, error: detail }, "git clone failed");
       await queries.updateAgentState(AGENT_ID, "failed", { error_message: `git clone failed: ${detail.slice(0, 300)}` });
       await queries.insertAgentEvent(AGENT_ID, "error", { error: `git clone failed: ${detail.slice(0, 600)}` });
+      // The state_change event is what the live relay acts on (reconcileDeployRun): without it a deploy
+      // agent that fails here leaves its deploy run "running" and the Deploy button blocked.
+      await queries.insertAgentEvent(AGENT_ID, "state_change", { from: "running", to: "failed" });
       await closeDb();
       process.exit(1);
     }
@@ -901,6 +904,7 @@ async function main(): Promise<void> {
       ...(sessionId ? { sdk_session_id: sessionId } : {}),
     });
     await queries.insertAgentEvent(AGENT_ID, "error", { error: errorMsg });
+    await queries.insertAgentEvent(AGENT_ID, "state_change", { from: "running", to: "failed" });
   } else {
     logger.info({ agentId: AGENT_ID }, "Agent completed in pod");
     await queries.updateAgentState(AGENT_ID, "completed", {
@@ -918,7 +922,10 @@ main().catch(async (err) => {
   const message = err instanceof Error ? err.message : String(err);
   logger.error({ err: message }, "Worker fatal error");
   try {
-    if (AGENT_ID) await queries.updateAgentState(AGENT_ID, "failed", { error_message: message });
+    if (AGENT_ID) {
+      await queries.updateAgentState(AGENT_ID, "failed", { error_message: message });
+      await queries.insertAgentEvent(AGENT_ID, "state_change", { from: "running", to: "failed" });
+    }
   } catch { /* best effort */ }
   process.exit(1);
 });
