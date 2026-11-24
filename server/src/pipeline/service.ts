@@ -211,3 +211,36 @@ export async function runTestPhasesForAgent(
   }
   return out;
 }
+
+/** Phases that run by themselves after `phase` passed on TRUSTED_REF (`after: <phase>` in TRUSTED_REF's
+ *  pipeline file), started as the same user on the same ref. Not gated: the passed run's own approval
+ *  covers them (e.g. a store deploy you approved also refreshes the downloadable build). Returns the runs
+ *  started; a phase that can't be resolved is logged and skipped. */
+export async function runPhasesAfter(run: { id: string; phase: string; repo_url: string | null; git_ref: string | null;
+  created_by_user_id: string | null; status: string }): Promise<Array<{ phase: string; runId: string }>> {
+  if (run.status !== "passed" || !run.repo_url || !run.created_by_user_id) return [];
+  if ((run.git_ref || TRUSTED_REF) !== TRUSTED_REF) return [];
+  const gitCred = await queries.getUserGitCredential(run.created_by_user_id);
+  if (!gitCred) return [];
+  const gitToken = await getCipher().decrypt({ ciphertext: gitCred.ciphertext, nonce: gitCred.nonce, keyRef: gitCred.key_ref });
+  const yamlText = await getFileContents(run.repo_url, PIPELINE_PATH, TRUSTED_REF, gitToken);
+  if (!yamlText) return [];
+  const names = Object.entries(parsePipeline(yamlText).phases).filter(([, ph]) => ph.after === run.phase).map(([n]) => n);
+  const started: Array<{ phase: string; runId: string }> = [];
+  for (const name of names) {
+    try {
+      const r = await resolvePhase(run.created_by_user_id, run.repo_url, TRUSTED_REF, name);
+      const runId = `run_${nanoid(12)}`;
+      await queries.insertPipelineRun({ id: runId, repoUrl: run.repo_url, ref: TRUSTED_REF, phase: name, status: "pending",
+        createdByUserId: run.created_by_user_id, agentId: null });
+      await queries.updatePipelineRun(runId, { log: `Started after ${run.phase} run ${run.id} passed (after: ${run.phase})` });
+      await launchResolved(runId, run.repo_url, TRUSTED_REF, r);
+      started.push({ phase: name, runId });
+      logger.info({ after: run.id, phase: name, runId }, "pipeline: phase started after its trigger passed");
+    } catch (err) {
+      logger.warn({ after: run.id, phase: name, err: err instanceof Error ? err.message : (err as { message?: string })?.message || String(err) },
+        "pipeline: after-phase could not start");
+    }
+  }
+  return started;
+}

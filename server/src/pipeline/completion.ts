@@ -11,7 +11,7 @@ import * as queries from "../db/queries.js";
 import { getCipher } from "../crypto/cipher.js";
 import { postPrComment, markReadyForReview, mergePr } from "../forge/github.js";
 import { dispatchReviewAgent } from "./review-agent.js";
-import { runPhase, listTestPhases, runDeployGateTests } from "./service.js";
+import { runPhase, listTestPhases, runDeployGateTests, runPhasesAfter } from "./service.js";
 import { produceReview } from "./review.js";
 import { isTestPhase } from "./config.js";
 import { config } from "../config.js";
@@ -224,11 +224,22 @@ async function gateTestBatch(run: PipelineRun): Promise<void> {
   }
 }
 
+/** A run that passed starts the phases declared `after:` it (service.runPhasesAfter). */
+async function chainAfter(runId: string): Promise<void> {
+  const run = await queries.getPipelineRun(runId);
+  if (!run || run.status !== "passed") return;
+  await runPhasesAfter(run);
+}
+
 export function startPipelineCompletionListener(manager: AgentManager): void {
   mgr = manager;
   listenWithReconnect({
     label: "pipeline-completion",
     channels: [CHANNEL],
-    onNotification: (msg) => { if (msg.payload) void gatePr(msg.payload); },
+    onNotification: (msg) => {
+      if (!msg.payload) return;
+      void gatePr(msg.payload);
+      void chainAfter(msg.payload).catch((e) => logger.warn({ runId: msg.payload, err: e instanceof Error ? e.message : String(e) }, "after-phases failed"));
+    },
   });
 }

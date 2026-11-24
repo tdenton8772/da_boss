@@ -77,6 +77,10 @@ export interface PipelinePhase {
   // nightly DB snapshot) instead of improvising blank databases. At most one
   // phase per pipeline should set this; the first declaring phase wins.
   expose_to_agents?: boolean;
+  // Run this phase by itself when the named phase PASSES on TRUSTED_REF (e.g. `after: deploy` on a phase
+  // that publishes the same build somewhere else). The earlier phase's approval covers it: an `after`
+  // phase is never gated on its own. Only TRUSTED_REF's pipeline file can set it (applyTrustedPolicy).
+  after?: string;
   // Hand this phase's `requires` secrets to runs on refs other than TRUSTED_REF too.
   // Off by default: a branch's command is whatever the branch says, so any secret it
   // gets is readable by whoever (or whatever agent) wrote the branch. Only honoured
@@ -223,9 +227,16 @@ export function parsePipeline(yamlText: string): Pipeline {
       })(),
       expose_to_agents: p.expose_to_agents === true,
       branch_secrets: p.branch_secrets === true,
+      after: p.after === undefined ? undefined : (() => {
+        if (typeof p.after !== "string" || !p.after.trim()) throw new Error(`phase '${name}'.after must be a phase name`);
+        return p.after;
+      })(),
     };
   }
   for (const [name, ph] of Object.entries(phases)) {
+    if (ph.after && (!phases[ph.after] || ph.after === name)) {
+      throw new Error(`phase '${name}'.after names unknown phase '${ph.after}'`);
+    }
     if (ph.artifact_from && !phases[ph.artifact_from]) {
       throw new Error(`phase '${name}'.artifact_from names unknown phase '${ph.artifact_from}'`);
     }
@@ -282,6 +293,7 @@ export function applyTrustedPolicy(
     artifact_from: trusted?.artifact_from,
     expose_to_agents: trusted?.expose_to_agents ?? false,
     branch_secrets: trusted?.branch_secrets ?? false,
+    after: trusted?.after,
   };
 }
 

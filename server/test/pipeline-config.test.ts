@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePipeline, isTestPhase, pipelineWarnings } from "../src/pipeline/config.js";
+import { parsePipeline, isTestPhase, pipelineWarnings, applyTrustedPolicy } from "../src/pipeline/config.js";
 
 describe("isTestPhase", () => {
   it("matches 'test' and 'test-<suite>' but not others", () => {
@@ -141,5 +141,31 @@ phases:
 phases:
   deploy: { command: "x", gate: human }
 `))).toEqual([]);
+  });
+});
+
+describe("after: a phase that runs by itself when another passes", () => {
+  const yaml = (after: string) => `version: 1
+phases:
+  deploy:
+    command: ./ship.sh
+    gate: human
+  beta:
+    command: ./beta.sh
+    after: ${after}
+`;
+  it("parses the trigger phase", () => {
+    expect(parsePipeline(yaml("deploy")).phases.beta.after).toBe("deploy");
+    expect(parsePipeline(yaml("deploy")).phases.deploy.after).toBeUndefined();
+  });
+  it("refuses an unknown or self trigger", () => {
+    expect(() => parsePipeline(yaml("nope"))).toThrow(/after names unknown phase/);
+    expect(() => parsePipeline(yaml("beta"))).toThrow(/after names unknown phase/);
+  });
+  it("is taken only from the trusted ref's file", () => {
+    const main = parsePipeline(yaml("deploy")).phases.beta;
+    const branch = parsePipeline(yaml("deploy")).phases.beta;
+    expect(applyTrustedPolicy(branch, undefined, "agent/x").after).toBeUndefined();
+    expect(applyTrustedPolicy(branch, main, "agent/x").after).toBe("deploy");
   });
 });
