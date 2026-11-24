@@ -312,6 +312,12 @@ async function main(): Promise<void> {
       content: `Cloning ${agent.repo_url}${agent.repo_ref ? ` @ ${agent.repo_ref}` : ""} → ${WORK_DIR} (branch ${branch})…`,
     });
     try {
+      // /work (an emptyDir) and the shard are created by Kubernetes as root, while an agent image may run as
+      // a non-root user (the deployer runs as node): git then refuses them as "dubious ownership". They are
+      // this pod's own directories, so trust exactly those.
+      for (const dir of [WORK_DIR, ...(WORKSPACE_DIR ? [`${WORKSPACE_DIR}/repos/${repoName}.git`] : [])]) {
+        await execFileAsync("git", ["config", "--global", "--add", "safe.directory", dir], { timeout: 15_000 }).catch(() => {});
+      }
       if (WORKSPACE_DIR) {
         // Per-user shard: keep a bare mirror warm in the shard (fetched with the
         // user's token, under an flock so this user's parallel agents don't race),
